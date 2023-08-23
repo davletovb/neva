@@ -1,6 +1,5 @@
 # Neva: Unifying Large Language Models for Multi-Agent Interactions! 🧠🤖
-[![Build Status](https://img.shields.io/travis/davletovb/neva/master.svg)](https://travis-ci.org/davletovb/neva)
-[![Coverage](https://img.shields.io/codecov/c/github/davletovb/neva)](https://codecov.io/gh/davletovb/neva)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Issues](https://img.shields.io/github/issues/davletovb/neva)](https://github.com/davletovb/neva/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/davletovb/neva)](https://github.com/davletovb/neva/commits/master)
@@ -8,7 +7,6 @@
 [![Stars](https://img.shields.io/github/stars/davletovb/neva?style=social)](https://github.com/davletovb/neva/stargazers)
 [![Contributors](https://img.shields.io/github/contributors/davletovb/neva)](https://github.com/davletovb/neva/graphs/contributors)
 [![Python Version](https://img.shields.io/pypi/pyversions/package-name)](https://pypi.org/project/package-name/)
-[![Documentation Status](https://readthedocs.org/projects/neva/badge/?version=latest)](https://neva.readthedocs.io/en/latest/)
 
 ![cover](link-to-cover-image)
 
