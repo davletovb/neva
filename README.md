@@ -1,4 +1,4 @@
-# Neva: Unifying Large Language Models for Multi-Agent Interactions! 🧠🤖
+# Neva: Creating Multi-Agent Simulations with Large Language Models!
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Issues](https://img.shields.io/github/issues/davletovb/neva)](https://github.com/davletovb/neva/issues)
