@@ -15,7 +15,7 @@ Are you an ML enthusiast passionate about large language models and multi-agent 
 - [Installation](#installation)
 - [Usage](#usage)
 - [Features](#features)
-- [Contributing 🤝](#contributing-)
+- [Contributing 🤝](#get-involved-)
 - [License](#license)
 
 ## Why Neva?
