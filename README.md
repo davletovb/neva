@@ -6,9 +6,6 @@
 [![Forks](https://img.shields.io/github/forks/davletovb/neva?style=social)](https://github.com/davletovb/neva/fork)
 [![Stars](https://img.shields.io/github/stars/davletovb/neva?style=social)](https://github.com/davletovb/neva/stargazers)
 [![Contributors](https://img.shields.io/github/contributors/davletovb/neva)](https://github.com/davletovb/neva/graphs/contributors)
-[![Python Version](https://img.shields.io/pypi/pyversions/package-name)](https://pypi.org/project/package-name/)
-
-![cover](link-to-cover-image)
 
 Are you an ML enthusiast passionate about large language models and multi-agent environments? Welcome to Neva! 🚀💫 Create, manage, and orchestrate specialized AI agents that interact seamlessly, from basic tools like calculators to complex, hierarchical structures.
 
@@ -33,14 +30,14 @@ Neva makes it simple to unlock the power of large language models through specia
 Neva empowers developers, researchers, educators, and hobbyists to create the next generation of AI interactions for gaming, automation, education, research, and beyond!
 
 ## Quickstart 🚀
-Dive right into Neva with our easy and intuitive quickstart guide. Whether you're a seasoned AI enthusiast or just exploring, you can access our collection of specialized AI agents, tools, and environments. Simply browse our library, select the components you need, and customize them to your liking (like defining specific tasks or integrating with your favorite tools). With just a few clicks, you'll be ready to unleash the power of AI!
+Dive right into Neva with our easy and intuitive quickstart guide. Whether you're a seasoned AI enthusiast or just exploring, you can access our collection of specialized AI agents, tools, and environments. Simply select the components you need, and customize them to your liking (like defining specific tasks or integrating with your favorite tools). With just a few clicks, you'll be ready to unleash the power of AI!
 
 Use our handy code snippets to integrate Neva into your Python projects, GitHub repositories, or other platforms. It's that simple!
 
 ## Installation
 ```bash
 git clone https://github.com/yourdavletovb/neva.git
-cd Neva
+cd neva
 pip install -r requirements.txt
 ```
 
@@ -84,7 +81,5 @@ Before jumping in, take a moment to read our [contribution guidelines.](https://
 
 We value each contribution, no matter how big or small, and we're excited to see what you'll bring to our growing community!
 
-We welcome contributions from ML enthusiasts, developers, and AI lovers! Join us in building a project that could change the way we interact with AI.
-
 ## License
-This project is licensed under the MIT License. See the [License File](link-to-license-file) for more details.
+This project is licensed under the MIT License. See the [License File](https://github.com/davletovb/neva/blob/main/LICENSE) for more details.
