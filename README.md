@@ -7,7 +7,7 @@
 [![Stars](https://img.shields.io/github/stars/davletovb/neva?style=social)](https://github.com/davletovb/neva/stargazers)
 [![Contributors](https://img.shields.io/github/contributors/davletovb/neva)](https://github.com/davletovb/neva/graphs/contributors)
 
-Are you an ML enthusiast passionate about large language models and multi-agent environments? Welcome to Neva! 🚀💫 Create, manage, and orchestrate specialized AI agents that interact seamlessly, from basic tools like calculators to complex, hierarchical structures.
+Want to create worlds where AI agents come alive? 🤖 Our open-source library lets you easily build captivating simulations where customizable agents interact using natural language.💬 Immerse yourself in emergent behaviors as your intelligent assistants, characters, and communities cooperate in exciting new ways! 🔥 Watch the dynamics unfold as your agents chat, explore, and work together powered by state-of-the-art LLMs. 💡 Join our open-source movement to make agent-based modeling more accessible, from classrooms to cutting-edge research. 🧑‍🏫👩‍🔬  
 
 **We seek Python developers passionate about integrating LLMs to collaborate on an open-source library for modeling complex emergent behaviors and human-AI cooperation dynamics.**
 
