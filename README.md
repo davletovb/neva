@@ -9,13 +9,15 @@
 
 Are you an ML enthusiast passionate about large language models and multi-agent environments? Welcome to Neva! 🚀💫 Create, manage, and orchestrate specialized AI agents that interact seamlessly, from basic tools like calculators to complex, hierarchical structures.
 
+**We seek Python developers passionate about integrating LLMs to collaborate on an open-source library for modeling complex emergent behaviors and human-AI cooperation dynamics.**
+
 ## Table of Contents
 - [Why Neva?](#why-neva)
 - [Quickstart 🚀](#quickstart-)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Features](#features)
-- [Contributing 🤝](#get-involved-)
+- [Get Involved 🤝](#get-involved-)
 - [License](#license)
 
 ## Why Neva?
