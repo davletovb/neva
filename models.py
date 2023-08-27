@@ -33,52 +33,6 @@ class AIAgent(ABC):
         pass
 
 
-class TransformerAIAgent(AIAgent):
-    """
-    An AI agent that uses a Hugging Face transformer model.
-    """
-
-    def __init__(self, model_name="t5-base"):
-        super().__init__()
-        self.model_name = model_name
-        self.model = None
-        self.tokenizer = None
-
-    def load_model(self):
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-
-    def respond(self, message):
-        if self.model is None or self.tokenizer is None:
-            self.load_model()
-
-        inputs = self.tokenizer.encode(message, return_tensors='pt')
-        outputs = self.model.generate(inputs, max_length=200)
-        answer = self.tokenizer.decode(outputs[0])
-
-        return answer
-
-
-class ChatGPTAgent(AIAgent):
-    """
-    An AI agent that uses OpenAI's GPT-3 model for processing input.
-    """
-
-    def __init__(self, api_key=None):
-        super().__init__()
-        self.api_key = api_key
-
-    def load_model(self):
-        pass
-
-    def respond(self, message):
-        openai.api_key = self.api_key
-        response = openai.Completion.create(
-            engine="text-davinci-002", prompt=message, max_tokens=150)
-
-        return response.choices[0].text.strip()
-
-
 class AgentManager:
     """
     A class that manages the creation and coordination of AI agents.
