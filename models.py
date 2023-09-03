@@ -172,3 +172,17 @@ class InteractionHistory:
             'message': message
         }
         self.history.append(interaction)
+
+
+class Scheduler(ABC):
+    def __init__(self):
+        self.agents = []
+
+    @abstractmethod
+    def add(self, agent):
+        pass
+
+    @abstractmethod
+    def get_next_agent(self):
+        pass
+
