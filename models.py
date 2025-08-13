@@ -90,7 +90,7 @@ class AgentManager:
 
     def create_agent(self, agent_type, **kwargs):
         if agent_type == 'transformer':
-            agent = TransformerAIAgent(**kwargs)
+            agent = TransformerAgent(**kwargs)
         elif agent_type == 'gpt':
             agent = GPTAgent(**kwargs)
         else:
