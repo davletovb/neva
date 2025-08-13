@@ -1,0 +1,6 @@
+openai
+transformers
+wikipedia
+googletrans==4.0.0rc1
+bert-extractive-summarizer
+pytest

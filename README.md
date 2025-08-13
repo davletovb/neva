@@ -41,11 +41,15 @@ Dive right into Neva with our easy and intuitive quickstart guide. Whether you'r
 Use our handy code snippets to integrate Neva into your Python projects, GitHub repositories, or other platforms. It's that simple!
 
 ## Installation
+Clone the repository and install the required packages:
+
 ```bash
-git clone https://github.com/yourdavletovb/neva.git
+git clone https://github.com/davletovb/neva.git
 cd neva
 pip install -r requirements.txt
 ```
+
+The dependencies include libraries such as `openai`, `transformers`, `wikipedia`, `googletrans`, and `bert-extractive-summarizer`.
 
 ## Usage
 Create and simulate AI agents effortlessly:
