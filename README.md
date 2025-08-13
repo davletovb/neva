@@ -42,7 +42,7 @@ Use our handy code snippets to integrate Neva into your Python projects, GitHub 
 
 ## Installation
 ```bash
-git clone https://github.com/yourdavletovb/neva.git
+git clone https://github.com/davletovb/neva.git
 cd neva
 pip install -r requirements.txt
 ```
