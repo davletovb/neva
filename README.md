@@ -54,22 +54,35 @@ The dependencies include libraries such as `openai`, `transformers`, `wikipedia`
 ## Usage
 Create and simulate AI agents effortlessly:
 ```python
-from agents import AIAgent, Tool, Environment
+from environments import BasicEnvironment
+from models import AgentManager
+from schedulers import RoundRobinScheduler
+from tools import MathTool
 
-# Create an AI agent
-teacher = AIAgent()
+# 1. Create an agent using the manager
+manager = AgentManager()
+agent = manager.create_agent(
+    "transformer",
+    name="Tutor",
+    llm_backend=lambda prompt: f"(stubbed model) {prompt}",
+)
+agent.register_tool(MathTool())
 
-# Add tools
-calculator_tool = Tool(name="Calculator", description="Performs basic arithmetic calculations")
-teacher.add_tool(calculator_tool)
+# 2. Prepare an environment and scheduler
+scheduler = RoundRobinScheduler()
+environment = BasicEnvironment("Classroom", "A simple maths lesson", scheduler)
+environment.register_agent(agent)
 
-# Create an environment
-classroom = Environment()
-classroom.add_agent(teacher)
-
-# Run the simulation
-env.simulate(steps=100)
+# 3. Drive the simulation loop
+for _ in range(3):
+    response = environment.step()
+    print(response)
 ```
+
+Each call to ``environment.step`` asks the scheduler for an agent, collects
+metrics via the observer system, and invokes the agent's ``respond`` method with
+the current environmental context.  This mirrors the simulation lifecycle used
+throughout the library and in the accompanying tests.
 
 ## Features
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.

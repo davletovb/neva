@@ -1,188 +1,366 @@
+"""Core models and abstractions for Neva agents and environments."""
+
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from uuid import uuid4
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-import openai
 from datetime import datetime
+from typing import Callable, Dict, List, Optional, Sequence
+from uuid import uuid4
+
+import openai
+
+# Importing transformers can be expensive and is not always required for tests or
+# light-weight experimentation.  The concrete agent classes therefore import the
+# library lazily, but type-checkers still benefit from the symbol being present
+# here when available.  ``_TRANSFORMERS_AVAILABLE`` indicates whether the import
+# succeeded and allows the agents to surface clearer error messages.
+try:  # pragma: no cover - exercised implicitly when transformers is installed.
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
+except Exception:  # pragma: no cover - handled by runtime guard.
+    AutoModelForSeq2SeqLM = None  # type: ignore
+    AutoTokenizer = None  # type: ignore
+
+LLMBackend = Callable[[str], str]
 
 
 class Tool(ABC):
-    """
-    An abstract base class for tools.
-    """
+    """An abstract base class for tools used by :class:`AIAgent` instances."""
 
-    def __init__(self, name, description):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        *,
+        capabilities: Optional[Sequence[str]] = None,
+    ) -> None:
         self.name = name
         self.description = description
+        self.capabilities: Sequence[str] = tuple(capabilities or ())
 
     @abstractmethod
-    def use(self, task):
-        pass
+    def use(self, task: str) -> str:
+        """Execute the tool for the given task description."""
+
+    def metadata(self) -> Dict[str, Sequence[str]]:
+        """Return metadata describing the tool's capabilities."""
+
+        return {"name": self.name, "capabilities": self.capabilities}
 
 
 class AIAgent(ABC):
-    """
-    An abstract base class for AI agents.
-    """
+    """Abstract base class describing the behaviour of an AI agent."""
 
-    def __init__(self):
-        self.id = uuid4()  # Assign a unique identifier to each agent
-        self.environment = None  # The environment in which the agent operates
+    def __init__(
+        self,
+        *,
+        name: Optional[str] = None,
+        llm_backend: Optional[LLMBackend] = None,
+    ) -> None:
+        self.id = uuid4()
+        self.name = name or f"agent-{str(self.id)[:8]}"
+        self.environment: Optional["Environment"] = None
+        self.tools: List[Tool] = []
+        self.attributes: Dict[str, str] = {}
+        self._llm_backend = llm_backend
+
+    # ------------------------------------------------------------------
+    # Tool and attribute management utilities
+    # ------------------------------------------------------------------
+    def set_environment(self, environment: "Environment") -> None:
+        self.environment = environment
+
+    def register_tool(self, tool: Tool) -> None:
+        self.tools.append(tool)
+
+    def clear_tools(self) -> None:
+        self.tools.clear()
+
+    def set_attribute(self, key: str, value: str) -> None:
+        self.attributes[key] = value
+
+    def generate_attribute_summary(self) -> str:
+        if not self.attributes:
+            return f"Agent {self.name} has no additional attributes."
+
+        joined = ", ".join(f"{k}: {v}" for k, v in sorted(self.attributes.items()))
+        return f"Agent {self.name} attributes -> {joined}."
+
+    def generate_tool_summary(self) -> str:
+        if not self.tools:
+            return "No tools are currently available."
+
+        descriptions = ", ".join(
+            f"{tool.name} ({tool.description})" for tool in self.tools
+        )
+        return f"Available tools: {descriptions}."
+
+    # ------------------------------------------------------------------
+    # Communication helpers
+    # ------------------------------------------------------------------
+    @property
+    def llm_backend(self) -> Optional[LLMBackend]:
+        return self._llm_backend
+
+    def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
+        self._llm_backend = backend
+
+    def prepare_prompt(self, message: str) -> str:
+        """Compose a prompt enriched with agent attributes and tool context."""
+
+        parts = [self.generate_attribute_summary(), self.generate_tool_summary()]
+        if message:
+            parts.append(message)
+        return " ".join(part for part in parts if part).strip()
+
+    def communicate(self, receiver: "AIAgent", message: str) -> str:
+        """Send ``message`` to ``receiver`` and return their response."""
+
+        if not isinstance(receiver, AIAgent):
+            raise TypeError("receiver must be an instance of AIAgent")
+        formatted = f"{self.name} says: {message}"
+        return receiver.respond(formatted)
+
+    def process_input(self, message: str) -> str:
+        """Alias for :meth:`respond` retained for backwards compatibility."""
+
+        return self.respond(message)
+
+    def step(self, observation: Optional[str] = None) -> str:
+        """Perform a single agent step and return the generated response."""
+
+        if observation is None and self.environment is not None:
+            observation = self.environment.context()
+        observation = observation or ""
+        return self.respond(observation)
 
     @abstractmethod
-    def respond(self, message):
-        pass
+    def respond(self, message: str) -> str:
+        """Return the agent's response to ``message``."""
+        raise NotImplementedError
 
 
 class TransformerAgent(AIAgent):
-    """
-    An AI agent that uses a Hugging Face transformer model.
-    """
+    """Agent powered by a Hugging Face transformer model."""
 
-    def __init__(self, model_name="t5-base"):
-        super().__init__()
+    def __init__(
+        self,
+        model_name: str = "t5-small",
+        *,
+        name: Optional[str] = None,
+        llm_backend: Optional[LLMBackend] = None,
+        model_loader: Optional[Callable[[str], object]] = None,
+        tokenizer_loader: Optional[Callable[[str], object]] = None,
+    ) -> None:
+        super().__init__(name=name, llm_backend=llm_backend)
         self.model_name = model_name
-        self.model = None
-        self.tokenizer = None
+        self._model_loader = model_loader
+        self._tokenizer_loader = tokenizer_loader
+        self._model = None
+        self._tokenizer = None
 
-    def load_model(self):
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+    def _load_transformer(self) -> None:
+        if self.llm_backend is not None:
+            return
+        if self._model is not None and self._tokenizer is not None:
+            return
 
-    def respond(self, message):
-        if self.model is None or self.tokenizer is None:
-            self.load_model()
+        loader = self._model_loader
+        tokenizer_loader = self._tokenizer_loader
 
-        inputs = self.tokenizer.encode(message, return_tensors='pt')
-        outputs = self.model.generate(inputs, max_length=200)
-        answer = self.tokenizer.decode(outputs[0])
+        if loader is None or tokenizer_loader is None:
+            if AutoModelForSeq2SeqLM is None or AutoTokenizer is None:
+                raise RuntimeError(
+                    "Transformers library is not available. Provide an ``llm_backend`` "
+                    "or install `transformers` to use TransformerAgent."
+                )
 
-        return answer
+            loader = AutoModelForSeq2SeqLM.from_pretrained
+            tokenizer_loader = AutoTokenizer.from_pretrained
+
+        self._model = loader(self.model_name)
+        self._tokenizer = tokenizer_loader(self.model_name)
+
+    def respond(self, message: str) -> str:
+        prompt = self.prepare_prompt(message)
+
+        if self.llm_backend is not None:
+            return self.llm_backend(prompt)
+
+        self._load_transformer()
+        assert self._model is not None and self._tokenizer is not None
+
+        inputs = self._tokenizer(
+            prompt, return_tensors="pt", truncation=True, padding=True
+        )
+        output_tokens = self._model.generate(**inputs, max_length=200)
+        return self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
 
 
 class GPTAgent(AIAgent):
-    """
-    An AI agent that uses OpenAI's GPT-3 model for processing input.
-    """
+    """Agent that communicates with an OpenAI-compatible large language model."""
 
-    def __init__(self, api_key=None):
-        super().__init__()
+    def __init__(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        model: str = "gpt-3.5-turbo",
+        name: Optional[str] = None,
+        llm_backend: Optional[LLMBackend] = None,
+    ) -> None:
+        super().__init__(name=name, llm_backend=llm_backend)
         self.api_key = api_key
+        self.model = model
 
-    def load_model(self):
-        pass
+    def _default_backend(self) -> LLMBackend:
+        if not self.api_key:
+            raise RuntimeError(
+                "No API key configured for GPTAgent. Provide `llm_backend` or set "
+                "`api_key`."
+            )
 
-    def respond(self, message):
-        openai.api_key = self.api_key
-        response = openai.Completion.create(
-            engine="text-davinci-002", prompt=message, max_tokens=150)
+        def _call_openai(prompt: str) -> str:
+            openai.api_key = self.api_key
+            response = openai.ChatCompletion.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200,
+            )
+            return response.choices[0].message["content"].strip()
 
-        return response.choices[0].text.strip()
+        return _call_openai
+
+    def respond(self, message: str) -> str:
+        prompt = self.prepare_prompt(message)
+        backend = self.llm_backend or self._default_backend()
+        return backend(prompt)
 
 
 class AgentManager:
-    """
-    A class that manages the creation and coordination of AI agents.
-    """
+    """Create and coordinate agents within a simulation."""
 
-    def __init__(self):
-        self.agents = {}
-        self.groups = {}
+    def __init__(self) -> None:
+        self.agents: Dict[str, AIAgent] = {}
+        self.groups: Dict[str, List[str]] = {}
 
-    def create_agent(self, agent_type, **kwargs):
-        if agent_type == 'transformer':
+    def create_agent(self, agent_type: str, **kwargs) -> AIAgent:
+        agent_type = agent_type.lower()
+        if agent_type == "transformer":
             agent = TransformerAgent(**kwargs)
-        elif agent_type == 'gpt':
+        elif agent_type in {"gpt", "openai"}:
             agent = GPTAgent(**kwargs)
         else:
-            raise ValueError("Invalid agent type")
+            raise ValueError(f"Invalid agent type: {agent_type}")
 
-        self.agents[agent.id] = agent
+        self.agents[str(agent.id)] = agent
         return agent
 
-    def get_agent(self, agent_id):
+    def get_agent(self, agent_id: str) -> AIAgent:
         return self.agents[agent_id]
 
-    def remove_agent(self, agent_id):
+    def remove_agent(self, agent_id: str) -> None:
         del self.agents[agent_id]
 
-    def communicate(self, sender_id, receiver_id, message):
+    def communicate(self, sender_id: str, receiver_id: str, message: str) -> str:
         sender = self.get_agent(sender_id)
         receiver = self.get_agent(receiver_id)
         return sender.communicate(receiver, message)
 
-    def create_group(self, group_id, agent_ids):
-        """
-        Create a new group of agents with the specified IDs.
-        """
-        self.groups[group_id] = agent_ids
+    def create_group(self, group_id: str, agent_ids: Sequence[str]) -> None:
+        self.groups[group_id] = list(agent_ids)
 
-    def add_to_group(self, group_id, agent_id):
-        """
-        Add an agent to an existing group.
-        """
-        self.groups[group_id].append(agent_id)
+    def add_to_group(self, group_id: str, agent_id: str) -> None:
+        self.groups.setdefault(group_id, []).append(agent_id)
 
-    def remove_from_group(self, group_id, agent_id):
-        """
-        Remove an agent from a group.
-        """
-        self.groups[group_id].remove(agent_id)
+    def remove_from_group(self, group_id: str, agent_id: str) -> None:
+        self.groups.setdefault(group_id, []).remove(agent_id)
 
-    def schedule_action(self, agent_id, action, *args, **kwargs):
-        """
-        Schedule an action to be performed by an agent.
-        """
+    def schedule_action(self, agent_id: str, action: str, *args, **kwargs) -> None:
         agent = self.get_agent(agent_id)
         getattr(agent, action)(*args, **kwargs)
 
-    def handle_error(self, error):
-        """
-        Handle an error that occurred during the execution of an agent's action.
-        """
-        print(f"An error occurred: {error}")
+    def handle_error(self, error: Exception) -> None:
+        raise RuntimeError(f"An error occurred: {error}")
 
 
 class AgentFactory:
-    """
-    A factory class for creating AI agents with specific configurations.
-    """
+    """Factory helper mirroring :class:`AgentManager` creation logic."""
+
     @staticmethod
-    def create_agent(agent_type, **kwargs):
-        if agent_type == 'transformer':
-            return TransformerAIAgent(**kwargs)
-        elif agent_type == 'gpt-3':
-            return ChatGPTAgent(**kwargs)
-        else:
-            raise ValueError(f"Invalid agent type: {agent_type}")
+    def create_agent(agent_type: str, **kwargs) -> AIAgent:
+        manager = AgentManager()
+        return manager.create_agent(agent_type, **kwargs)
 
 
 class InteractionHistory:
-    """
-    A class to collect and store the history of interactions between agents.
-    """
+    """Collect and store the history of interactions between agents."""
 
-    def __init__(self):
-        self.history = []
+    def __init__(self) -> None:
+        self.history: List[Dict[str, object]] = []
 
-    def record(self, sender_id, receiver_id, message):
+    def record(self, sender_id: str, receiver_id: str, message: str) -> None:
         interaction = {
-            'time': datetime.now(),
-            'sender_id': sender_id,
-            'receiver_id': receiver_id,
-            'message': message
+            "time": datetime.now(),
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
+            "message": message,
         }
         self.history.append(interaction)
 
 
 class Scheduler(ABC):
-    def __init__(self):
-        self.agents = []
+    """Base class for iterating over a collection of agents."""
+
+    def __init__(self) -> None:
+        self.agents: List[AIAgent] = []
+        self.environment: Optional["Environment"] = None
+
+    def set_environment(self, environment: "Environment") -> None:
+        self.environment = environment
+
+    def record_metrics(self) -> None:
+        observer = getattr(self, "simulation_observer", None)
+        if observer is not None:
+            observer.collect_data(list(self.agents), self.environment)
 
     @abstractmethod
-    def add(self, agent):
-        pass
+    def add(self, agent: AIAgent, **kwargs) -> None:
+        """Register an agent with the scheduler."""
 
     @abstractmethod
-    def get_next_agent(self):
-        pass
+    def get_next_agent(self) -> Optional[AIAgent]:
+        """Return the next agent to act."""
+
+
+class Environment(ABC):
+    """Coordinate agents and schedulers while maintaining shared state."""
+
+    def __init__(self, scheduler: Optional[Scheduler] = None) -> None:
+        self.state: Dict[str, object] = {}
+        self.scheduler = scheduler
+        self.agents: List[AIAgent] = []
+        if self.scheduler is not None:
+            self.scheduler.set_environment(self)
+
+    def register_agent(self, agent: AIAgent) -> None:
+        agent.set_environment(self)
+        self.agents.append(agent)
+        if self.scheduler is not None:
+            self.scheduler.add(agent)
+
+    def context(self) -> str:
+        """Return a textual description of the environment state."""
+
+        return ""
+
+    def step(self) -> Optional[str]:
+        if self.scheduler is None or not self.agents:
+            return None
+
+        agent = self.scheduler.get_next_agent()
+        if agent is None:
+            return None
+        return agent.step(self.context())
+
+    def run(self, steps: int) -> List[Optional[str]]:
+        return [self.step() for _ in range(steps)]
 
