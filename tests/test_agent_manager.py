@@ -40,3 +40,29 @@ def test_invalid_agent_type_raises_value_error():
     manager = AgentManager()
     with pytest.raises(ValueError):
         manager.create_agent("invalid")
+
+
+def test_manager_communicate_routes_messages_between_agents():
+    manager = AgentManager()
+    sender = manager.create_agent(
+        "transformer",
+        name="Sender",
+        llm_backend=lambda prompt: f"Sender processed {prompt}",
+    )
+
+    received_prompts = []
+
+    def receiver_backend(prompt: str) -> str:
+        received_prompts.append(prompt)
+        return f"Receiver heard {prompt.split(':')[-1].strip()}"
+
+    receiver = manager.create_agent(
+        "transformer",
+        name="Receiver",
+        llm_backend=receiver_backend,
+    )
+
+    reply = manager.communicate(str(sender.id), str(receiver.id), "Hello there")
+
+    assert reply == "Receiver heard Hello there"
+    assert received_prompts and received_prompts[0].endswith("Sender says: Hello there")

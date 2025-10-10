@@ -1,0 +1,85 @@
+"""Minimal conversational simulation between two Neva agents.
+
+This script demonstrates the core building blocks of the Neva library:
+
+* ``AgentManager`` for creating agents.
+* ``BasicEnvironment`` to provide shared context.
+* ``RoundRobinScheduler`` to coordinate turn-taking.
+
+Both agents use lightweight stubbed language-model backends so the example
+runs without external services.  Each call to :func:`environment.step`
+progresses the conversation by one message, showcasing the emergent behaviour
+focus of the project.
+"""
+
+from __future__ import annotations
+
+from typing import List
+
+from environments import BasicEnvironment
+from models import AgentManager
+from schedulers import RoundRobinScheduler
+
+
+class ConversationEnvironment(BasicEnvironment):
+    """Environment that keeps a transcript of agent responses."""
+
+    def __init__(self, name: str, description: str, scheduler: RoundRobinScheduler):
+        super().__init__(name, description, scheduler)
+        self.transcript: List[str] = []
+
+    def context(self) -> str:
+        if not self.transcript:
+            return (
+                "Introduce yourself and propose a collaborative goal for this "
+                "simulation."
+            )
+        return "Conversation so far: " + " | ".join(self.transcript[-3:])
+
+    def step(self) -> str | None:
+        response = super().step()
+        if response:
+            self.transcript.append(response)
+        return response
+
+
+def make_reflective_backend(name: str):
+    """Return a stub backend that reacts to the environment context."""
+
+    def backend(prompt: str) -> str:
+        return f"{name} reflects on: {prompt.split(':')[-1].strip()}"
+
+    return backend
+
+
+def main() -> None:
+    manager = AgentManager()
+    scheduler = RoundRobinScheduler()
+    environment = ConversationEnvironment(
+        name="Idea Lab",
+        description="A creative space for brainstorming new agent behaviours.",
+        scheduler=scheduler,
+    )
+
+    explorer = manager.create_agent(
+        "transformer",
+        name="Explorer",
+        llm_backend=make_reflective_backend("Explorer"),
+    )
+    curator = manager.create_agent(
+        "transformer",
+        name="Curator",
+        llm_backend=make_reflective_backend("Curator"),
+    )
+
+    environment.register_agent(explorer)
+    environment.register_agent(curator)
+
+    print("=== Conversation Start ===")
+    for step, message in enumerate(environment.run(6), start=1):
+        print(f"Step {step}: {message}")
+    print("=== Conversation End ===")
+
+
+if __name__ == "__main__":
+    main()

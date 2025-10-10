@@ -36,9 +36,18 @@ Neva makes it simple to unlock the power of large language models through specia
 Neva empowers developers, researchers, educators, and hobbyists to create the next generation of AI interactions for gaming, automation, education, research, and beyond!
 
 ## Quickstart 🚀
-Dive right into Neva with our easy and intuitive quickstart guide. Whether you're a seasoned AI enthusiast or just exploring, you can access our collection of specialized AI agents, tools, and environments. Simply select the components you need, and customize them to your liking (like defining specific tasks or integrating with your favorite tools). With just a few clicks, you'll be ready to unleash the power of AI!
+The `examples/quickstart_conversation.py` script showcases a minimal
+conversation between two agents scheduled in an environment. It uses the
+high-level `AgentManager`, the concrete `TransformerAgent` class with stubbed
+language-model backends, and the round-robin scheduler to coordinate the
+interaction loop.
 
-Use our handy code snippets to integrate Neva into your Python projects, GitHub repositories, or other platforms. It's that simple!
+```bash
+python examples/quickstart_conversation.py
+```
+
+Each call to `environment.step()` advances the simulation by a single message so
+you can observe the emergent collaboration unfold in just a few lines of code.
 
 ## Installation
 Clone the repository and install the required packages:
@@ -51,38 +60,78 @@ pip install -r requirements.txt
 
 The dependencies include libraries such as `openai`, `transformers`, `wikipedia`, `googletrans`, and `bert-extractive-summarizer`.
 
+### Developer Setup
+
+To contribute or run the full suite of examples you may need a few additional
+configuration steps:
+
+- **API keys** – set `OPENAI_API_KEY` (or pass `api_key` directly) when using
+  `GPTAgent`. Community members often rely on [OpenAI compatible endpoints](https://platform.openai.com/docs/api-reference/introduction), but any drop-in
+  replacement that matches the Chat Completions API works.
+- **Transformers cache** – the `TransformerAgent` loads Hugging Face models on
+  demand. Install the optional `torch` dependency and authenticate with
+  `huggingface-cli login` if you plan to download private models.
+- **Environment variables** – place sensitive credentials (API keys, database
+  URLs, etc.) in a `.env` file and load them via `python-dotenv` or your
+  preferred secrets manager when running examples.
+- **Optional heavyweight dependencies** – examples that rely on summarisation or
+  translation tools use `bert-extractive-summarizer` and `googletrans`. Install
+  them only when needed to keep the core installation lightweight.
+
+After installing dependencies run `pytest` to confirm the environment is ready
+for development.
+
 ## Usage
 Create and simulate AI agents effortlessly:
 ```python
 from environments import BasicEnvironment
 from models import AgentManager
 from schedulers import RoundRobinScheduler
-from tools import MathTool
 
-# 1. Create an agent using the manager
+
+class ClassroomEnvironment(BasicEnvironment):
+    def __init__(self, scheduler):
+        super().__init__("Classroom", "A simple maths lesson", scheduler)
+        self.transcript = []
+
+    def context(self):
+        if not self.transcript:
+            return "Welcome students!"  # initial observation
+        return "Recent discussion: " + " | ".join(self.transcript[-2:])
+
+    def step(self):
+        reply = super().step()
+        if reply:
+            self.transcript.append(reply)
+        return reply
+
+
 manager = AgentManager()
-agent = manager.create_agent(
-    "transformer",
-    name="Tutor",
-    llm_backend=lambda prompt: f"(stubbed model) {prompt}",
-)
-agent.register_tool(MathTool())
-
-# 2. Prepare an environment and scheduler
 scheduler = RoundRobinScheduler()
-environment = BasicEnvironment("Classroom", "A simple maths lesson", scheduler)
-environment.register_agent(agent)
+environment = ClassroomEnvironment(scheduler)
 
-# 3. Drive the simulation loop
-for _ in range(3):
-    response = environment.step()
-    print(response)
+teacher = manager.create_agent(
+    "transformer",
+    name="Teacher",
+    llm_backend=lambda prompt: f"Teacher reflects on {prompt.split(':')[-1].strip()}",
+)
+student = manager.create_agent(
+    "transformer",
+    name="Student",
+    llm_backend=lambda prompt: f"Student considers {prompt.split(':')[-1].strip()}",
+)
+
+environment.register_agent(teacher)
+environment.register_agent(student)
+
+for _ in range(4):
+    print(environment.step())
 ```
 
-Each call to ``environment.step`` asks the scheduler for an agent, collects
-metrics via the observer system, and invokes the agent's ``respond`` method with
-the current environmental context.  This mirrors the simulation lifecycle used
-throughout the library and in the accompanying tests.
+Each call to `environment.step()` asks the scheduler for an agent, collects
+metrics via the observer system, and invokes the agent's `respond` method with
+the current environmental context. This mirrors the simulation lifecycle used
+throughout the library, the quickstart script, and the accompanying tests.
 
 ## Features
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
