@@ -149,7 +149,7 @@ class AIAgent(ABC):
     def prepare_prompt(self, message: str) -> str:
         """Compose a prompt enriched with agent attributes and tool context."""
 
-        memory_context = self.recall_memory(query=message)
+        memory_context = self.recall_memory()
         parts = [self.generate_attribute_summary(), self.generate_tool_summary()]
         if memory_context:
             parts.append(f"Relevant memory -> {memory_context}")
