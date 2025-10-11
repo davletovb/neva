@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 import openai
 
 from memory import MemoryModule
+
+if TYPE_CHECKING:  # pragma: no cover - import used for typing only.
+    from observer import SimulationObserver
 
 # Importing transformers can be expensive and is not always required for tests or
 # light-weight experimentation.  The concrete agent classes therefore import the
@@ -74,15 +77,29 @@ class AIAgent(ABC):
     # ------------------------------------------------------------------
     def set_environment(self, environment: "Environment") -> None:
         self.environment = environment
+        observer = self._resolve_observer()
+        if observer is not None:
+            observer.watch_agent(self)
 
     def register_tool(self, tool: Tool) -> None:
         self.tools.append(tool)
+        observer = self._resolve_observer()
+        if observer is not None:
+            observer.watch_tool(self, tool)
 
     def clear_tools(self) -> None:
         self.tools.clear()
 
     def set_attribute(self, key: str, value: str) -> None:
         self.attributes[key] = value
+
+    def _resolve_observer(self) -> Optional["SimulationObserver"]:
+        if self.environment is None:
+            return None
+        scheduler = getattr(self.environment, "scheduler", None)
+        if scheduler is None:
+            return None
+        return getattr(scheduler, "simulation_observer", None)
 
     def generate_attribute_summary(self) -> str:
         if not self.attributes:
@@ -358,10 +375,18 @@ class Scheduler(ABC):
     def set_environment(self, environment: "Environment") -> None:
         self.environment = environment
 
-    def record_metrics(self) -> None:
+    def record_metrics(self, active_agent: Optional[AIAgent] = None) -> None:
         observer = getattr(self, "simulation_observer", None)
         if observer is not None:
-            observer.collect_data(list(self.agents), self.environment)
+            try:
+                observer.collect_data(
+                    list(self.agents), self.environment, active_agent=active_agent
+                )
+            except TypeError:
+                # Backwards compatibility for observers that do not yet accept the
+                # ``active_agent`` keyword argument (for example, monkeypatched
+                # tests).
+                observer.collect_data(list(self.agents), self.environment)
 
     @abstractmethod
     def add(self, agent: AIAgent, **kwargs) -> None:

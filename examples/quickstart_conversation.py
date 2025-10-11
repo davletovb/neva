@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import List
 
+from pathlib import Path
+
 from environments import BasicEnvironment
 from memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
 from models import AgentManager
@@ -97,6 +99,16 @@ def main() -> None:
     for step, message in enumerate(environment.run(6), start=1):
         print(f"Step {step}: {message}")
     print("=== Conversation End ===")
+
+    observer = scheduler.simulation_observer
+    snapshot = observer.latest_snapshot()
+    print("\n=== Observer Metrics (latest snapshot) ===")
+    for name, value in snapshot.items():
+        print(f"{name}: {value}")
+
+    export_path = Path("quickstart_metrics.json")
+    observer.export_to_json(export_path)
+    print(f"Metrics exported to {export_path.resolve()}")
 
 
 if __name__ == "__main__":
