@@ -149,7 +149,8 @@ class AIAgent(ABC):
     def prepare_prompt(self, message: str) -> str:
         """Compose a prompt enriched with agent attributes and tool context."""
 
-        memory_context = self.recall_memory()
+        query = message or None
+        memory_context = self.recall_memory(query=query)
         parts = [self.generate_attribute_summary(), self.generate_tool_summary()]
         if memory_context:
             parts.append(f"Relevant memory -> {memory_context}")
@@ -187,10 +188,15 @@ class AIAgent(ABC):
         raise NotImplementedError
 
     def receive(self, message: str, *, sender: Optional[str] = None) -> str:
-        """Record ``message`` in memory before delegating to :meth:`respond`."""
+        """Generate a response and persist the exchange in memory."""
 
-        self._remember(sender or "system", message)
-        response = self.respond(message)
+        speaker = sender or "system"
+        try:
+            response = self.respond(message)
+        except Exception:
+            self._remember(speaker, message)
+            raise
+        self._remember(speaker, message)
         self._remember(self.name, response)
         return response
 
