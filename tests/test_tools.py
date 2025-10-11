@@ -39,5 +39,7 @@ def test_wikipedia_tool_missing_dependency_raises(monkeypatch):
         pytest.skip("Unexpected module location")
 
     monkeypatch.setattr("tools.wikipedia", None)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as exc:
         tool.use("Python (programming language)")
+
+    assert "pip install wikipedia" in str(exc.value)

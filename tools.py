@@ -19,6 +19,15 @@ except Exception:  # pragma: no cover - fallback for optional dependency.
 logger = logging.getLogger(__name__)
 
 
+def _missing_dependency_message(package: str, *, fallback: str) -> str:
+    return (
+        f"The optional dependency `{package}` is unavailable. {fallback} "
+        f"Install it with `pip install {package}` or provide a custom factory "
+        "when constructing the tool to continue running experiments without "
+        "network access."
+    )
+
+
 _ALLOWED_OPERATORS: Dict[type, Callable[[float, float], float]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -78,12 +87,22 @@ class WikipediaTool(Tool):
 
     def use(self, task: str) -> str:
         if wikipedia is None:
-            raise RuntimeError("The `wikipedia` package is not installed.")
+            raise RuntimeError(
+                _missing_dependency_message(
+                    "wikipedia",
+                    fallback="Wikipedia lookups require the `wikipedia` package.",
+                )
+            )
 
         try:
             return wikipedia.summary(task, sentences=self.summary_sentences)
         except Exception as exc:
-            raise RuntimeError(f"Failed to use WikipediaTool: {exc}")
+            logger.warning("Wikipedia lookup failed: %s", exc)
+            raise RuntimeError(
+                "Failed to use WikipediaTool because the external service "
+                f"returned an error: {exc}. Provide a stub via"
+                " `summary_sentences` or monkeypatch the backend during tests."
+            ) from exc
 
 
 class TranslatorTool(Tool):
@@ -111,8 +130,10 @@ class TranslatorTool(Tool):
             from googletrans import Translator  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency missing.
             raise RuntimeError(
-                "googletrans is not installed. Provide `translator_factory` to "
-                "TranslatorTool for offline testing."
+                _missing_dependency_message(
+                    "googletrans",
+                    fallback="Translation requires access to the Google Translate API.",
+                )
             ) from exc
 
         return Translator()
@@ -123,7 +144,12 @@ class TranslatorTool(Tool):
             result = translator.translate(task, dest=self.target_language)
             return getattr(result, "text", str(result))
         except Exception as exc:
-            raise RuntimeError(f"Failed to use TranslatorTool: {exc}")
+            logger.warning("Translator backend failed: %s", exc)
+            raise RuntimeError(
+                "Failed to use TranslatorTool because the translation backend "
+                f"raised an error: {exc}. Provide a stub translator factory for"
+                " deterministic tests."
+            ) from exc
 
 
 class SummarizerTool(Tool):
@@ -149,8 +175,10 @@ class SummarizerTool(Tool):
             from summarizer import Summarizer  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(
-                "The `summarizer` package is not installed. Provide "
-                "`summarizer_factory` when constructing SummarizerTool."
+                _missing_dependency_message(
+                    "summarizer",
+                    fallback="Summarisation requires the `bert-extractive-summarizer` package.",
+                )
             ) from exc
 
         model = Summarizer()
@@ -165,4 +193,9 @@ class SummarizerTool(Tool):
             summariser = self._get_summarizer()
             return summariser(task)
         except Exception as exc:
-            raise RuntimeError(f"Failed to use SummarizerTool: {exc}")
+            logger.warning("Summariser backend failed: %s", exc)
+            raise RuntimeError(
+                "Failed to use SummarizerTool because the summarisation backend "
+                f"raised an error: {exc}. Pass a lightweight factory during"
+                " offline experimentation."
+            ) from exc

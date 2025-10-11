@@ -20,7 +20,7 @@ class RandomScheduler(Scheduler):
         if not self.agents:
             raise RuntimeError("RandomScheduler has no agents to schedule.")
         agent = random.choice(self.agents)
-        self.record_metrics()
+        self.record_metrics(agent)
         return agent
 
 
@@ -40,7 +40,7 @@ class RoundRobinScheduler(Scheduler):
             raise RuntimeError("RoundRobinScheduler has no agents to schedule.")
         agent = self.agents[self.current_index]
         self.current_index = (self.current_index + 1) % len(self.agents)
-        self.record_metrics()
+        self.record_metrics(agent)
         return agent
 
 
@@ -65,7 +65,7 @@ class PriorityScheduler(Scheduler):
         priority, agent = self._queue.pop(0)
         # Reinsert agent with same priority for future scheduling
         self._queue.append((priority, agent))
-        self.record_metrics()
+        self.record_metrics(agent)
         return agent
 
 class LeastRecentlyUsedScheduler(Scheduler):
@@ -85,7 +85,7 @@ class LeastRecentlyUsedScheduler(Scheduler):
             raise RuntimeError("LeastRecentlyUsedScheduler has no agents to schedule.")
         agent = self._queue.pop(0)
         self._queue.append(agent)
-        self.record_metrics()
+        self.record_metrics(agent)
         return agent
 
 class WeightedRandomScheduler(Scheduler):
@@ -109,11 +109,11 @@ class WeightedRandomScheduler(Scheduler):
         random_weight = random.uniform(0, total_weight)
         for weight, agent in self._entries:
             if random_weight <= weight:
-                self.record_metrics()
+                self.record_metrics(agent)
                 return agent
             random_weight -= weight
 
         # Fallback due to floating point rounding.
         agent = self._entries[-1][1]
-        self.record_metrics()
+        self.record_metrics(agent)
         return agent

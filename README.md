@@ -48,6 +48,19 @@ python examples/quickstart_conversation.py
 
 Each call to `environment.step()` advances the simulation by a single message so
 you can observe the emergent collaboration unfold in just a few lines of code.
+When the script finishes it prints a snapshot of the automatically collected
+metrics (turn counts, participation rates, dialogue length, tool usage, and
+lightweight sentiment/intent analysis) and writes them to
+`quickstart_metrics.json` for later inspection.
+
+### Observability & Experiment Tracking
+
+The :class:`observer.SimulationObserver` now registers a suite of metrics out of
+the box, removing the need to manually wire analytics into every experiment. It
+tracks turn counts, per-agent participation, response latencies, recent
+sentiment/intent, and tool-usage frequency. Metrics can be exported to CSV/JSON
+or logged to MLflow with `SimulationObserver.log_to_mlflow()` to integrate with
+your preferred dashboarding stack.
 
 ## Installation
 Clone the repository and install the required packages:
@@ -77,6 +90,11 @@ configuration steps:
 - **Optional heavyweight dependencies** – examples that rely on summarisation or
   translation tools use `bert-extractive-summarizer` and `googletrans`. Install
   them only when needed to keep the core installation lightweight.
+- **Graceful fallbacks** – the built-in tools surface actionable error messages
+  when optional packages such as `wikipedia`, `googletrans`, or
+  `bert-extractive-summarizer` are unavailable. You can provide lightweight
+  factories to `TranslatorTool` and `SummarizerTool` (or monkeypatch the
+  Wikipedia backend) to keep experiments fully offline.
 
 After installing dependencies run `pytest` to confirm the environment is ready
 for development.
