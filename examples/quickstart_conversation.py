@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import List
 
 from environments import BasicEnvironment
+from memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
 from models import AgentManager
 from schedulers import RoundRobinScheduler
 
@@ -52,6 +53,21 @@ def make_reflective_backend(name: str):
     return backend
 
 
+def make_agent_memory() -> CompositeMemory:
+    """Create a composite memory that mixes recency and summary signals."""
+
+    def summarizer(summary: str, record: MemoryRecord) -> str:
+        statement = f"{record.speaker} noted '{record.message}'"
+        if not summary:
+            return statement
+        return f"{summary} | {statement}"
+
+    return CompositeMemory(
+        [ShortTermMemory(capacity=4, label="recent"), SummaryMemory(summarizer)],
+        label="agent cognition",
+    )
+
+
 def main() -> None:
     manager = AgentManager()
     scheduler = RoundRobinScheduler()
@@ -65,11 +81,13 @@ def main() -> None:
         "transformer",
         name="Explorer",
         llm_backend=make_reflective_backend("Explorer"),
+        memory=make_agent_memory(),
     )
     curator = manager.create_agent(
         "transformer",
         name="Curator",
         llm_backend=make_reflective_backend("Curator"),
+        memory=make_agent_memory(),
     )
 
     environment.register_agent(explorer)

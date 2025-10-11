@@ -9,6 +9,8 @@ from uuid import uuid4
 
 import openai
 
+from memory import MemoryModule
+
 # Importing transformers can be expensive and is not always required for tests or
 # light-weight experimentation.  The concrete agent classes therefore import the
 # library lazily, but type-checkers still benefit from the symbol being present
@@ -55,6 +57,7 @@ class AIAgent(ABC):
         *,
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
+        memory: Optional[MemoryModule] = None,
     ) -> None:
         self.id = uuid4()
         self.name = name or f"agent-{str(self.id)[:8]}"
@@ -62,6 +65,9 @@ class AIAgent(ABC):
         self.tools: List[Tool] = []
         self.attributes: Dict[str, str] = {}
         self._llm_backend = llm_backend
+        self._memory: Optional[MemoryModule] = None
+        if memory is not None:
+            self.set_memory(memory)
 
     # ------------------------------------------------------------------
     # Tool and attribute management utilities
@@ -95,6 +101,25 @@ class AIAgent(ABC):
         return f"Available tools: {descriptions}."
 
     # ------------------------------------------------------------------
+    # Memory utilities
+    # ------------------------------------------------------------------
+    @property
+    def memory(self) -> Optional[MemoryModule]:
+        return self._memory
+
+    def set_memory(self, memory: Optional[MemoryModule]) -> None:
+        self._memory = memory
+
+    def _remember(self, speaker: str, message: str) -> None:
+        if self._memory is not None:
+            self._memory.remember(speaker, message)
+
+    def recall_memory(self, *, query: Optional[str] = None) -> str:
+        if self._memory is None:
+            return ""
+        return self._memory.recall(query=query)
+
+    # ------------------------------------------------------------------
     # Communication helpers
     # ------------------------------------------------------------------
     @property
@@ -107,7 +132,10 @@ class AIAgent(ABC):
     def prepare_prompt(self, message: str) -> str:
         """Compose a prompt enriched with agent attributes and tool context."""
 
+        memory_context = self.recall_memory(query=message)
         parts = [self.generate_attribute_summary(), self.generate_tool_summary()]
+        if memory_context:
+            parts.append(f"Relevant memory -> {memory_context}")
         if message:
             parts.append(message)
         return " ".join(part for part in parts if part).strip()
@@ -118,12 +146,15 @@ class AIAgent(ABC):
         if not isinstance(receiver, AIAgent):
             raise TypeError("receiver must be an instance of AIAgent")
         formatted = f"{self.name} says: {message}"
-        return receiver.respond(formatted)
+        self._remember(self.name, message)
+        reply = receiver.receive(formatted, sender=self.name)
+        self._remember(receiver.name, reply)
+        return reply
 
     def process_input(self, message: str) -> str:
         """Alias for :meth:`respond` retained for backwards compatibility."""
 
-        return self.respond(message)
+        return self.receive(message)
 
     def step(self, observation: Optional[str] = None) -> str:
         """Perform a single agent step and return the generated response."""
@@ -131,12 +162,20 @@ class AIAgent(ABC):
         if observation is None and self.environment is not None:
             observation = self.environment.context()
         observation = observation or ""
-        return self.respond(observation)
+        return self.receive(observation, sender="environment")
 
     @abstractmethod
     def respond(self, message: str) -> str:
         """Return the agent's response to ``message``."""
         raise NotImplementedError
+
+    def receive(self, message: str, *, sender: Optional[str] = None) -> str:
+        """Record ``message`` in memory before delegating to :meth:`respond`."""
+
+        self._remember(sender or "system", message)
+        response = self.respond(message)
+        self._remember(self.name, response)
+        return response
 
 
 class TransformerAgent(AIAgent):
@@ -148,10 +187,11 @@ class TransformerAgent(AIAgent):
         *,
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
+        memory: Optional[MemoryModule] = None,
         model_loader: Optional[Callable[[str], object]] = None,
         tokenizer_loader: Optional[Callable[[str], object]] = None,
     ) -> None:
-        super().__init__(name=name, llm_backend=llm_backend)
+        super().__init__(name=name, llm_backend=llm_backend, memory=memory)
         self.model_name = model_name
         self._model_loader = model_loader
         self._tokenizer_loader = tokenizer_loader
@@ -206,8 +246,9 @@ class GPTAgent(AIAgent):
         model: str = "gpt-3.5-turbo",
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
+        memory: Optional[MemoryModule] = None,
     ) -> None:
-        super().__init__(name=name, llm_backend=llm_backend)
+        super().__init__(name=name, llm_backend=llm_backend, memory=memory)
         self.api_key = api_key
         self.model = model
 
