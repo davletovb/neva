@@ -1,4 +1,5 @@
 import os
+import os
 import sys
 
 import pytest
@@ -59,3 +60,21 @@ def test_environment_step_runs_agents():
     responses = env.run(3)
     assert responses == ["Solo:context-1", "Solo:context-2", "Solo:context-3"]
     assert agent.messages == ["context-1", "context-2", "context-3"]
+
+
+def test_environment_snapshot_and_restore(tmp_path):
+    scheduler = RoundRobinScheduler()
+    env = StubEnvironment(scheduler)
+    agent = StubAgent("Recorder")
+    env.register_agent(agent)
+    env.state["mood"] = "focused"
+
+    agent.receive("initial", sender="tester")
+    snapshot = env.snapshot()
+
+    env.state["mood"] = "distracted"
+    agent.receive("another", sender="tester")
+
+    env.restore(snapshot)
+    assert env.state["mood"] == "focused"
+    assert len(agent.conversation_state.turns) == 2

@@ -1,6 +1,3 @@
-openai
-transformers
-wikipedia
+openai==0.28.1
+wikipedia==1.4.0
 googletrans==4.0.0rc1
-bert-extractive-summarizer
-pytest
