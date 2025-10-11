@@ -186,6 +186,11 @@ class CompositeScheduler(Scheduler):
     def add(self, agent: AIAgent, **kwargs) -> None:
         group = kwargs.pop("group", "default")
         scheduler_override = kwargs.pop("scheduler", None)
+
+        existing_group = self._group_membership.get(agent)
+        if existing_group is not None and existing_group != group:
+            self._detach_agent_from_group(agent, existing_group)
+
         group_scheduler = self._ensure_group_scheduler(group, scheduler_override)
 
         if agent not in self.agents:
@@ -275,11 +280,17 @@ class CompositeScheduler(Scheduler):
                 self._group_index = 0
 
     def _handle_agent_removal(self, agent: AIAgent) -> None:
-        group = self._group_membership.pop(agent, None)
+        group = self._group_membership.get(agent)
         if group is None:
             return
+        self._detach_agent_from_group(agent, group)
+
+    def _detach_agent_from_group(self, agent: AIAgent, group: str) -> None:
+        self._group_membership.pop(agent, None)
         scheduler = self._group_schedulers.get(group)
-        if scheduler is not None and agent in scheduler.agents:
+        if scheduler is None:
+            return
+        if agent in scheduler.agents:
             scheduler.terminate(agent)
-            if not scheduler.agents:
-                self._remove_group(group)
+        if not scheduler.agents:
+            self._remove_group(group)
