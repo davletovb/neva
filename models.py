@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Set
+import logging
+from time import perf_counter, sleep
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Sequence, Set
 from uuid import uuid4
 
 import openai
 
 from memory import MemoryModule
+from caching import LLMCache
+from metrics import CostTracker, ResponseTimeTracker, TokenUsageTracker, batch_prompt_summary
+from safety import PromptValidator, RateLimiter, sanitize_input
+from state_management import ConversationState, SimulationSnapshot, create_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - import used for typing only.
     from observer import SimulationObserver
@@ -61,6 +68,9 @@ class AIAgent(ABC):
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
         memory: Optional[MemoryModule] = None,
+        prompt_validator: Optional[PromptValidator] = None,
+        conversation_state: Optional[ConversationState] = None,
+        response_time_tracker: Optional[ResponseTimeTracker] = None,
     ) -> None:
         self.id = uuid4()
         self.name = name or f"agent-{str(self.id)[:8]}"
@@ -69,6 +79,11 @@ class AIAgent(ABC):
         self.attributes: Dict[str, str] = {}
         self._llm_backend = llm_backend
         self._memory: Optional[MemoryModule] = None
+        self._prompt_validator = prompt_validator or PromptValidator()
+        self._conversation_state = conversation_state or ConversationState(
+            agent_name=self.name
+        )
+        self._response_time_tracker = response_time_tracker or ResponseTimeTracker()
         if memory is not None:
             self.set_memory(memory)
 
@@ -128,13 +143,30 @@ class AIAgent(ABC):
         self._memory = memory
 
     def _remember(self, speaker: str, message: str) -> None:
+        cleaned = sanitize_input(message)
         if self._memory is not None:
-            self._memory.remember(speaker, message)
+            self._memory.remember(speaker, cleaned)
+        self._conversation_state.record_turn(speaker, cleaned)
 
     def recall_memory(self, *, query: Optional[str] = None) -> str:
         if self._memory is None:
             return ""
         return self._memory.recall(query=query)
+
+    @property
+    def conversation_state(self) -> ConversationState:
+        return self._conversation_state
+
+    def set_conversation_state(self, state: ConversationState) -> None:
+        self._conversation_state = state
+
+    @property
+    def prompt_validator(self) -> PromptValidator:
+        return self._prompt_validator
+
+    @property
+    def response_time_tracker(self) -> ResponseTimeTracker:
+        return self._response_time_tracker
 
     # ------------------------------------------------------------------
     # Communication helpers
@@ -149,13 +181,16 @@ class AIAgent(ABC):
     def prepare_prompt(self, message: str) -> str:
         """Compose a prompt enriched with agent attributes and tool context."""
 
-        query = message or None
+        validated = self._prompt_validator.validate(message)
+        query = validated or None
         memory_context = self.recall_memory(query=query)
+        if not memory_context and query is not None:
+            memory_context = self.recall_memory()
         parts = [self.generate_attribute_summary(), self.generate_tool_summary()]
         if memory_context:
             parts.append(f"Relevant memory -> {memory_context}")
-        if message:
-            parts.append(message)
+        if validated:
+            parts.append(validated)
         return " ".join(part for part in parts if part).strip()
 
     def communicate(self, receiver: "AIAgent", message: str) -> str:
@@ -163,8 +198,9 @@ class AIAgent(ABC):
 
         if not isinstance(receiver, AIAgent):
             raise TypeError("receiver must be an instance of AIAgent")
-        formatted = f"{self.name} says: {message}"
-        self._remember(self.name, message)
+        validated = self._prompt_validator.validate(message)
+        formatted = f"{self.name} says: {validated}"
+        self._remember(self.name, validated)
         reply = receiver.receive(formatted, sender=self.name)
         self._remember(receiver.name, reply)
         return reply
@@ -191,12 +227,19 @@ class AIAgent(ABC):
         """Generate a response and persist the exchange in memory."""
 
         speaker = sender or "system"
+        validated = self._prompt_validator.validate(message)
+        context = (
+            self._response_time_tracker.track()
+            if self._response_time_tracker is not None
+            else nullcontext()
+        )
         try:
-            response = self.respond(message)
+            with context:
+                response = self.respond(validated)
         except Exception:
-            self._remember(speaker, message)
+            self._remember(speaker, validated)
             raise
-        self._remember(speaker, message)
+        self._remember(speaker, validated)
         self._remember(self.name, response)
         return response
 
@@ -270,10 +313,23 @@ class GPTAgent(AIAgent):
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
         memory: Optional[MemoryModule] = None,
+        rate_limiter: Optional[RateLimiter] = None,
+        cache: Optional[LLMCache] = None,
+        token_tracker: Optional[TokenUsageTracker] = None,
+        cost_tracker: Optional[CostTracker] = None,
+        max_retries: int = 3,
+        retry_backoff: float = 1.5,
     ) -> None:
         super().__init__(name=name, llm_backend=llm_backend, memory=memory)
         self.api_key = api_key
         self.model = model
+        self._rate_limiter = rate_limiter or RateLimiter(rate=60, per=60.0)
+        self._cache = cache or LLMCache(max_size=256)
+        self._token_tracker = token_tracker or TokenUsageTracker()
+        self._cost_tracker = cost_tracker or CostTracker()
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff
+        self._logger = logging.getLogger(self.__class__.__name__)
 
     def _default_backend(self) -> LLMBackend:
         if not self.api_key:
@@ -283,13 +339,59 @@ class GPTAgent(AIAgent):
             )
 
         def _call_openai(prompt: str) -> str:
-            openai.api_key = self.api_key
-            response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-            )
-            return response.choices[0].message["content"].strip()
+            validated_prompt = self.prompt_validator.validate(prompt)
+            cached = self._cache.get(validated_prompt) if self._cache is not None else None
+            if cached is not None:
+                return cached
+
+            attempt = 0
+            last_error: Optional[Exception] = None
+            while attempt <= self._max_retries:
+                attempt += 1
+                if self._rate_limiter is not None:
+                    self._rate_limiter.acquire()
+                start = perf_counter()
+                try:
+                    openai.api_key = self.api_key
+                    response = openai.ChatCompletion.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": validated_prompt}],
+                        max_tokens=200,
+                    )
+                    content = response.choices[0].message["content"].strip()
+                    duration = perf_counter() - start
+                    if self._token_tracker is not None:
+                        prompt_tokens, response_tokens = self._token_tracker.record(
+                            validated_prompt, content
+                        )
+                        total_tokens = prompt_tokens + response_tokens
+                    else:
+                        total_tokens = 0
+                    if self._cost_tracker is not None and total_tokens:
+                        self._cost_tracker.add_usage(self.model, total_tokens)
+                    if self._cache is not None:
+                        self._cache.set(validated_prompt, content)
+                    self._logger.debug(
+                        "llm_call",
+                        extra={
+                            "model": self.model,
+                            "duration": duration,
+                            "prompt_tokens": locals().get("prompt_tokens", 0),
+                            "response_tokens": locals().get("response_tokens", 0),
+                        },
+                    )
+                    return content
+                except Exception as exc:  # pragma: no cover - network error path.
+                    last_error = exc
+                    if attempt > self._max_retries:
+                        raise
+                    sleep_time = min(30.0, self._retry_backoff ** attempt)
+                    self._logger.warning(
+                        "Retrying LLM call due to error", extra={"error": str(exc)}
+                    )
+                    sleep(sleep_time)
+
+            raise RuntimeError("LLM call failed") from last_error
 
         return _call_openai
 
@@ -329,6 +431,14 @@ class AgentManager:
         receiver = self.get_agent(receiver_id)
         return sender.communicate(receiver, message)
 
+    def batch_communicate(
+        self, sender_id: str, receiver_ids: Iterable[str], message: str
+    ) -> Dict[str, str]:
+        responses: Dict[str, str] = {}
+        for receiver_id in receiver_ids:
+            responses[receiver_id] = self.communicate(sender_id, receiver_id, message)
+        return responses
+
     def create_group(self, group_id: str, agent_ids: Sequence[str]) -> None:
         self.groups[group_id] = list(agent_ids)
 
@@ -343,7 +453,17 @@ class AgentManager:
         getattr(agent, action)(*args, **kwargs)
 
     def handle_error(self, error: Exception) -> None:
-        raise RuntimeError(f"An error occurred: {error}")
+        logging.getLogger(self.__class__.__name__).error(
+            "agent_manager_error", extra={"error": str(error)}
+        )
+        raise RuntimeError(f"An error occurred: {error}") from error
+
+    def conversation_summary(self) -> Dict[str, Dict[str, int]]:
+        summaries: Dict[str, Dict[str, int]] = {}
+        for agent in self.agents.values():
+            states = [turn.message for turn in agent.conversation_state.turns]
+            summaries[agent.name] = batch_prompt_summary(states)
+        return summaries
 
 
 class AgentFactory:
@@ -485,4 +605,20 @@ class Environment(ABC):
 
     def run(self, steps: int) -> List[Optional[str]]:
         return [self.step() for _ in range(steps)]
+
+    def snapshot(self) -> SimulationSnapshot:
+        return create_snapshot(
+            environment_state=dict(self.state),
+            agent_states=(agent.conversation_state for agent in self.agents),
+        )
+
+    def restore(self, snapshot: SimulationSnapshot) -> None:
+        self.state = dict(snapshot.environment_state)
+        name_to_state = {
+            name: ConversationState.from_dict(state)
+            for name, state in snapshot.agent_states.items()
+        }
+        for agent in self.agents:
+            if agent.name in name_to_state:
+                agent.set_conversation_state(name_to_state[agent.name])
 

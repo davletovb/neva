@@ -71,7 +71,20 @@ cd neva
 pip install -r requirements.txt
 ```
 
-The dependencies include libraries such as `openai`, `transformers`, `wikipedia`, `googletrans`, and `bert-extractive-summarizer`.
+The core requirements focus on lightweight, always-on dependencies. Optional
+extras such as `transformers` and `bert-extractive-summarizer` moved to
+`requirements-optional.txt` so you only install heavy packages when necessary.
+For development workflows install the tooling bundle:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+and pull in heavyweight integrations on demand:
+
+```bash
+pip install -r requirements-optional.txt
+```
 
 ### Developer Setup
 
@@ -90,6 +103,9 @@ configuration steps:
 - **Optional heavyweight dependencies** – examples that rely on summarisation or
   translation tools use `bert-extractive-summarizer` and `googletrans`. Install
   them only when needed to keep the core installation lightweight.
+- **Structured logging** – call ``logging_utils.configure_logging()`` at the
+  beginning of your experiment to emit JSON logs ready for ingestion by ELK,
+  Loki, or any observability platform.
 - **Graceful fallbacks** – the built-in tools surface actionable error messages
   when optional packages such as `wikipedia`, `googletrans`, or
   `bert-extractive-summarizer` are unavailable. You can provide lightweight
@@ -153,7 +169,13 @@ throughout the library, the quickstart script, and the accompanying tests.
 
 ## Features
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
-- **Hierarchical Agents**: Design agents for specific tasks and coordinate them harmoniously.
+- **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
+  helpers let you persist simulations mid-run and resume them later.
+- **Robust Safety Rails**: Prompt validation, sanitisation, rate limiting, and
+  automatic retry logic keep API usage safe and predictable.
+- **Observability First**: Structured logging, response-time metrics, token and
+  cost tracking, and conversation summaries surface actionable insights out of
+  the box.
 - **Intuitive Interfaces**: Simple interfaces for agent creation and management.
 - **Environment Simulation**: Simulate environments for agent interactions and collaborations.
 
