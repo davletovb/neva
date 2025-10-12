@@ -2,19 +2,38 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 from time import perf_counter, sleep
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Sequence, Set
+from typing import (
+    TYPE_CHECKING,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 from uuid import uuid4
 
 import openai
 
 from memory import MemoryModule
 from caching import LLMCache
-from metrics import CostTracker, ResponseTimeTracker, TokenUsageTracker, batch_prompt_summary
+from metrics import (
+    CostTracker,
+    ResponseTimeTracker,
+    TokenUsageTracker,
+    batch_prompt_summary,
+    profile_memory_usage,
+)
 from safety import PromptValidator, RateLimiter, sanitize_input
 from state_management import ConversationState, SimulationSnapshot, create_snapshot
 from exceptions import (
@@ -41,6 +60,17 @@ try:  # pragma: no cover - exercised implicitly when transformers is installed.
 except Exception:  # pragma: no cover - handled by runtime guard.
     AutoModelForSeq2SeqLM = None  # type: ignore
     AutoTokenizer = None  # type: ignore
+
+
+
+@dataclass
+class ParallelExecutionConfig:
+    """Configuration options for coordinating parallel agent execution."""
+
+    enabled: bool = False
+    max_concurrency: Optional[int] = None
+    batch_size: Optional[int] = None
+
 
 LLMBackend = Callable[[str], str]
 
@@ -78,6 +108,7 @@ class AIAgent(ABC):
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
         memory: Optional[MemoryModule] = None,
+        cache: Optional[LLMCache] = None,
         prompt_validator: Optional[PromptValidator] = None,
         conversation_state: Optional[ConversationState] = None,
         response_time_tracker: Optional[ResponseTimeTracker] = None,
@@ -89,6 +120,7 @@ class AIAgent(ABC):
         self.attributes: Dict[str, str] = {}
         self._llm_backend = llm_backend
         self._memory: Optional[MemoryModule] = None
+        self._cache = cache
         self._prompt_validator = prompt_validator or PromptValidator()
         self._conversation_state = conversation_state or ConversationState(
             agent_name=self.name
@@ -151,6 +183,23 @@ class AIAgent(ABC):
 
     def set_memory(self, memory: Optional[MemoryModule]) -> None:
         self._memory = memory
+
+    @property
+    def cache(self) -> Optional[LLMCache]:
+        return self._cache
+
+    def set_cache(self, cache: Optional[LLMCache]) -> None:
+        self._cache = cache
+
+    def _cache_lookup(self, prompt: str) -> Optional[str]:
+        if self._cache is None:
+            return None
+        return self._cache.get(prompt)
+
+    def _cache_store(self, prompt: str, response: str) -> None:
+        if self._cache is None:
+            return
+        self._cache.set(prompt, response)
 
     def _remember(self, speaker: str, message: str) -> None:
         cleaned = sanitize_input(message)
@@ -215,6 +264,18 @@ class AIAgent(ABC):
         self._remember(receiver.name, reply)
         return reply
 
+    async def acommunicate(self, receiver: "AIAgent", message: str) -> str:
+        """Asynchronously send ``message`` to ``receiver`` and return the reply."""
+
+        if not isinstance(receiver, AIAgent):
+            raise AgentCommunicationError("receiver must be an instance of AIAgent")
+        validated = self._prompt_validator.validate(message)
+        formatted = f"{self.name} says: {validated}"
+        self._remember(self.name, validated)
+        reply = await receiver.areceive(formatted, sender=self.name)
+        self._remember(receiver.name, reply)
+        return reply
+
     def process_input(self, message: str) -> str:
         """Alias for :meth:`respond` retained for backwards compatibility."""
 
@@ -232,6 +293,12 @@ class AIAgent(ABC):
     def respond(self, message: str) -> str:
         """Return the agent's response to ``message``."""
         raise NotImplementedError
+
+    async def arespond(self, message: str) -> str:
+        """Asynchronously return the agent's response to ``message``."""
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.respond(message))
 
     def receive(self, message: str, *, sender: Optional[str] = None) -> str:
         """Generate a response and persist the exchange in memory."""
@@ -253,6 +320,14 @@ class AIAgent(ABC):
         self._remember(self.name, response)
         return response
 
+    async def areceive(self, message: str, *, sender: Optional[str] = None) -> str:
+        """Asynchronously generate a response and persist the exchange."""
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.receive(message, sender=sender)
+        )
+
 
 class TransformerAgent(AIAgent):
     """Agent powered by a Hugging Face transformer model."""
@@ -264,10 +339,13 @@ class TransformerAgent(AIAgent):
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
         memory: Optional[MemoryModule] = None,
+        cache: Optional[LLMCache] = None,
         model_loader: Optional[Callable[[str], object]] = None,
         tokenizer_loader: Optional[Callable[[str], object]] = None,
     ) -> None:
-        super().__init__(name=name, llm_backend=llm_backend, memory=memory)
+        super().__init__(
+            name=name, llm_backend=llm_backend, memory=memory, cache=cache
+        )
         self.model_name = model_name
         self._model_loader = model_loader
         self._tokenizer_loader = tokenizer_loader
@@ -298,18 +376,27 @@ class TransformerAgent(AIAgent):
 
     def respond(self, message: str) -> str:
         prompt = self.prepare_prompt(message)
+        validated_prompt = self.prompt_validator.validate(prompt)
+
+        cached = self._cache_lookup(validated_prompt)
+        if cached is not None:
+            return cached
 
         if self.llm_backend is not None:
-            return self.llm_backend(prompt)
+            response = self.llm_backend(validated_prompt)
+            self._cache_store(validated_prompt, response)
+            return response
 
         self._load_transformer()
         assert self._model is not None and self._tokenizer is not None
 
         inputs = self._tokenizer(
-            prompt, return_tensors="pt", truncation=True, padding=True
+            validated_prompt, return_tensors="pt", truncation=True, padding=True
         )
         output_tokens = self._model.generate(**inputs, max_length=200)
-        return self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+        decoded = self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+        self._cache_store(validated_prompt, decoded)
+        return decoded
 
 
 class GPTAgent(AIAgent):
@@ -330,11 +417,17 @@ class GPTAgent(AIAgent):
         max_retries: int = 3,
         retry_backoff: float = 1.5,
     ) -> None:
-        super().__init__(name=name, llm_backend=llm_backend, memory=memory)
+        resolved_cache = cache or LLMCache(max_size=256)
+        super().__init__(
+            name=name,
+            llm_backend=llm_backend,
+            memory=memory,
+            cache=resolved_cache,
+        )
         self.api_key = api_key
         self.model = model
         self._rate_limiter = rate_limiter or RateLimiter(rate=60, per=60.0)
-        self._cache = cache or LLMCache(max_size=256)
+        self._cache = resolved_cache
         self._token_tracker = token_tracker or TokenUsageTracker()
         self._cost_tracker = cost_tracker or CostTracker()
         self._max_retries = max_retries
@@ -348,8 +441,7 @@ class GPTAgent(AIAgent):
             )
 
         def _call_openai(prompt: str) -> str:
-            validated_prompt = self.prompt_validator.validate(prompt)
-            cached = self._cache.get(validated_prompt) if self._cache is not None else None
+            cached = self._cache_lookup(prompt)
             if cached is not None:
                 return cached
 
@@ -364,22 +456,21 @@ class GPTAgent(AIAgent):
                     openai.api_key = self.api_key
                     response = openai.ChatCompletion.create(
                         model=self.model,
-                        messages=[{"role": "user", "content": validated_prompt}],
+                        messages=[{"role": "user", "content": prompt}],
                         max_tokens=200,
                     )
                     content = response.choices[0].message["content"].strip()
                     duration = perf_counter() - start
                     if self._token_tracker is not None:
                         prompt_tokens, response_tokens = self._token_tracker.record(
-                            validated_prompt, content
+                            prompt, content
                         )
                         total_tokens = prompt_tokens + response_tokens
                     else:
                         total_tokens = 0
                     if self._cost_tracker is not None and total_tokens:
                         self._cost_tracker.add_usage(self.model, total_tokens)
-                    if self._cache is not None:
-                        self._cache.set(validated_prompt, content)
+                    self._cache_store(prompt, content)
                     self._logger.debug(
                         "llm_call",
                         extra={
@@ -408,16 +499,58 @@ class GPTAgent(AIAgent):
 
     def respond(self, message: str) -> str:
         prompt = self.prepare_prompt(message)
+        validated_prompt = self.prompt_validator.validate(prompt)
+        cached = self._cache_lookup(validated_prompt)
+        if cached is not None:
+            return cached
+
         backend = self.llm_backend or self._default_backend()
-        return backend(prompt)
+        response = backend(validated_prompt)
+        self._cache_store(validated_prompt, response)
+        return response
 
 
 class AgentManager:
     """Create and coordinate agents within a simulation."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, parallel_config: Optional[ParallelExecutionConfig] = None
+    ) -> None:
         self.agents: Dict[str, AIAgent] = {}
         self.groups: Dict[str, List[str]] = {}
+        self.parallel_config = parallel_config or ParallelExecutionConfig()
+
+    @staticmethod
+    def profile_population_memory(
+        agent_factory: Callable[[], AIAgent], population_size: int
+    ) -> Tuple[int, int]:
+        """Return memory usage for instantiating ``population_size`` agents."""
+
+        def _populate() -> None:
+            manager = AgentManager()
+            for _ in range(population_size):
+                agent = agent_factory()
+                manager.agents[str(agent.id)] = agent
+
+        return profile_memory_usage(_populate)
+
+    def _batched(self, items: List[str], batch_size: Optional[int]) -> List[List[str]]:
+        if not items:
+            return []
+        if batch_size is None or batch_size <= 0:
+            return [items[:]]
+        return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+
+    def _execute_coroutine(self, coro: Awaitable[Dict[str, str]]) -> Dict[str, str]:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(coro)
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            return result
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
 
     def create_agent(self, agent_type: str, **kwargs) -> AIAgent:
         agent_type = agent_type.lower()
@@ -449,11 +582,66 @@ class AgentManager:
         return sender.communicate(receiver, message)
 
     def batch_communicate(
+        self,
+        sender_id: str,
+        receiver_ids: Iterable[str],
+        message: str,
+        *,
+        concurrent: Optional[bool] = None,
+    ) -> Dict[str, str]:
+        receiver_list = list(receiver_ids)
+        if not receiver_list:
+            return {}
+
+        concurrent = (
+            self.parallel_config.enabled if concurrent is None else concurrent
+        )
+        if not concurrent:
+            responses: Dict[str, str] = {}
+            for receiver_id in receiver_list:
+                responses[receiver_id] = self.communicate(
+                    sender_id, receiver_id, message
+                )
+            return responses
+
+        responses: Dict[str, str] = {}
+        batches = self._batched(receiver_list, self.parallel_config.batch_size)
+        for batch in batches:
+            batch_responses = self._execute_coroutine(
+                self.batch_communicate_async(sender_id, batch, message)
+            )
+            responses.update(batch_responses)
+        return responses
+
+    async def batch_communicate_async(
         self, sender_id: str, receiver_ids: Iterable[str], message: str
     ) -> Dict[str, str]:
+        receiver_list = list(receiver_ids)
+        if not receiver_list:
+            return {}
+
+        sender = self.get_agent(sender_id)
+        semaphore = (
+            asyncio.Semaphore(self.parallel_config.max_concurrency)
+            if self.parallel_config.max_concurrency
+            else None
+        )
+
+        async def _communicate(receiver_id: str) -> Tuple[str, str]:
+            receiver = self.get_agent(receiver_id)
+            if semaphore is None:
+                reply = await sender.acommunicate(receiver, message)
+            else:
+                async with semaphore:
+                    reply = await sender.acommunicate(receiver, message)
+            return receiver_id, reply
+
         responses: Dict[str, str] = {}
-        for receiver_id in receiver_ids:
-            responses[receiver_id] = self.communicate(sender_id, receiver_id, message)
+        batches = self._batched(receiver_list, self.parallel_config.batch_size)
+        for batch in batches:
+            tasks = [asyncio.create_task(_communicate(receiver_id)) for receiver_id in batch]
+            for receiver_id, reply in await asyncio.gather(*tasks):
+                responses[receiver_id] = reply
         return responses
 
     def create_group(self, group_id: str, agent_ids: Sequence[str]) -> None:
