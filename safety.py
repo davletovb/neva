@@ -8,6 +8,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Iterable, List
 
+from exceptions import (
+    PromptValidationError,
+    RateLimiterConfigurationError,
+)
+
 
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -34,13 +39,13 @@ class PromptValidator:
 
     def validate(self, prompt: str) -> str:
         if not isinstance(prompt, str):
-            raise TypeError("prompt must be a string")
+            raise PromptValidationError("prompt must be a string")
         prompt = sanitize_input(prompt)
         if len(prompt) > self.max_length:
-            raise ValueError("prompt exceeds maximum allowed length")
+            raise PromptValidationError("prompt exceeds maximum allowed length")
         for pattern in self._compiled_patterns:
             if pattern.search(prompt):
-                raise ValueError("prompt contains forbidden content")
+                raise PromptValidationError("prompt contains forbidden content")
         return prompt
 
 
@@ -49,9 +54,9 @@ class RateLimiter:
 
     def __init__(self, rate: int, per: float = 60.0) -> None:
         if rate <= 0:
-            raise ValueError("rate must be positive")
+            raise RateLimiterConfigurationError("rate must be positive")
         if per <= 0:
-            raise ValueError("per must be positive")
+            raise RateLimiterConfigurationError("per must be positive")
         self._rate = rate
         self._per = per
         self._allowance = float(rate)

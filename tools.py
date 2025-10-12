@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional, Protocol, cast
 import logging
 
 from models import Tool
+from exceptions import MissingDependencyError, ToolExecutionError
 
 try:  # pragma: no cover - exercised when wikipedia is available.
     import wikipedia  # type: ignore
@@ -63,22 +64,26 @@ class MathTool(Tool):
         if isinstance(node, ast.BinOp):
             op_type = type(node.op)
             if op_type not in _ALLOWED_OPERATORS:
-                raise ValueError(f"Unsupported operator: {op_type.__name__}")
+                raise ToolExecutionError(
+                    f"Unsupported operator: {op_type.__name__}"
+                )
             left = self._eval_node(node.left)
             right = self._eval_node(node.right)
             return _ALLOWED_OPERATORS[op_type](left, right)
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
             value = self._eval_node(node.operand)
             return value if isinstance(node.op, ast.UAdd) else -value
-        raise ValueError("Unsupported expression")
+        raise ToolExecutionError("Unsupported expression")
 
     def use(self, task: str) -> str:
         try:
             expression = ast.parse(task, mode="eval")
             result = self._eval_node(expression.body)
             return str(result)
+        except ToolExecutionError:
+            raise
         except Exception as exc:
-            raise RuntimeError(f"Failed to use MathTool: {exc}")
+            raise ToolExecutionError(f"Failed to use MathTool: {exc}") from exc
 
 
 class WikipediaTool(Tool):
@@ -94,7 +99,7 @@ class WikipediaTool(Tool):
 
     def use(self, task: str) -> str:
         if wikipedia is None:
-            raise RuntimeError(
+            raise MissingDependencyError(
                 _missing_dependency_message(
                     "wikipedia",
                     fallback="Wikipedia lookups require the `wikipedia` package.",
@@ -105,7 +110,7 @@ class WikipediaTool(Tool):
             return wikipedia.summary(task, sentences=self.summary_sentences)
         except Exception as exc:
             logger.warning("Wikipedia lookup failed: %s", exc)
-            raise RuntimeError(
+            raise ToolExecutionError(
                 "Failed to use WikipediaTool because the external service "
                 f"returned an error: {exc}. Provide a stub via"
                 " `summary_sentences` or monkeypatch the backend during tests."
@@ -137,7 +142,7 @@ class TranslatorTool(Tool):
         try:  # pragma: no cover - depends on optional dependency.
             from googletrans import Translator  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency missing.
-            raise RuntimeError(
+            raise MissingDependencyError(
                 _missing_dependency_message(
                     "googletrans",
                     fallback="Translation requires access to the Google Translate API.",
@@ -153,7 +158,7 @@ class TranslatorTool(Tool):
             return getattr(result, "text", str(result))
         except Exception as exc:
             logger.warning("Translator backend failed: %s", exc)
-            raise RuntimeError(
+            raise ToolExecutionError(
                 "Failed to use TranslatorTool because the translation backend "
                 f"raised an error: {exc}. Provide a stub translator factory for"
                 " deterministic tests."
@@ -183,7 +188,7 @@ class SummarizerTool(Tool):
         try:  # pragma: no cover - optional dependency.
             from summarizer import Summarizer  # type: ignore
         except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
+            raise MissingDependencyError(
                 _missing_dependency_message(
                     "summarizer",
                     fallback="Summarisation requires the `bert-extractive-summarizer` package.",
@@ -203,7 +208,7 @@ class SummarizerTool(Tool):
             return summariser(task)
         except Exception as exc:
             logger.warning("Summariser backend failed: %s", exc)
-            raise RuntimeError(
+            raise ToolExecutionError(
                 "Failed to use SummarizerTool because the summarisation backend "
                 f"raised an error: {exc}. Pass a lightweight factory during"
                 " offline experimentation."

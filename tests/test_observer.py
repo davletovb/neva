@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from exceptions import MissingDependencyError
 from observer import SimulationObserver
 
 
@@ -84,7 +85,7 @@ def test_log_to_mlflow_requires_dependency(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "mlflow", None)
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(MissingDependencyError) as exc:
         obs.log_to_mlflow()
 
     assert "MLflow is not installed" in str(exc.value)

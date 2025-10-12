@@ -6,6 +6,7 @@ import pytest
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
+from exceptions import MissingDependencyError, ToolExecutionError
 from tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
 
 
@@ -16,7 +17,7 @@ def test_math_tool_evaluates_expression():
 
 def test_math_tool_rejects_invalid_expression():
     tool = MathTool()
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ToolExecutionError):
         tool.use("__import__('os').system('ls')")
 
 
@@ -39,7 +40,7 @@ def test_wikipedia_tool_missing_dependency_raises(monkeypatch):
         pytest.skip("Unexpected module location")
 
     monkeypatch.setattr("tools.wikipedia", None)
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(MissingDependencyError) as exc:
         tool.use("Python (programming language)")
 
     assert "pip install wikipedia" in str(exc.value)

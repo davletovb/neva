@@ -6,13 +6,15 @@ from collections import OrderedDict
 from threading import RLock
 from typing import MutableMapping, Optional
 
+from exceptions import CacheConfigurationError
+
 
 class LLMCache:
     """A simple thread-safe LRU cache tailored to prompt/response pairs."""
 
     def __init__(self, max_size: int = 128) -> None:
         if max_size <= 0:
-            raise ValueError("max_size must be a positive integer")
+            raise CacheConfigurationError("max_size must be a positive integer")
         self._max_size = max_size
         self._store: MutableMapping[str, str] = OrderedDict()
         self._lock = RLock()

@@ -17,6 +17,16 @@ from caching import LLMCache
 from metrics import CostTracker, ResponseTimeTracker, TokenUsageTracker, batch_prompt_summary
 from safety import PromptValidator, RateLimiter, sanitize_input
 from state_management import ConversationState, SimulationSnapshot, create_snapshot
+from exceptions import (
+    AgentActionError,
+    AgentCommunicationError,
+    AgentCreationError,
+    AgentManagerError,
+    AgentNotFoundError,
+    BackendError,
+    BackendUnavailableError,
+    ConfigurationError,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import used for typing only.
     from observer import SimulationObserver
@@ -197,7 +207,7 @@ class AIAgent(ABC):
         """Send ``message`` to ``receiver`` and return their response."""
 
         if not isinstance(receiver, AIAgent):
-            raise TypeError("receiver must be an instance of AIAgent")
+            raise AgentCommunicationError("receiver must be an instance of AIAgent")
         validated = self._prompt_validator.validate(message)
         formatted = f"{self.name} says: {validated}"
         self._remember(self.name, validated)
@@ -275,7 +285,7 @@ class TransformerAgent(AIAgent):
 
         if loader is None or tokenizer_loader is None:
             if AutoModelForSeq2SeqLM is None or AutoTokenizer is None:
-                raise RuntimeError(
+                raise BackendUnavailableError(
                     "Transformers library is not available. Provide an ``llm_backend`` "
                     "or install `transformers` to use TransformerAgent."
                 )
@@ -333,9 +343,8 @@ class GPTAgent(AIAgent):
 
     def _default_backend(self) -> LLMBackend:
         if not self.api_key:
-            raise RuntimeError(
-                "No API key configured for GPTAgent. Provide `llm_backend` or set "
-                "`api_key`."
+            raise ConfigurationError(
+                "No API key configured for GPTAgent. Provide `llm_backend` or set `api_key`."
             )
 
         def _call_openai(prompt: str) -> str:
@@ -384,14 +393,16 @@ class GPTAgent(AIAgent):
                 except Exception as exc:  # pragma: no cover - network error path.
                     last_error = exc
                     if attempt > self._max_retries:
-                        raise
+                        raise BackendError("LLM call failed") from exc
                     sleep_time = min(30.0, self._retry_backoff ** attempt)
                     self._logger.warning(
                         "Retrying LLM call due to error", extra={"error": str(exc)}
                     )
                     sleep(sleep_time)
 
-            raise RuntimeError("LLM call failed") from last_error
+            if last_error is not None:
+                raise BackendError("LLM call failed") from last_error
+            raise BackendError("LLM call failed")
 
         return _call_openai
 
@@ -415,16 +426,22 @@ class AgentManager:
         elif agent_type in {"gpt", "openai"}:
             agent = GPTAgent(**kwargs)
         else:
-            raise ValueError(f"Invalid agent type: {agent_type}")
+            raise AgentCreationError(f"Invalid agent type: {agent_type}")
 
         self.agents[str(agent.id)] = agent
         return agent
 
     def get_agent(self, agent_id: str) -> AIAgent:
-        return self.agents[agent_id]
+        try:
+            return self.agents[agent_id]
+        except KeyError as exc:
+            raise AgentNotFoundError(f"Unknown agent id: {agent_id}") from exc
 
     def remove_agent(self, agent_id: str) -> None:
-        del self.agents[agent_id]
+        try:
+            del self.agents[agent_id]
+        except KeyError as exc:
+            raise AgentNotFoundError(f"Unknown agent id: {agent_id}") from exc
 
     def communicate(self, sender_id: str, receiver_id: str, message: str) -> str:
         sender = self.get_agent(sender_id)
@@ -450,13 +467,24 @@ class AgentManager:
 
     def schedule_action(self, agent_id: str, action: str, *args, **kwargs) -> None:
         agent = self.get_agent(agent_id)
-        getattr(agent, action)(*args, **kwargs)
+        try:
+            method = getattr(agent, action)
+        except AttributeError as exc:
+            raise AgentActionError(
+                f"Agent {agent_id} has no action named '{action}'"
+            ) from exc
+        try:
+            method(*args, **kwargs)
+        except Exception as exc:
+            raise AgentActionError(
+                f"Failed to execute action '{action}' on agent {agent_id}: {exc}"
+            ) from exc
 
     def handle_error(self, error: Exception) -> None:
         logging.getLogger(self.__class__.__name__).error(
             "agent_manager_error", extra={"error": str(error)}
         )
-        raise RuntimeError(f"An error occurred: {error}") from error
+        raise AgentManagerError(f"An error occurred: {error}") from error
 
     def conversation_summary(self) -> Dict[str, Dict[str, int]]:
         summaries: Dict[str, Dict[str, int]] = {}

@@ -4,6 +4,7 @@ import random
 from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from models import AIAgent, Scheduler
+from exceptions import ConfigurationError, SchedulingError
 from observer import SimulationObserver
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ class RandomScheduler(Scheduler):
     def get_next_agent(self) -> AIAgent:
         active_agents = self._active_agents()
         if not active_agents:
-            raise RuntimeError("RandomScheduler has no active agents to schedule.")
+            raise SchedulingError("RandomScheduler has no active agents to schedule.")
         agent = random.choice(active_agents)
         self.record_metrics(agent)
         return agent
@@ -43,7 +44,7 @@ class RoundRobinScheduler(Scheduler):
 
     def get_next_agent(self) -> AIAgent:
         if not self.agents:
-            raise RuntimeError("RoundRobinScheduler has no agents to schedule.")
+            raise SchedulingError("RoundRobinScheduler has no agents to schedule.")
 
         total_agents = len(self.agents)
         for _ in range(total_agents):
@@ -54,7 +55,7 @@ class RoundRobinScheduler(Scheduler):
             self.record_metrics(agent)
             return agent
 
-        raise RuntimeError("RoundRobinScheduler has no active agents to schedule.")
+        raise SchedulingError("RoundRobinScheduler has no active agents to schedule.")
 
     def _handle_agent_removal(self, agent: AIAgent) -> None:
         if not self.agents:
@@ -79,7 +80,7 @@ class PriorityScheduler(Scheduler):
 
     def get_next_agent(self) -> AIAgent:
         if not self._queue:
-            raise RuntimeError("PriorityScheduler has no agents to schedule.")
+            raise SchedulingError("PriorityScheduler has no agents to schedule.")
 
         self._queue.sort(reverse=True)
         for _ in range(len(self._queue)):
@@ -90,7 +91,7 @@ class PriorityScheduler(Scheduler):
             self.record_metrics(agent)
             return agent
 
-        raise RuntimeError("PriorityScheduler has no active agents to schedule.")
+        raise SchedulingError("PriorityScheduler has no active agents to schedule.")
 
     def _handle_agent_removal(self, agent: AIAgent) -> None:
         self._queue = [(priority, queued) for priority, queued in self._queue if queued is not agent]
@@ -112,7 +113,7 @@ class LeastRecentlyUsedScheduler(Scheduler):
 
     def get_next_agent(self) -> AIAgent:
         if not self._queue:
-            raise RuntimeError("LeastRecentlyUsedScheduler has no agents to schedule.")
+            raise SchedulingError("LeastRecentlyUsedScheduler has no agents to schedule.")
 
         total_considered = len(self._queue)
         for _ in range(total_considered):
@@ -123,7 +124,7 @@ class LeastRecentlyUsedScheduler(Scheduler):
             self.record_metrics(agent)
             return agent
 
-        raise RuntimeError("LeastRecentlyUsedScheduler has no active agents to schedule.")
+        raise SchedulingError("LeastRecentlyUsedScheduler has no active agents to schedule.")
 
     def _handle_agent_removal(self, agent: AIAgent) -> None:
         self._queue = [queued for queued in self._queue if queued is not agent]
@@ -144,11 +145,11 @@ class WeightedRandomScheduler(Scheduler):
 
     def get_next_agent(self) -> AIAgent:
         if not self._entries:
-            raise RuntimeError("WeightedRandomScheduler has no agents to schedule.")
+            raise SchedulingError("WeightedRandomScheduler has no agents to schedule.")
 
         active_entries = [(weight, agent) for weight, agent in self._entries if not self.is_paused(agent)]
         if not active_entries:
-            raise RuntimeError("WeightedRandomScheduler has no active agents to schedule.")
+            raise SchedulingError("WeightedRandomScheduler has no active agents to schedule.")
 
         total_weight = sum(weight for weight, _ in active_entries)
         random_weight = random.uniform(0, total_weight)
@@ -227,7 +228,7 @@ class CompositeScheduler(Scheduler):
 
     def get_next_agent(self) -> AIAgent:
         if not self._group_order:
-            raise RuntimeError("CompositeScheduler has no agents to schedule.")
+            raise SchedulingError("CompositeScheduler has no agents to schedule.")
 
         visited_groups = 0
         total_groups = len(self._group_order)
@@ -238,7 +239,7 @@ class CompositeScheduler(Scheduler):
             self._group_index = (self._group_index + 1) % total_groups
             try:
                 agent = scheduler.get_next_agent()
-            except RuntimeError:
+            except SchedulingError:
                 visited_groups += 1
                 continue
 
@@ -249,14 +250,16 @@ class CompositeScheduler(Scheduler):
             self.record_metrics(agent)
             return agent
 
-        raise RuntimeError("CompositeScheduler has no active agents to schedule.")
+        raise SchedulingError("CompositeScheduler has no active agents to schedule.")
 
     def _ensure_group_scheduler(
         self, group: str, scheduler_override: Optional[Scheduler]
     ) -> Scheduler:
         if group in self._group_schedulers:
             if scheduler_override is not None and scheduler_override is not self._group_schedulers[group]:
-                raise ValueError(f"Group '{group}' already has an assigned scheduler.")
+                raise ConfigurationError(
+                    f"Group '{group}' already has an assigned scheduler."
+                )
             return self._group_schedulers[group]
 
         scheduler = scheduler_override or self._group_scheduler_factory()

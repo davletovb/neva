@@ -1,6 +1,7 @@
 import pytest
 
 from caching import LLMCache
+from exceptions import CacheConfigurationError
 
 
 def test_llm_cache_behaves_as_lru() -> None:
@@ -16,5 +17,5 @@ def test_llm_cache_behaves_as_lru() -> None:
 
 
 def test_llm_cache_rejects_invalid_size() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(CacheConfigurationError):
         LLMCache(max_size=0)

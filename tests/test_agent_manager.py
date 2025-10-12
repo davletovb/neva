@@ -21,6 +21,8 @@ transformers_stub.AutoTokenizer = DummyAutoTokenizer
 sys.modules["transformers"] = transformers_stub
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from exceptions import AgentCreationError
 from models import AgentManager, TransformerAgent, GPTAgent
 
 
@@ -36,9 +38,9 @@ def test_create_gpt_agent_returns_gpt_agent():
     assert isinstance(agent, GPTAgent)
 
 
-def test_invalid_agent_type_raises_value_error():
+def test_invalid_agent_type_raises_agent_creation_error():
     manager = AgentManager()
-    with pytest.raises(ValueError):
+    with pytest.raises(AgentCreationError):
         manager.create_agent("invalid")
 
 

@@ -9,6 +9,8 @@ from datetime import datetime
 from math import sqrt
 from typing import Callable, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from exceptions import MemoryConfigurationError
+
 
 @dataclass
 class MemoryRecord:
@@ -52,7 +54,7 @@ class ShortTermMemory(MemoryModule):
     def __init__(self, capacity: int = 6, *, label: str = "recent history") -> None:
         super().__init__(label=label)
         if capacity <= 0:
-            raise ValueError("capacity must be a positive integer")
+            raise MemoryConfigurationError("capacity must be a positive integer")
         self.capacity = capacity
         self._entries: Deque[MemoryRecord] = deque(maxlen=capacity)
 
@@ -153,7 +155,7 @@ class VectorStoreMemory(MemoryModule):
     ) -> None:
         super().__init__(label=label)
         if top_k <= 0:
-            raise ValueError("top_k must be positive")
+            raise MemoryConfigurationError("top_k must be positive")
         self._embedder = embedder
         self._top_k = top_k
         self._vectors: List[Tuple[int, MemoryRecord, Tuple[float, ...]]] = []
@@ -209,7 +211,7 @@ class CompositeMemory(MemoryModule):
 
     def __init__(self, modules: Sequence[MemoryModule], *, label: str = "composite") -> None:
         if not modules:
-            raise ValueError("CompositeMemory requires at least one module")
+            raise MemoryConfigurationError("CompositeMemory requires at least one module")
         super().__init__(label=label)
         self._modules = list(modules)
 
