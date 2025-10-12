@@ -1,6 +1,9 @@
+import asyncio
 import os
 import sys
 import types
+from typing import Callable, Dict, List
+
 import pytest
 
 # Stub external dependencies before importing models
@@ -23,7 +26,7 @@ sys.modules["transformers"] = transformers_stub
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from exceptions import AgentCreationError
-from models import AgentManager, TransformerAgent, GPTAgent
+from models import AgentManager, ParallelExecutionConfig, TransformerAgent, GPTAgent
 
 
 def test_create_transformer_agent_returns_transformer_agent():
@@ -68,3 +71,85 @@ def test_manager_communicate_routes_messages_between_agents():
 
     assert reply == "Receiver heard Hello there"
     assert received_prompts and received_prompts[0].endswith("Sender says: Hello there")
+
+
+def test_batch_communicate_supports_parallel_execution():
+    config = ParallelExecutionConfig(enabled=True, max_concurrency=2)
+    manager = AgentManager(parallel_config=config)
+
+    sender = manager.create_agent(
+        "transformer",
+        name="Sender",
+        llm_backend=lambda prompt: prompt,
+    )
+
+    call_counts: Dict[str, int] = {}
+
+    def backend_for(name: str) -> Callable[[str], str]:
+        def _inner(prompt: str) -> str:
+            call_counts[name] = call_counts.get(name, 0) + 1
+            return f"{name} heard {prompt}"
+
+        return _inner
+
+    receiver_ids: List[str] = []
+    for index in range(3):
+        receiver = manager.create_agent(
+            "transformer",
+            name=f"Receiver-{index}",
+            llm_backend=backend_for(f"Receiver-{index}"),
+        )
+        receiver_ids.append(str(receiver.id))
+
+    responses = manager.batch_communicate(
+        str(sender.id), receiver_ids, "Ping", concurrent=True
+    )
+
+    assert set(responses) == set(receiver_ids)
+    assert all(count == 1 for count in call_counts.values())
+
+
+def test_batch_communicate_async_returns_all_responses() -> None:
+    config = ParallelExecutionConfig(enabled=True, max_concurrency=1, batch_size=2)
+    manager = AgentManager(parallel_config=config)
+
+    sender = manager.create_agent(
+        "transformer",
+        name="Sender",
+        llm_backend=lambda prompt: prompt,
+    )
+
+    call_counts: Dict[str, int] = {}
+
+    def backend_for(name: str) -> Callable[[str], str]:
+        def _inner(prompt: str) -> str:
+            call_counts[name] = call_counts.get(name, 0) + 1
+            return f"{name} processed {prompt}"
+
+        return _inner
+
+    receiver_ids: List[str] = []
+    for index in range(4):
+        receiver = manager.create_agent(
+            "transformer",
+            name=f"Receiver-{index}",
+            llm_backend=backend_for(f"Receiver-{index}"),
+        )
+        receiver_ids.append(str(receiver.id))
+
+    responses = asyncio.run(
+        manager.batch_communicate_async(str(sender.id), receiver_ids, "Broadcast")
+    )
+
+    assert set(responses) == set(receiver_ids)
+    assert all(count == 1 for count in call_counts.values())
+
+
+def test_profile_population_memory_reports_usage() -> None:
+    def factory() -> TransformerAgent:
+        return TransformerAgent(llm_backend=lambda prompt: prompt)
+
+    current, peak = AgentManager.profile_population_memory(factory, population_size=5)
+
+    assert isinstance(current, int) and isinstance(peak, int)
+    assert peak >= current >= 0
