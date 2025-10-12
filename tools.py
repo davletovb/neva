@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 import operator
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Protocol, cast
 
 import logging
 
@@ -36,6 +36,13 @@ _ALLOWED_OPERATORS: Dict[type, Callable[[float, float], float]] = {
     ast.Pow: operator.pow,
     ast.Mod: operator.mod,
 }
+
+
+class TranslatorBackend(Protocol):
+    """Protocol describing the translator interface used by :class:`TranslatorTool`."""
+
+    def translate(self, text: str, dest: str) -> Any:
+        ...
 
 
 class MathTool(Tool):
@@ -122,9 +129,10 @@ class TranslatorTool(Tool):
         self._translator_factory = translator_factory
         self.target_language = target_language
 
-    def _get_translator(self):
+    def _get_translator(self) -> TranslatorBackend:
         if self._translator_factory is not None:
-            return self._translator_factory()
+            translator = self._translator_factory()
+            return cast(TranslatorBackend, translator)
 
         try:  # pragma: no cover - depends on optional dependency.
             from googletrans import Translator  # type: ignore
@@ -136,12 +144,12 @@ class TranslatorTool(Tool):
                 )
             ) from exc
 
-        return Translator()
+        return cast(TranslatorBackend, Translator())
 
     def use(self, task: str) -> str:
         try:
-            translator = self._get_translator()
-            result = translator.translate(task, dest=self.target_language)
+            translator: TranslatorBackend = self._get_translator()
+            result: Any = translator.translate(task, dest=self.target_language)
             return getattr(result, "text", str(result))
         except Exception as exc:
             logger.warning("Translator backend failed: %s", exc)
@@ -169,7 +177,8 @@ class SummarizerTool(Tool):
 
     def _get_summarizer(self) -> Callable[[str], str]:
         if self._summarizer_factory is not None:
-            return self._summarizer_factory()
+            summarizer = self._summarizer_factory()
+            return cast(Callable[[str], str], summarizer)
 
         try:  # pragma: no cover - optional dependency.
             from summarizer import Summarizer  # type: ignore

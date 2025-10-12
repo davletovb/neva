@@ -7,7 +7,7 @@ import tracemalloc
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Dict, Generator, Iterable, List, Tuple
+from typing import Any, Callable, Dict, Generator, Iterable, List, Tuple
 
 
 def _estimate_token_count(text: str) -> int:
@@ -80,7 +80,9 @@ class ResponseTimeTracker:
         return statistics.mean(self.durations) if self.durations else 0.0
 
 
-def profile_memory_usage(func, *args, **kwargs) -> Tuple[int, int]:
+def profile_memory_usage(
+    func: Callable[..., Any], *args: Any, **kwargs: Any
+) -> Tuple[int, int]:
     """Run ``func`` and return (current, peak) memory usage in KiB."""
 
     tracemalloc.start()

@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 @dataclass
@@ -104,7 +104,7 @@ def load_snapshot(path: Path) -> SimulationSnapshot:
     return SimulationSnapshot.from_json(path.read_text(encoding="utf-8"))
 
 
-def _json_default(value):
+def _json_default(value: object) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if hasattr(value, "to_dict"):
