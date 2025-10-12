@@ -53,6 +53,22 @@ metrics (turn counts, participation rates, dialogue length, tool usage, and
 lightweight sentiment/intent analysis) and writes them to
 `quickstart_metrics.json` for later inspection.
 
+### Expanded showcases
+
+Looking for richer demonstrations? The `examples/showcase_use_cases.py`
+module strings together four self-contained simulations that spotlight core
+Neva capabilities:
+
+```bash
+python examples/showcase_use_cases.py
+```
+
+The showcase highlights tool-augmented research with a stubbed Wikipedia
+integration, hierarchical leader–follower coordination, emergent roleplay
+between game NPCs, and a productivity swarm that self-organises around shared
+tasks. Each vignette runs fully offline using scripted LLM backends while still
+triggering the observer’s tool-usage metrics.
+
 ### Observability & Experiment Tracking
 
 The :class:`observer.SimulationObserver` now registers a suite of metrics out of
