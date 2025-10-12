@@ -1,11 +1,12 @@
 import pytest
 
 import safety
+from exceptions import PromptValidationError
 
 
 def test_prompt_validator_rejects_forbidden_pattern() -> None:
     validator = safety.PromptValidator()
-    with pytest.raises(ValueError):
+    with pytest.raises(PromptValidationError):
         validator.validate("DROP table users;")
 
 

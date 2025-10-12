@@ -13,6 +13,7 @@ from memory import (
     SummaryMemory,
     VectorStoreMemory,
 )
+from exceptions import MemoryConfigurationError
 from models import AIAgent
 
 
@@ -100,11 +101,11 @@ def test_composite_memory_merges_modules():
 
 
 def test_memory_invalid_configurations_raise():
-    with pytest.raises(ValueError):
+    with pytest.raises(MemoryConfigurationError):
         ShortTermMemory(capacity=0)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(MemoryConfigurationError):
         VectorStoreMemory(embedder=lambda text: [1.0], top_k=0)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(MemoryConfigurationError):
         CompositeMemory([])

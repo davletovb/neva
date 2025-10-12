@@ -12,6 +12,8 @@ from time import perf_counter
 from types import MethodType
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Protocol, cast
 
+from exceptions import MissingDependencyError
+
 
 class ToolLike(Protocol):
     """Protocol describing the ``use`` method exposed by tools."""
@@ -200,7 +202,7 @@ class SimulationObserver:
         try:
             import mlflow  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency.
-            raise RuntimeError(
+            raise MissingDependencyError(
                 "MLflow is not installed. Install `mlflow` or disable dashboard "
                 "logging to continue."
             ) from exc
