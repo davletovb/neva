@@ -10,7 +10,17 @@ from datetime import datetime
 from functools import wraps
 from time import perf_counter
 from types import MethodType
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Protocol, cast
+
+
+class ToolLike(Protocol):
+    """Protocol describing the ``use`` method exposed by tools."""
+
+    def use(self, *args: Any, **kwargs: Any) -> Any:
+        ...
+
+
+ContextDict = Dict[str, Any]
 
 
 logger = logging.getLogger(__name__)
@@ -54,8 +64,8 @@ class SimulationObserver:
         self._last_turn_timestamp: Optional[datetime] = None
         self._latest_latency: Optional[float] = None
         self._latencies: List[float] = []
-        self._participation = Counter()
-        self._tool_usage: MutableMapping[str, Counter] = defaultdict(Counter)
+        self._participation: Counter[str] = Counter()
+        self._tool_usage: MutableMapping[str, Counter[str]] = defaultdict(Counter)
         self._tool_usage_events: List[Dict[str, Any]] = []
         self._wrapped_tools: Dict[int, Callable[..., Any]] = {}
         self._latest_agent_name: Optional[str] = None
@@ -110,7 +120,7 @@ class SimulationObserver:
     ) -> None:
         """Collect the current value for each registered metric."""
 
-        agent_list = list(agents)
+        agent_list: List[Any] = list(agents)
         now = datetime.utcnow()
         latency: Optional[float] = None
         if self._last_turn_timestamp is not None:
@@ -128,7 +138,7 @@ class SimulationObserver:
         else:
             self._latest_agent_name = None
 
-        context = {
+        context: ContextDict = {
             "active_agent": active_agent,
             "active_agent_name": self._latest_agent_name,
             "agents": list(agent_list),
@@ -215,7 +225,7 @@ class SimulationObserver:
         for tool in getattr(agent, "tools", []):
             self.watch_tool(agent, tool)
 
-    def watch_tool(self, agent: Any, tool: Any) -> None:
+    def watch_tool(self, agent: Any, tool: ToolLike) -> None:
         """Wrap ``tool.use`` to record usage statistics when available."""
 
         if tool is None:
@@ -225,27 +235,32 @@ class SimulationObserver:
         if tool_id in self._wrapped_tools:
             return
 
-        original_use = getattr(tool, "use")
+        original_use = getattr(tool, "use", None)
+        if not callable(original_use):
+            return
+        wrapped_use: Callable[..., Any] = cast(Callable[..., Any], original_use)
 
-        @wraps(original_use)
-        def instrumented_use(self_tool, *args: Any, **kwargs: Any) -> Any:
+        @wraps(wrapped_use)
+        def instrumented_use(self_tool: ToolLike, *args: Any, **kwargs: Any) -> Any:
             start = perf_counter()
             try:
-                return original_use(*args, **kwargs)
+                return wrapped_use(*args, **kwargs)
             finally:
                 duration = perf_counter() - start
                 self.record_tool_usage(agent, self_tool, duration=duration)
 
         tool.use = MethodType(instrumented_use, tool)  # type: ignore[assignment]
-        self._wrapped_tools[tool_id] = original_use
+        self._wrapped_tools[tool_id] = wrapped_use
 
-    def record_tool_usage(self, agent: Any, tool: Any, *, duration: Optional[float] = None) -> None:
+    def record_tool_usage(
+        self, agent: Any, tool: ToolLike, *, duration: Optional[float] = None
+    ) -> None:
         """Record a tool invocation emitted by the instrumentation wrapper."""
 
         agent_name = getattr(agent, "name", str(agent))
         tool_name = getattr(tool, "name", getattr(tool, "__class__", type(tool)).__name__)
         self._tool_usage[agent_name][tool_name] += 1
-        event = {
+        event: Dict[str, Any] = {
             "agent": agent_name,
             "tool": tool_name,
             "timestamp": datetime.utcnow().isoformat(),
@@ -267,52 +282,111 @@ class SimulationObserver:
         return value
 
     def _register_builtin_metrics(self) -> None:
-        self.add_metric("turn_count", lambda agents, env, *, context=None: context.get("turn_count") if context else self._turn_count)
+        def turn_count_metric(
+            _agents: Iterable[Any],
+            _env: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> int:
+            if context is None:
+                return self._turn_count
+            value = context.get("turn_count")
+            return int(value) if isinstance(value, int) else self._turn_count
 
-        def participation_metric(_agents, _env, *, context=None):
+        self.add_metric("turn_count", turn_count_metric)
+
+        def participation_metric(
+            _agents: Iterable[Any],
+            _env: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> Dict[str, int]:
             if context is None:
                 return dict(self._participation)
-            return context["participation"]
+            participation = context.get("participation", {})
+            return {key: int(value) for key, value in participation.items()}
 
         self.add_metric("per_agent_participation", participation_metric)
 
-        def active_agent_metric(_agents, _env, *, context=None):
+        def active_agent_metric(
+            _agents: Iterable[Any],
+            _env: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> Optional[str]:
             if context is None:
                 return self._latest_agent_name
-            return context.get("active_agent_name")
+            value = context.get("active_agent_name")
+            return str(value) if value is not None else None
 
         self.add_metric("active_agent", active_agent_metric)
 
-        def dialogue_length_metric(_agents, environment, *, context=None):
+        def dialogue_length_metric(
+            _agents: Iterable[Any],
+            environment: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> int:
             transcript = self._extract_transcript(environment)
             return _safe_len(transcript)
 
         self.add_metric("dialogue_length", dialogue_length_metric)
 
-        def latency_metric(_agents, _env, *, context=None):
+        def latency_metric(
+            _agents: Iterable[Any],
+            _env: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> Optional[float]:
             if context is None:
                 return self._latest_latency
-            return context.get("latency")
+            value = context.get("latency")
+            return float(value) if isinstance(value, (int, float)) else None
 
         self.add_metric("latest_response_latency_seconds", latency_metric)
 
-        def average_latency_metric(_agents, _env, *, context=None):
-            latencies = context.get("latencies") if context else self._latencies
-            if not latencies:
+        def average_latency_metric(
+            _agents: Iterable[Any],
+            _env: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> Optional[float]:
+            latencies: Iterable[float]
+            if context is None:
+                latencies = self._latencies
+            else:
+                latencies = context.get("latencies", [])
+            latencies_list = list(latencies)
+            if not latencies_list:
                 return None
-            return sum(latencies) / len(latencies)
+            return sum(latencies_list) / len(latencies_list)
 
         self.add_metric("average_response_latency_seconds", average_latency_metric)
 
-        def tool_usage_metric(_agents, _env, *, context=None):
-            usage = context.get("tool_usage") if context else {
-                agent: dict(counter) for agent, counter in self._tool_usage.items()
+        def tool_usage_metric(
+            _agents: Iterable[Any],
+            _env: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> Dict[str, Dict[str, int]]:
+            if context is None:
+                return {
+                    agent: dict(counter) for agent, counter in self._tool_usage.items()
+                }
+            usage = context.get("tool_usage", {})
+            return {
+                agent: {tool: int(count) for tool, count in counters.items()}
+                for agent, counters in usage.items()
             }
-            return usage
 
         self.add_metric("tool_usage_counts", tool_usage_metric)
 
-        def sentiment_metric(_agents, environment, *, context=None):
+        def sentiment_metric(
+            _agents: Iterable[Any],
+            environment: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> Dict[str, Any]:
             message = self._extract_latest_message(environment)
             if not message:
                 return {"score": 0.0, "label": "neutral"}
@@ -322,7 +396,12 @@ class SimulationObserver:
 
         self.add_metric("recent_sentiment", sentiment_metric)
 
-        def intent_metric(_agents, environment, *, context=None):
+        def intent_metric(
+            _agents: Iterable[Any],
+            environment: Optional[Any],
+            *,
+            context: Optional[ContextDict] = None,
+        ) -> str:
             message = self._extract_latest_message(environment)
             if not message:
                 return "unknown"
@@ -332,9 +411,14 @@ class SimulationObserver:
             lowered = stripped.lower()
             if lowered.startswith("let's") or "let us" in lowered or lowered.startswith("please"):
                 return "collaboration"
-            if any(lowered.startswith(prefix) for prefix in ("do ", "please", "consider", "review")):
+            if any(
+                lowered.startswith(prefix)
+                for prefix in ("do ", "please", "consider", "review")
+            ):
                 return "request"
-            if any(lowered.startswith(prefix) for prefix in ("plan", "we should", "let's")):
+            if any(
+                lowered.startswith(prefix) for prefix in ("plan", "we should", "let's")
+            ):
                 return "planning"
             return "statement"
 

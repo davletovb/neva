@@ -1,10 +1,13 @@
 """Scheduler implementations for controlling agent execution order."""
 
 import random
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from models import AIAgent, Scheduler
 from observer import SimulationObserver
+
+if TYPE_CHECKING:
+    from models import Environment
 
 class RandomScheduler(Scheduler):
     """Activate agents in a random order each step."""
@@ -68,7 +71,7 @@ class PriorityScheduler(Scheduler):
         self.simulation_observer = SimulationObserver()
         self._queue: List[Tuple[int, AIAgent]] = []
 
-    def add(self, agent: AIAgent, **kwargs) -> None:
+    def add(self, agent: AIAgent, **kwargs: object) -> None:
         priority = kwargs.get("priority", 1)
         self._queue.append((priority, agent))
         if agent not in self.agents:
@@ -133,7 +136,7 @@ class WeightedRandomScheduler(Scheduler):
         self.simulation_observer = SimulationObserver()
         self._entries: List[Tuple[float, AIAgent]] = []
 
-    def add(self, agent: AIAgent, **kwargs) -> None:
+    def add(self, agent: AIAgent, **kwargs: object) -> None:
         weight = float(kwargs.get("weight", 1.0))
         self._entries.append((weight, agent))
         if agent not in self.agents:
@@ -178,12 +181,12 @@ class CompositeScheduler(Scheduler):
         self._group_order: List[str] = []
         self._group_index = 0
 
-    def set_environment(self, environment) -> None:
+    def set_environment(self, environment: "Environment") -> None:
         super().set_environment(environment)
         for scheduler in self._group_schedulers.values():
             scheduler.set_environment(environment)
 
-    def add(self, agent: AIAgent, **kwargs) -> None:
+    def add(self, agent: AIAgent, **kwargs: object) -> None:
         group = kwargs.pop("group", "default")
         scheduler_override = kwargs.pop("scheduler", None)
 
