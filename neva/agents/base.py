@@ -7,18 +7,22 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
+import json
 import logging
 from typing import (
     TYPE_CHECKING,
+    Any,
     Awaitable,
     Callable,
     Dict,
     Iterable,
     List,
+    Mapping,
     Optional,
     Sequence,
     Set,
     Tuple,
+    Union,
 )
 from uuid import uuid4
 
@@ -30,6 +34,8 @@ from neva.utils.exceptions import (
     AgentCreationError,
     AgentManagerError,
     AgentNotFoundError,
+    ToolExecutionError,
+    ToolNotFoundError,
 )
 from neva.utils.metrics import ResponseTimeTracker, batch_prompt_summary, profile_memory_usage
 from neva.utils.safety import PromptValidator, sanitize_input
@@ -49,7 +55,49 @@ class ParallelExecutionConfig:
     batch_size: Optional[int] = None
 
 
+logger = logging.getLogger(__name__)
+
+
 LLMBackend = Callable[[str], str]
+
+
+ToolArguments = Union[str, Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """Structured description of a tool invocation request."""
+
+    name: str
+    arguments: ToolArguments
+
+    @classmethod
+    def from_text(
+        cls,
+        name: str,
+        text: str,
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> "ToolCall":
+        payload: Dict[str, Any] = {"input": text}
+        if metadata:
+            payload.update(metadata)
+        return cls(name=name, arguments=payload)
+
+
+@dataclass(frozen=True)
+class ToolResponse:
+    """Normalised response captured after invoking a tool."""
+
+    name: str
+    arguments: ToolArguments
+    output: str
+    error: Optional[str] = None
+
+    def succeeded(self) -> bool:
+        """Return ``True`` when the tool invocation completed successfully."""
+
+        return self.error is None
 
 
 class Tool(ABC):
@@ -150,6 +198,82 @@ class AIAgent(ABC):
             f"{tool.name} ({tool.description})" for tool in self.tools
         )
         return f"Available tools: {descriptions}."
+
+    def get_tool(self, name: str) -> Tool:
+        """Return the registered tool matching ``name``.
+
+        Raises
+        ------
+        ToolNotFoundError
+            If the agent does not expose a tool with the requested name.
+        """
+
+        for tool in self.tools:
+            if tool.name == name:
+                return tool
+        available = ", ".join(tool.name for tool in self.tools) or "<none>"
+        raise ToolNotFoundError(
+            f"Agent {self.name} does not have a tool named '{name}'. "
+            f"Available tools: {available}."
+        )
+
+    def _normalise_tool_input(self, arguments: ToolArguments) -> str:
+        """Convert structured ``arguments`` into the string expected by tools."""
+
+        if isinstance(arguments, str):
+            return arguments
+
+        candidate_keys = ("input", "task", "query", "text")
+        for key in candidate_keys:
+            value = arguments.get(key)
+            if isinstance(value, str):
+                return value
+
+        if len(arguments) == 1:
+            value = next(iter(arguments.values()))
+            if isinstance(value, str):
+                return value
+
+        return json.dumps(arguments, sort_keys=True)
+
+    def call_tool(self, call: ToolCall) -> ToolResponse:
+        """Invoke a registered tool using a standardised interface."""
+
+        tool = self.get_tool(call.name)
+        arguments = (
+            dict(call.arguments)
+            if not isinstance(call.arguments, str)
+            else call.arguments
+        )
+        payload = self._normalise_tool_input(arguments)
+        try:
+            output = tool.use(payload)
+        except ToolExecutionError as exc:
+            logger.warning(
+                "Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc
+            )
+            return ToolResponse(
+                name=tool.name,
+                arguments=arguments,
+                output="",
+                error=str(exc),
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard.
+            logger.exception(
+                "Tool '%s' raised an unexpected error for agent '%s'", tool.name, self.name
+            )
+            return ToolResponse(
+                name=tool.name,
+                arguments=arguments,
+                output="",
+                error=str(exc),
+            )
+
+        return ToolResponse(
+            name=tool.name,
+            arguments=arguments,
+            output=str(output),
+        )
 
     # ------------------------------------------------------------------
     # Memory utilities
