@@ -6,3 +6,5 @@ anthropic==0.26.0
 google-generativeai==0.3.2
 faiss-cpu==1.7.4
 numpy==1.26.4
+opentelemetry-api==1.23.0
+opentelemetry-sdk==1.23.0

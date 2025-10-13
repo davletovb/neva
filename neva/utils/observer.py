@@ -13,6 +13,7 @@ from types import MethodType
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Protocol, cast
 
 from neva.utils.exceptions import MissingDependencyError
+from neva.utils.telemetry import get_telemetry
 
 
 class ToolLike(Protocol):
@@ -270,6 +271,21 @@ class SimulationObserver:
         if duration is not None:
             event["duration_seconds"] = duration
         self._tool_usage_events.append(event)
+        telemetry = get_telemetry()
+        if telemetry is not None:
+            try:
+                conversation_id = getattr(
+                    getattr(agent, "environment", None), "conversation_id", agent_name
+                )
+                telemetry.record_tool_call(
+                    conversation_id=conversation_id,
+                    agent_name=agent_name,
+                    tool_name=tool_name,
+                    duration=duration,
+                    metadata={"sequence": len(self._tool_usage_events)},
+                )
+            except Exception:  # pragma: no cover - telemetry must remain optional.
+                logger.debug("Failed to emit telemetry for tool call", exc_info=True)
 
     # ------------------------------------------------------------------
     # Internal helpers

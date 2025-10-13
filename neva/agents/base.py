@@ -40,6 +40,7 @@ from neva.utils.exceptions import (
 from neva.utils.metrics import ResponseTimeTracker, batch_prompt_summary, profile_memory_usage
 from neva.utils.safety import PromptValidator, sanitize_input
 from neva.utils.state_management import ConversationState
+from neva.utils.telemetry import get_telemetry
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.environments.base import Environment
@@ -419,6 +420,27 @@ class AIAgent(ABC):
             raise
         self._remember(speaker, validated)
         self._remember(self.name, response)
+        telemetry = get_telemetry()
+        if telemetry is not None:
+            try:
+                environment = self.environment
+                conversation_id = getattr(environment, "conversation_id", f"agent-{self.id}")
+                telemetry.record_agent_turn(
+                    conversation_id=conversation_id,
+                    agent_name=self.name,
+                    prompt=validated,
+                    response=response,
+                    latency=(
+                        self._response_time_tracker.latest()
+                        if self._response_time_tracker is not None
+                        else None
+                    ),
+                    model=getattr(self, "model", None),
+                    metadata={"sender": speaker},
+                    conversation_state=self._conversation_state,
+                )
+            except Exception:  # pragma: no cover - telemetry must not break message flow.
+                logger.debug("Failed to emit telemetry for agent turn", exc_info=True)
         return response
 
     async def areceive(self, message: str, *, sender: Optional[str] = None) -> str:

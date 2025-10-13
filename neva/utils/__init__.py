@@ -9,6 +9,7 @@ metrics = _import_module(".metrics", __name__)
 observer = _import_module(".observer", __name__)
 safety = _import_module(".safety", __name__)
 state_management = _import_module(".state_management", __name__)
+telemetry = _import_module(".telemetry", __name__)
 
 __all__ = [
     "caching",
@@ -18,4 +19,5 @@ __all__ = [
     "observer",
     "safety",
     "state_management",
+    "telemetry",
 ]

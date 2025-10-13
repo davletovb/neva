@@ -3,3 +3,5 @@ pytest==7.4.2
 coverage==7.3.2
 black==23.9.1
 mypy==1.6.1
+opentelemetry-api==1.23.0
+opentelemetry-sdk==1.23.0
