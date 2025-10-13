@@ -15,29 +15,12 @@ from neva.utils.exceptions import (
 
 
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060]")
-WHITESPACE_NORMALISER_RE = re.compile(r"\s+")
-DEFAULT_PROMPT_INJECTION_PATTERNS: Iterable[str] = (
-    r"ignore\s+all\s+previous\s+instructions",
-    r"forget\s+(?:the\s+)?previous\s+(?:steps|instructions)",
-    r"(?<![\w-])sys(?:tem)?\s*:\s*",
-    r"developer\s+mode\s+is\s+now\s+enabled",
-    r"(?<![\w-])reset\s+the\s+conversation",
-)
 
 
 def sanitize_input(text: str) -> str:
-    """Normalise user provided text prior to validation.
+    """Remove control characters that can break terminal logs or JSON."""
 
-    The sanitisation step removes terminal control characters, zero-width glyphs that can
-    be used to obfuscate prompt injection attempts, and collapses consecutive whitespace.
-    The resulting string is safe to log and suitable for subsequent validation.
-    """
-
-    cleaned = CONTROL_CHARS_RE.sub("", text)
-    cleaned = ZERO_WIDTH_RE.sub("", cleaned)
-    cleaned = WHITESPACE_NORMALISER_RE.sub(" ", cleaned)
-    return cleaned.strip()
+    return CONTROL_CHARS_RE.sub("", text)
 
 
 @dataclass
@@ -46,12 +29,7 @@ class PromptValidator:
 
     max_length: int = 4000
     forbidden_patterns: Iterable[str] = field(
-        default_factory=lambda: [
-            r"<script>",
-            r"drop\s+table",
-            r"\bshutdown\b",
-            *DEFAULT_PROMPT_INJECTION_PATTERNS,
-        ]
+        default_factory=lambda: [r"<script>", r"drop\s+table", r"\bshutdown\b"]
     )
 
     def __post_init__(self) -> None:
