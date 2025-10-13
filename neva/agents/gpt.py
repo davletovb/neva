@@ -16,6 +16,7 @@ from neva.utils.caching import LLMCache
 from neva.utils.exceptions import BackendError, ConfigurationError
 from neva.utils.metrics import CostTracker, ResponseTimeTracker, TokenUsageTracker
 from neva.utils.safety import RateLimiter
+from neva.utils.telemetry import get_telemetry
 
 
 class GPTAgent(AIAgent):
@@ -105,6 +106,30 @@ class GPTAgent(AIAgent):
                             "response_tokens": locals().get("response_tokens", 0),
                         },
                     )
+                    telemetry = get_telemetry()
+                    if telemetry is not None:
+                        try:
+                            conversation_id = getattr(
+                                self.environment, "conversation_id", f"agent-{self.id}"
+                            )
+                            telemetry.record_llm_api_call(
+                                conversation_id=conversation_id,
+                                agent_name=self.name,
+                                prompt=prompt,
+                                completion=content,
+                                provider=self.provider,
+                                model=self.model,
+                                latency=duration,
+                                prompt_tokens=prompt_tokens or None,
+                                completion_tokens=response_tokens or None,
+                                total_tokens=total_tokens or None,
+                                metadata={"attempt": attempt, "cache_hit": False},
+                                conversation_state=self.conversation_state,
+                            )
+                        except Exception:  # pragma: no cover - telemetry must not break retries.
+                            self._logger.debug(
+                                "Failed to emit telemetry for LLM call", exc_info=True
+                            )
                     return content
                 except Exception as exc:  # pragma: no cover - network error path.
                     last_error = exc

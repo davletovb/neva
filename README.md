@@ -78,6 +78,31 @@ sentiment/intent, and tool-usage frequency. Metrics can be exported to CSV/JSON
 or logged to MLflow with `SimulationObserver.log_to_mlflow()` to integrate with
 your preferred dashboarding stack.
 
+### OpenTelemetry Observability
+
+Neva ships with a vendor-neutral instrumentation layer powered by
+OpenTelemetry. Call `neva.utils.telemetry.configure_telemetry()` once during
+initialisation to emit traces, metrics, and structured logs for every
+conversation turn, LLM API invocation, and tool call. The helper exposes the
+standard OpenTelemetry providers so you can attach any exporter supported by
+your observability stack:
+
+```python
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter
+from opentelemetry.sdk._logs.export import ConsoleLogExporter
+from neva.utils.telemetry import configure_telemetry
+
+telemetry = configure_telemetry(
+    span_exporter=ConsoleSpanExporter(),
+    log_exporter=ConsoleLogExporter(),
+)
+```
+
+Once configured you can trace entire conversation flows, monitor response
+latency and token usage, and inspect chain-of-thought reasoning and tool
+sequences across complex multi-agent simulations without being tied to a single
+vendor.
+
 ## Installation
 Clone the repository and install dependencies with [Poetry](https://python-poetry.org/):
 
