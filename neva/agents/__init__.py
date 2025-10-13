@@ -1,6 +1,6 @@
-"""Backward-compatible shim exposing the relocated core models."""
+"""Agent implementations and supporting abstractions."""
 
-from neva.agents.base import (
+from .base import (
     AIAgent,
     AgentFactory,
     AgentManager,
@@ -9,21 +9,17 @@ from neva.agents.base import (
     ParallelExecutionConfig,
     Tool,
 )
-from neva.agents.gpt import GPTAgent
-from neva.agents.transformer import TransformerAgent
-from neva.environments.base import Environment
-from neva.schedulers.base import Scheduler
+from .gpt import GPTAgent
+from .transformer import TransformerAgent
 
 __all__ = [
     "AIAgent",
     "AgentFactory",
     "AgentManager",
-    "Environment",
     "GPTAgent",
     "InteractionHistory",
     "LLMBackend",
     "ParallelExecutionConfig",
-    "Scheduler",
     "Tool",
     "TransformerAgent",
 ]
