@@ -94,10 +94,13 @@ with the core project. Install additional bundles as needed:
 - **Research tools (translation, summarisation, encyclopedia lookups)** –
   `poetry install --extras "tools"`
 - **ML experiment tracking** – `poetry install --extras "mlops"`
+- **Additional LLM providers (Anthropic Claude, Google Gemini, xAI Grok)** –
+  `poetry install --extras "providers"`
 - **Everything** – `poetry install --extras "all" --with dev`
 
-Prefer `pip`? The same extras are available via `pip install .[tools]` or
-`pip install .[all]`. Updated `requirements-*.txt` files are provided for
+Prefer `pip`? The same extras are available via `pip install .[tools]`,
+`pip install .[providers]`, or `pip install .[all]`. Updated
+`requirements-*.txt` files are provided for
 environments that cannot yet adopt Poetry.
 
 ### Developer Setup
@@ -105,9 +108,12 @@ environments that cannot yet adopt Poetry.
 To contribute or run the full suite of examples you may need a few additional
 configuration steps:
 
-- **API keys** – set `OPENAI_API_KEY` (or pass `api_key` directly) when using
-  `GPTAgent`. Community members often rely on [OpenAI compatible endpoints](https://platform.openai.com/docs/api-reference/introduction), but any drop-in
-  replacement that matches the Chat Completions API works.
+- **API keys** – supply the relevant key (`OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, or an xAI token) when using
+  `GPTAgent`. Select a backend by passing `provider="openai"`,
+  `"anthropic"`, `"gemini"`, or `"grok"`. Community members often rely on
+  [OpenAI compatible endpoints](https://platform.openai.com/docs/api-reference/introduction), but any drop-in replacement that matches the Chat
+  Completions API works.
 - **Transformers cache** – the `TransformerAgent` loads Hugging Face models on
   demand. Install the optional `torch` dependency and authenticate with
   `huggingface-cli login` if you plan to download private models.
