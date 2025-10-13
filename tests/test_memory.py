@@ -1,20 +1,16 @@
-import os
-import sys
 from typing import List
 
 import pytest
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from memory import (
+from neva.agents import AIAgent
+from neva.memory import (
     CompositeMemory,
     MemoryRecord,
     ShortTermMemory,
     SummaryMemory,
     VectorStoreMemory,
 )
-from exceptions import MemoryConfigurationError
-from models import AIAgent
+from neva.utils.exceptions import MemoryConfigurationError
 
 
 class EchoAgent(AIAgent):

@@ -18,10 +18,10 @@ from typing import List
 
 from pathlib import Path
 
-from environments import BasicEnvironment
-from memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
-from models import AgentManager
-from schedulers import RoundRobinScheduler
+from neva.agents import AgentManager
+from neva.environments import BasicEnvironment
+from neva.memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
+from neva.schedulers import RoundRobinScheduler
 
 
 class ConversationEnvironment(BasicEnvironment):

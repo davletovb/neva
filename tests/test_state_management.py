@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from state_management import ConversationState, create_snapshot, load_snapshot, save_snapshot
+from neva.utils.state_management import (
+    ConversationState,
+    create_snapshot,
+    load_snapshot,
+    save_snapshot,
+)
 
 
 def test_snapshot_roundtrip(tmp_path: Path) -> None:

@@ -1,10 +1,5 @@
-import os
-import sys
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from models import AIAgent
-from schedulers import CompositeScheduler, PriorityScheduler, RoundRobinScheduler
+from neva.agents import AIAgent
+from neva.schedulers import CompositeScheduler, PriorityScheduler, RoundRobinScheduler
 
 
 class StubAgent(AIAgent):

@@ -134,9 +134,9 @@ for development.
 ## Usage
 Create and simulate AI agents effortlessly:
 ```python
-from environments import BasicEnvironment
-from models import AgentManager
-from schedulers import RoundRobinScheduler
+from neva.agents import AgentManager
+from neva.environments import BasicEnvironment
+from neva.schedulers import RoundRobinScheduler
 
 
 class ClassroomEnvironment(BasicEnvironment):
