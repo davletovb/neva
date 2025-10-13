@@ -8,6 +8,7 @@ logging_utils = _import_module(".logging_utils", __name__)
 metrics = _import_module(".metrics", __name__)
 observer = _import_module(".observer", __name__)
 safety = _import_module(".safety", __name__)
+security = _import_module(".security", __name__)
 state_management = _import_module(".state_management", __name__)
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "metrics",
     "observer",
     "safety",
+    "security",
     "state_management",
 ]
