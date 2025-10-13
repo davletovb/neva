@@ -1,8 +1,9 @@
 import pytest
 
-from neva.agents import AIAgent, TransformerAgent
+from neva.agents import AIAgent, ToolCall, TransformerAgent
 from neva.environments import Environment as BaseEnvironment
 from neva.tools import Tool
+from neva.utils.exceptions import ToolExecutionError, ToolNotFoundError
 
 
 class DummyTool(Tool):
@@ -25,6 +26,14 @@ class EchoAgent(AIAgent):
 class DummyEnvironment(BaseEnvironment):
     def context(self) -> str:
         return "environment context"
+
+
+class FailingTool(Tool):
+    def __init__(self):
+        super().__init__("failing", "always errors")
+
+    def use(self, task: str) -> str:
+        raise ToolExecutionError("boom")
 
 
 def test_transformer_agent_uses_backend_and_includes_context():
@@ -75,3 +84,33 @@ def test_agent_step_uses_environment_context():
 def test_agent_step_with_custom_observation():
     agent = EchoAgent(name="Echo")
     assert agent.step("custom") == "echo:custom"
+
+
+def test_agent_call_tool_success():
+    agent = EchoAgent(name="Echo")
+    tool = DummyTool()
+    agent.register_tool(tool)
+
+    response = agent.call_tool(ToolCall.from_text("dummy", "payload"))
+
+    assert response.name == "dummy"
+    assert response.succeeded()
+    assert response.output == "payload"
+
+
+def test_agent_call_tool_missing_registration():
+    agent = EchoAgent(name="Echo")
+
+    with pytest.raises(ToolNotFoundError):
+        agent.call_tool(ToolCall.from_text("dummy", "payload"))
+
+
+def test_agent_call_tool_failure_populates_error():
+    agent = EchoAgent(name="Echo")
+    agent.register_tool(FailingTool())
+
+    response = agent.call_tool(ToolCall(name="failing", arguments={"input": "payload"}))
+
+    assert not response.succeeded()
+    assert response.error == "boom"
+    assert response.output == ""

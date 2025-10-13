@@ -90,3 +90,7 @@ class ToolError(NevaError):
 class ToolExecutionError(ToolError):
     """Raised when a tool invocation fails."""
 
+
+class ToolNotFoundError(ToolError):
+    """Raised when attempting to use a tool that is not registered."""
+

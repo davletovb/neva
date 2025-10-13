@@ -8,6 +8,8 @@ from .base import (
     LLMBackend,
     ParallelExecutionConfig,
     Tool,
+    ToolCall,
+    ToolResponse,
 )
 from .gpt import GPTAgent
 from .transformer import TransformerAgent
@@ -21,5 +23,7 @@ __all__ = [
     "LLMBackend",
     "ParallelExecutionConfig",
     "Tool",
+    "ToolCall",
+    "ToolResponse",
     "TransformerAgent",
 ]
