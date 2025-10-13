@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 def _missing_dependency_message(package: str, *, fallback: str) -> str:
     return (
         f"The optional dependency `{package}` is unavailable. {fallback} "
-        f"Install it with `pip install {package}` or provide a custom factory "
-        "when constructing the tool to continue running experiments without "
-        "network access."
+        f"Install it with `pip install {package}` (or `pip install neva[tools]`) "
+        "or provide a custom factory when constructing the tool to continue "
+        "running experiments without network access."
     )
 
 
@@ -40,10 +40,60 @@ _ALLOWED_OPERATORS: Dict[type, Callable[[float, float], float]] = {
 
 
 class TranslatorBackend(Protocol):
-    """Protocol describing the translator interface used by :class:`TranslatorTool`."""
+    """Protocol describing translator backends for :class:`TranslatorTool`."""
 
-    def translate(self, text: str, dest: str) -> Any:
-        ...
+    def translate(self, text: str, *, target_language: str) -> str:
+        """Translate ``text`` into ``target_language`` and return the result."""
+
+
+class _CallableTranslatorWrapper:
+    """Adapter turning callables into :class:`TranslatorBackend` instances."""
+
+    def __init__(self, func: Callable[..., str]) -> None:
+        self._func = func
+
+    def translate(self, text: str, *, target_language: str) -> str:
+        try:
+            return self._func(text, target_language=target_language)
+        except TypeError:
+            try:
+                return self._func(text, target_language)
+            except TypeError:
+                return self._func(text)
+
+
+class _ObjectTranslatorWrapper:
+    """Adapter for legacy translator objects following the googletrans API."""
+
+    def __init__(self, backend: object, *, default_language: str) -> None:
+        self._backend = backend
+        self._default_language = default_language
+
+    def translate(self, text: str, *, target_language: str) -> str:
+        target = target_language or self._default_language
+        translator = getattr(self._backend, "translate")
+        try:
+            result = translator(text, dest=target)
+        except TypeError:
+            try:
+                result = translator(text, target_language=target)
+            except TypeError:
+                result = translator(text)
+        return getattr(result, "text", str(result))
+
+
+class _DeepTranslatorBackend:
+    """Translation backend built on :mod:`deep_translator`."""
+
+    def __init__(self, *, default_language: str) -> None:
+        self._default_language = default_language
+
+    def translate(self, text: str, *, target_language: str) -> str:
+        from deep_translator import GoogleTranslator  # type: ignore
+
+        target = target_language or self._default_language
+        translator = GoogleTranslator(source="auto", target=target)
+        return translator.translate(text)
 
 
 class MathTool(Tool):
@@ -134,28 +184,36 @@ class TranslatorTool(Tool):
         self._translator_factory = translator_factory
         self.target_language = target_language
 
+    def _wrap_translator(self, translator: object) -> TranslatorBackend:
+        if callable(translator) and not hasattr(translator, "translate"):
+            return _CallableTranslatorWrapper(cast(Callable[..., str], translator))
+        if hasattr(translator, "translate"):
+            return _ObjectTranslatorWrapper(translator, default_language=self.target_language)
+        raise ToolExecutionError(
+            "Translator factory must return a callable or object exposing a 'translate' method." 
+        )
+
     def _get_translator(self) -> TranslatorBackend:
         if self._translator_factory is not None:
             translator = self._translator_factory()
-            return cast(TranslatorBackend, translator)
+            return self._wrap_translator(translator)
 
         try:  # pragma: no cover - depends on optional dependency.
-            from googletrans import Translator  # type: ignore
+            import deep_translator  # type: ignore  # noqa: F401
         except Exception as exc:  # pragma: no cover - optional dependency missing.
             raise MissingDependencyError(
                 _missing_dependency_message(
-                    "googletrans",
-                    fallback="Translation requires access to the Google Translate API.",
+                    "deep-translator",
+                    fallback="Translation requires the optional tools dependencies.",
                 )
             ) from exc
 
-        return cast(TranslatorBackend, Translator())
+        return _DeepTranslatorBackend(default_language=self.target_language)
 
     def use(self, task: str) -> str:
         try:
-            translator: TranslatorBackend = self._get_translator()
-            result: Any = translator.translate(task, dest=self.target_language)
-            return getattr(result, "text", str(result))
+            translator = self._get_translator()
+            return translator.translate(task, target_language=self.target_language)
         except Exception as exc:
             logger.warning("Translator backend failed: %s", exc)
             raise ToolExecutionError(
@@ -186,19 +244,22 @@ class SummarizerTool(Tool):
             return cast(Callable[[str], str], summarizer)
 
         try:  # pragma: no cover - optional dependency.
-            from summarizer import Summarizer  # type: ignore
+            from transformers import pipeline  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise MissingDependencyError(
                 _missing_dependency_message(
-                    "summarizer",
-                    fallback="Summarisation requires the `bert-extractive-summarizer` package.",
+                    "transformers",
+                    fallback="Summarisation requires the optional tools dependencies.",
                 )
             ) from exc
 
-        model = Summarizer()
+        summarizer = pipeline("summarization", model="t5-small")
 
-        def _summarise(text: str, *, _model=model) -> str:
-            return _model(text, min_length=60, max_length=100)
+        def _summarise(text: str, *, _summarizer=summarizer) -> str:
+            results = _summarizer(text, truncation=True, max_length=150, min_length=40)
+            if not results:
+                return ""
+            return results[0].get("summary_text", "").strip()
 
         return _summarise
 

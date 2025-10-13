@@ -21,7 +21,8 @@ Before diving in, we recommend spending some time understanding the goals and ar
 ## Setting Up the Development Environment
 - **Fork the Repository:** Start by forking the Neva repository to your GitHub account.
 - **Clone Your Fork:** Clone your fork to your local machine.
-- **Install Dependencies:** Follow the installation guide in the README.
+- **Install Dependencies:** Run `poetry install --with dev` (or follow the
+  installation guide in the README for alternative workflows).
 - **Create a Branch:** Create a new branch for your changes, keeping your work separate.
 
 ## Submitting a Pull Request
