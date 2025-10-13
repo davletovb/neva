@@ -207,6 +207,8 @@ throughout the library, the quickstart script, and the accompanying tests.
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
   helpers let you persist simulations mid-run and resume them later.
+- **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
+  to give agents durable recall of historical conversations and research notes.
 - **Robust Safety Rails**: Prompt validation, sanitisation, rate limiting, and
   automatic retry logic keep API usage safe and predictable.
 - **Observability First**: Structured logging, response-time metrics, token and
