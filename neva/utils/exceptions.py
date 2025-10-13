@@ -23,6 +23,10 @@ class MissingDependencyError(DependencyError):
     """Raised when an optional dependency is not installed."""
 
 
+class DependencyScanError(DependencyError):
+    """Raised when dependency vulnerability scanning cannot be completed."""
+
+
 class BackendError(NevaError):
     """Raised when an external service or model backend fails."""
 
