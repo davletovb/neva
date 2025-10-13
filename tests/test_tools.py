@@ -1,13 +1,9 @@
-import os
-import sys
 from types import SimpleNamespace
 
 import pytest
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from exceptions import MissingDependencyError, ToolExecutionError
-from tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
+from neva.tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
+from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
 
 
 def test_math_tool_evaluates_expression():
@@ -36,10 +32,10 @@ def test_summarizer_tool_uses_injected_backend():
 
 def test_wikipedia_tool_missing_dependency_raises(monkeypatch):
     tool = WikipediaTool(summary_sentences=1)
-    if tool.__module__ != "tools":  # pragma: no cover - defensive guard
+    if tool.__module__ != "neva.tools":  # pragma: no cover - defensive guard
         pytest.skip("Unexpected module location")
 
-    monkeypatch.setattr("tools.wikipedia", None)
+    monkeypatch.setattr("neva.tools.wikipedia", None)
     with pytest.raises(MissingDependencyError) as exc:
         tool.use("Python (programming language)")
 

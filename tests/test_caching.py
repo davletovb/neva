@@ -1,20 +1,15 @@
-import os
 import sys
 import types
 
 import pytest
 
-from caching import LLMCache
-from exceptions import CacheConfigurationError
+from neva.agents import GPTAgent, TransformerAgent
+from neva.utils.caching import LLMCache
+from neva.utils.exceptions import CacheConfigurationError
 
 # Ensure optional dependencies used by models are stubbed for the test run.
 openai_stub = types.ModuleType("openai")
 sys.modules.setdefault("openai", openai_stub)
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from models import GPTAgent, TransformerAgent
-
 
 def test_llm_cache_behaves_as_lru() -> None:
     cache = LLMCache(max_size=2)

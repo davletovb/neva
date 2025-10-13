@@ -1,13 +1,6 @@
-import os
-import os
-import sys
-
-import pytest
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from models import AIAgent, Environment
-from schedulers import RoundRobinScheduler
+from neva.agents import AIAgent
+from neva.environments import Environment
+from neva.schedulers import RoundRobinScheduler
 
 
 class StubAgent(AIAgent):

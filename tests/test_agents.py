@@ -1,14 +1,8 @@
-import os
-import sys
-from types import SimpleNamespace
-
 import pytest
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from models import AIAgent, TransformerAgent
-from models import Environment as BaseEnvironment
-from tools import Tool
+from neva.agents import AIAgent, TransformerAgent
+from neva.environments import Environment as BaseEnvironment
+from neva.tools import Tool
 
 
 class DummyTool(Tool):

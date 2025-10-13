@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 import types
 from typing import Callable, Dict, List
@@ -23,10 +22,8 @@ transformers_stub.AutoModelForSeq2SeqLM = DummyAutoModel
 transformers_stub.AutoTokenizer = DummyAutoTokenizer
 sys.modules["transformers"] = transformers_stub
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from exceptions import AgentCreationError
-from models import AgentManager, ParallelExecutionConfig, TransformerAgent, GPTAgent
+from neva.agents import AgentManager, ParallelExecutionConfig, TransformerAgent, GPTAgent
+from neva.utils.exceptions import AgentCreationError
 
 
 def test_create_transformer_agent_returns_transformer_agent():

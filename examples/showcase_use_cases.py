@@ -24,11 +24,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import tools as tool_module
-from environments import BasicEnvironment
-from models import AgentManager
-from schedulers import RoundRobinScheduler
-from tools import MathTool, WikipediaTool
+import neva.tools as tool_module
+from neva.agents import AgentManager
+from neva.environments import BasicEnvironment
+from neva.schedulers import RoundRobinScheduler
+from neva.tools import MathTool, WikipediaTool
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ from tools import MathTool, WikipediaTool
 def install_wikipedia_stub() -> None:
     """Ensure the Wikipedia tool works without the optional dependency.
 
-    The :class:`~tools.WikipediaTool` relies on the third-party ``wikipedia``
+    The :class:`~neva.tools.WikipediaTool` relies on the third-party ``wikipedia``
     package. This helper installs a tiny offline stub when the dependency is
     missing so the example can run in hermetic test environments.
     """

@@ -1,7 +1,9 @@
 import pytest
 
-import safety
-from exceptions import PromptValidationError
+import pytest
+
+from neva.utils import safety
+from neva.utils.exceptions import PromptValidationError
 
 
 def test_prompt_validator_rejects_forbidden_pattern() -> None:
