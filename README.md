@@ -79,28 +79,26 @@ or logged to MLflow with `SimulationObserver.log_to_mlflow()` to integrate with
 your preferred dashboarding stack.
 
 ## Installation
-Clone the repository and install the required packages:
+Clone the repository and install dependencies with [Poetry](https://python-poetry.org/):
 
 ```bash
 git clone https://github.com/davletovb/neva.git
 cd neva
-pip install -r requirements.txt
+poetry install
 ```
 
-The core requirements focus on lightweight, always-on dependencies. Optional
-extras such as `transformers` and `bert-extractive-summarizer` moved to
-`requirements-optional.txt` so you only install heavy packages when necessary.
-For development workflows install the tooling bundle:
+Poetry keeps the default installation lean—only the always-on dependencies ship
+with the core project. Install additional bundles as needed:
 
-```bash
-pip install -r requirements-dev.txt
-```
+- **Development tools** – `poetry install --with dev`
+- **Research tools (translation, summarisation, encyclopedia lookups)** –
+  `poetry install --extras "tools"`
+- **ML experiment tracking** – `poetry install --extras "mlops"`
+- **Everything** – `poetry install --extras "all" --with dev`
 
-and pull in heavyweight integrations on demand:
-
-```bash
-pip install -r requirements-optional.txt
-```
+Prefer `pip`? The same extras are available via `pip install .[tools]` or
+`pip install .[all]`. Updated `requirements-*.txt` files are provided for
+environments that cannot yet adopt Poetry.
 
 ### Developer Setup
 
@@ -116,17 +114,33 @@ configuration steps:
 - **Environment variables** – place sensitive credentials (API keys, database
   URLs, etc.) in a `.env` file and load them via `python-dotenv` or your
   preferred secrets manager when running examples.
-- **Optional heavyweight dependencies** – examples that rely on summarisation or
-  translation tools use `bert-extractive-summarizer` and `googletrans`. Install
-  them only when needed to keep the core installation lightweight.
+- **Optional heavyweight dependencies** – translation is powered by
+  `deep-translator` (a maintained wrapper around the Google Translate service) and
+  summarisation leverages Hugging Face's `transformers` (T5 by default). Install
+  the `tools` extra—or the individual packages—only when you require these
+  capabilities to keep the core installation lightweight.
 - **Structured logging** – call ``logging_utils.configure_logging()`` at the
   beginning of your experiment to emit JSON logs ready for ingestion by ELK,
   Loki, or any observability platform.
 - **Graceful fallbacks** – the built-in tools surface actionable error messages
-  when optional packages such as `wikipedia`, `googletrans`, or
-  `bert-extractive-summarizer` are unavailable. You can provide lightweight
-  factories to `TranslatorTool` and `SummarizerTool` (or monkeypatch the
+  when optional packages such as `wikipedia`, `deep-translator`, or
+  `transformers` are unavailable. You can provide lightweight factories to
+  `TranslatorTool` and `SummarizerTool` (or monkeypatch the
   Wikipedia backend) to keep experiments fully offline.
+
+### Docker
+
+Need a reproducible runtime? Build the included container image:
+
+```bash
+docker build -t neva:latest .
+docker run --rm -it neva:latest python examples/quickstart_conversation.py
+```
+
+The Dockerfile uses Poetry to install the project and accepts optional build
+arguments (`WITH_EXTRAS=tools,mlops`) to bake in additional extras when
+required. Mount your local workspace with `-v $PWD:/workspace` for rapid
+iteration.
 
 After installing dependencies run `pytest` to confirm the environment is ready
 for development.

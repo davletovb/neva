@@ -1,11 +1,39 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=1.6.1"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
+[tool.poetry]
 name = "neva"
 version = "0.1.0"
 description = "Neva provides agent, environment, and scheduler abstractions for LLM-based simulations."
+authors = ["Neva Contributors"]
 readme = "README.md"
-requires-python = ">=3.8"
-authors = [{name = "Neva Contributors"}]
+license = "MIT"
+packages = [{ include = "neva" }]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+openai = "0.28.1"
+wikipedia = { version = "1.4.0", optional = true }
+"deep-translator" = { version = "^1.11.4", optional = true }
+transformers = { version = "^4.35.2", optional = true }
+mlflow = { version = "^2.9.1", optional = true }
+
+[tool.poetry.group.dev.dependencies]
+black = "23.9.1"
+coverage = "7.3.2"
+mypy = "1.6.1"
+pytest = "7.4.2"
+
+[tool.poetry.extras]
+tools = ["wikipedia", "deep-translator", "transformers"]
+mlops = ["mlflow"]
+all = ["wikipedia", "deep-translator", "transformers", "mlflow"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
