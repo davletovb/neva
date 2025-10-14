@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from neva.utils.exceptions import MemoryConfigurationError
+
 from .base import MemoryModule, MemoryRecord
 
 
@@ -55,14 +56,9 @@ class FaissVectorStoreMemory(MemoryModule):
         self._index = self._faiss.IndexIDMap(self._base_index)
 
     def _encode(self, text: str) -> "np.ndarray":
-        vector = self._np.asarray(
-            tuple(float(x) for x in self._embedder(text)),
-            dtype="float32",
-        )
+        vector = self._np.asarray(tuple(float(x) for x in self._embedder(text)), dtype="float32")
         if vector.ndim != 1:
-            raise MemoryConfigurationError(
-                "Embeddings must be one-dimensional sequences of floats"
-            )
+            raise MemoryConfigurationError("Embeddings must be one-dimensional sequences of floats")
         if self._normalize_embeddings:
             self._faiss.normalize_L2(vector.reshape(1, -1))
             vector = vector.reshape(-1)
@@ -75,9 +71,7 @@ class FaissVectorStoreMemory(MemoryModule):
         vector = self._encode(text)
         if self._index is None:
             self._build_index(vector.shape[0])
-        assert (
-            self._index is not None and self._base_index is not None
-        )  # for mypy type checking
+        assert self._index is not None and self._base_index is not None  # for mypy type checking
         record_id = self._id_counter
         self._id_counter += 1
         self._records[record_id] = MemoryRecord(
