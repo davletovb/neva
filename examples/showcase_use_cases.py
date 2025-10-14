@@ -4,8 +4,11 @@ This script expands on the quickstart example by demonstrating how to:
 
 * orchestrate tool-augmented research with Wikipedia lookups,
 * coordinate hierarchical leader-follower teams,
-* simulate emergent roleplay between game NPCs, and
-* run productivity swarms that self-organise around tasks.
+* simulate emergent roleplay between game NPCs,
+* facilitate structured debates and negotiation exercises,
+* explore social dynamics in cooperative neighbourhood planning,
+* script adaptive game-AI party coordination scenes, and
+* run productivity swarms or customer support triage routines.
 
 All simulations rely on lightweight, fully offline language-model backends so
 they can be executed without external dependencies. Optional integrations (such
@@ -400,6 +403,353 @@ def make_worker_backend(
 
 
 # ---------------------------------------------------------------------------
+# Multi-agent debate / negotiation demo
+# ---------------------------------------------------------------------------
+
+
+class DebateEnvironment(TranscriptEnvironment):
+    """Environment guiding agents through a structured debate."""
+
+    def __init__(
+        self,
+        motion: str,
+        scheduler: RoundRobinScheduler,
+    ) -> None:
+        super().__init__("Debate Chamber", "Negotiation toward a shared statement.", scheduler)
+        self.motion = motion
+        self.state["stances"]: Dict[str, str] = {}
+        self.state["offers"]: List[str] = []
+        self.state["consensus"] = "Undecided"
+
+    def _summarise_consensus(self) -> str:
+        stances = self.state["stances"]
+        if not stances:
+            return "No positions recorded yet"
+
+        counts: Dict[str, int] = {}
+        for stance in stances.values():
+            counts[stance] = counts.get(stance, 0) + 1
+
+        majority = max(counts.values())
+        leaders = [stance for stance, value in counts.items() if value == majority]
+        if len(leaders) == 1:
+            leader = leaders[0]
+            if majority == len(stances):
+                return f"Full alignment on {leader}"
+            if majority >= len(stances) - 1:
+                return f"Emerging consensus leaning {leader}"
+        breakdown = ", ".join(f"{stance}: {count}" for stance, count in sorted(counts.items()))
+        return f"Split viewpoints ({breakdown})"
+
+    def record_position(self, agent: str, stance: str, proposal: str) -> None:
+        self.state["stances"][agent] = stance
+        self.state["offers"].append(f"{agent}: {proposal}")
+        self.state["offers"] = self.state["offers"][-6:]
+        self.state["consensus"] = self._summarise_consensus()
+
+    def context(self) -> str:  # type: ignore[override]
+        offers = "; ".join(self.state["offers"][-3:]) or "None"
+        return (
+            f"Debate motion: {self.motion}. "
+            f"Consensus trend: {self.state['consensus']}. "
+            f"Recent offers: {offers}. "
+            f"Latest remarks: {self.recent_dialogue()}"
+        )
+
+
+def make_debater_backend(
+    name: str,
+    persona: str,
+    *,
+    stance: str,
+    environment: DebateEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        if stance == "support":
+            proposal = (
+                "amending the charter to rapidly pilot the motion with transparent "
+                "evaluation checkpoints"
+            )
+        elif stance == "oppose":
+            proposal = (
+                "slowing adoption until risk studies address funding, training, and "
+                "long-term governance"
+            )
+        else:
+            proposal = (
+                "a compromise timeline combining a small trial with joint oversight "
+                "from both camps"
+            )
+
+        environment.record_position(name, stance, proposal)
+        return (
+            f"argues from a {stance} stance on '{environment.motion}', builds on recent "
+            f"offers, and proposes {proposal}."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+def make_moderator_backend(
+    name: str,
+    persona: str,
+    *,
+    environment: DebateEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        consensus = environment._summarise_consensus()
+        environment.state["consensus"] = consensus
+        return (
+            f"synthesises the debate motion '{environment.motion}', highlights {consensus}, "
+            "and invites actionable next steps."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+# ---------------------------------------------------------------------------
+# Social simulation demo
+# ---------------------------------------------------------------------------
+
+
+class CommunityScenarioEnvironment(TranscriptEnvironment):
+    """Environment modelling social coordination dynamics."""
+
+    def __init__(
+        self,
+        scenario: str,
+        scheduler: RoundRobinScheduler,
+    ) -> None:
+        super().__init__("Community Hub", "Neighbours co-create solutions.", scheduler)
+        self.scenario = scenario
+        self.state["shared_resources"]: List[str] = []
+        self.state["mood"]: Dict[str, str] = {}
+
+    def record_contribution(self, agent: str, contribution: str, mood: str) -> None:
+        self.state["shared_resources"].append(f"{agent}: {contribution}")
+        self.state["shared_resources"] = self.state["shared_resources"][-6:]
+        self.state["mood"][agent] = mood
+
+    def _mood_summary(self) -> str:
+        if not self.state["mood"]:
+            return "Balanced"
+        counts: Dict[str, int] = {}
+        for mood in self.state["mood"].values():
+            counts[mood] = counts.get(mood, 0) + 1
+        dominant = max(counts, key=counts.get)
+        return f"Dominant mood: {dominant}"
+
+    def context(self) -> str:  # type: ignore[override]
+        resources = "; ".join(self.state["shared_resources"][-3:]) or "None"
+        return (
+            f"Scenario: {self.scenario}. "
+            f"Mood snapshot: {self._mood_summary()}. "
+            f"Shared resources: {resources}. "
+            f"Recent coordination: {self.recent_dialogue()}"
+        )
+
+
+def make_social_actor_backend(
+    name: str,
+    persona: str,
+    *,
+    focus: str,
+    environment: CommunityScenarioEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        if focus == "logistics":
+            contribution = "secures venue layout and timeline checkpoints"
+            mood = "organised"
+        elif focus == "inclusion":
+            contribution = "maps accessibility needs and rotating volunteer pairs"
+            mood = "caring"
+        else:
+            contribution = "launches story-sharing circle with musical interludes"
+            mood = "energised"
+
+        environment.record_contribution(name, contribution, mood)
+        return (
+            f"leans on {focus} expertise for '{environment.scenario}', contributes {contribution}, "
+            f"and keeps the group feeling {mood}."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+# ---------------------------------------------------------------------------
+# Tactical game AI party demo
+# ---------------------------------------------------------------------------
+
+
+class QuestEncounterEnvironment(TranscriptEnvironment):
+    """Environment capturing a tactical party responding to encounters."""
+
+    def __init__(
+        self,
+        encounters: Iterable[tuple[str, str]],
+        scheduler: RoundRobinScheduler,
+    ) -> None:
+        super().__init__("Quest Encounter", "Cooperative party strategy.", scheduler)
+        self.encounters: List[tuple[str, str]] = list(encounters)
+        self.state["stage"] = 0
+        self.state["team_status"]: Dict[str, str] = {}
+
+    def _current_encounter(self) -> tuple[str, str]:
+        index = int(self.state["stage"]) % max(len(self.encounters), 1)
+        return self.encounters[index]
+
+    def context(self) -> str:  # type: ignore[override]
+        encounter, threat = self._current_encounter()
+        status = ", ".join(
+            f"{agent}: {state}" for agent, state in sorted(self.state["team_status"].items())
+        ) or "Awaiting orders"
+        return (
+            f"Active encounter: {encounter} (threat {threat}). "
+            f"Team status: {status}. "
+            f"Recent tactical chatter: {self.recent_dialogue()}"
+        )
+
+    def step(self) -> Optional[str]:  # type: ignore[override]
+        message = super().step()
+        if message:
+            self.state["stage"] = (int(self.state["stage"]) + 1) % max(len(self.encounters), 1)
+        return message
+
+
+def make_party_member_backend(
+    name: str,
+    persona: str,
+    *,
+    role: str,
+    environment: QuestEncounterEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        encounter, threat = environment._current_encounter()
+        if role == "tank":
+            action = "raises a barrier and calls focus fire"
+        elif role == "healer":
+            action = "deploys protective wards and triage rotations"
+        else:
+            action = "channels elemental combos targeting enemy weaknesses"
+
+        environment.state["team_status"][name] = f"{role} covering {encounter}"
+        return (
+            f"evaluates the {encounter} (threat {threat}), {action}, and synchronises "
+            "cooldown timings with the squad."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+# ---------------------------------------------------------------------------
+# Customer service triage demo
+# ---------------------------------------------------------------------------
+
+
+class SupportDeskEnvironment(TranscriptEnvironment):
+    """Environment simulating a customer service exchange."""
+
+    def __init__(
+        self,
+        issue: str,
+        scheduler: RoundRobinScheduler,
+    ) -> None:
+        super().__init__("Support Desk", "Resolve a high-priority ticket.", scheduler)
+        self.issue = issue
+        self.state["ticket_status"] = "New"
+        self.state["resolution_steps"]: List[str] = []
+
+    def log_step(self, actor: str, update: str, *, status: Optional[str] = None) -> None:
+        self.state["resolution_steps"].append(f"{actor}: {update}")
+        self.state["resolution_steps"] = self.state["resolution_steps"][-6:]
+        if status is not None:
+            self.state["ticket_status"] = status
+
+    def context(self) -> str:  # type: ignore[override]
+        steps = "; ".join(self.state["resolution_steps"][-3:]) or "None"
+        return (
+            f"Issue: {self.issue}. "
+            f"Ticket status: {self.state['ticket_status']}. "
+            f"Key actions: {steps}. "
+            f"Recent dialogue: {self.recent_dialogue()}"
+        )
+
+
+def make_customer_backend(
+    name: str,
+    persona: str,
+    *,
+    environment: SupportDeskEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        status = environment.state["ticket_status"]
+        if status == "New":
+            update = "shares diagnostic logs and clarifies business impact"
+            environment.log_step(name, update, status="Investigating")
+        elif status == "Investigating":
+            update = "asks for an estimated resolution timeline and offers remote session access"
+            environment.log_step(name, update)
+        else:
+            update = "confirms the fix resolved the outage and requests preventive guidance"
+            environment.log_step(name, update, status="Closed")
+        return (
+            f"describes the '{environment.issue}' incident, {update}, and keeps the support "
+            "team informed."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+def make_support_agent_backend(
+    name: str,
+    persona: str,
+    *,
+    environment: SupportDeskEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        status = environment.state["ticket_status"]
+        if status == "New":
+            update = "collects error codes and initiates diagnostics"
+            environment.log_step(name, update, status="Investigating")
+        elif status == "Investigating":
+            update = "reproduces the issue in staging and drafts a mitigation plan"
+            environment.log_step(name, update, status="Mitigating")
+        else:
+            update = "confirms patches deployed and prepares customer-ready summary"
+            environment.log_step(name, update, status="Monitoring")
+        return (
+            f"triages the '{environment.issue}' ticket, {update}, and coordinates next actions."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+def make_support_manager_backend(
+    name: str,
+    persona: str,
+    *,
+    environment: SupportDeskEnvironment,
+) -> Callable[[str], str]:
+    def formatter(_: str) -> str:
+        status = environment.state["ticket_status"]
+        if status in {"New", "Investigating"}:
+            update = "allocates additional engineers and ensures status-page updates"
+            environment.log_step(name, update, status="Mitigating")
+        elif status == "Mitigating":
+            update = "signs off on the mitigation plan and schedules post-mortem review"
+            environment.log_step(name, update, status="Monitoring")
+        else:
+            update = "closes the ticket after verifying stability metrics"
+            environment.log_step(name, update, status="Closed")
+        return (
+            f"oversees the '{environment.issue}' response, {update}, and documents follow-up "
+            "actions."
+        )
+
+    return make_persona_backend(name, persona, formatter)
+
+
+# ---------------------------------------------------------------------------
 # Scenario assembly
 # ---------------------------------------------------------------------------
 
@@ -439,6 +789,69 @@ def run_tool_demo() -> None:
     environment.register_agent(analyst)
 
     run_simulation("Tool-Augmented Research", environment, steps=4)
+
+
+def run_debate_demo() -> None:
+    scheduler = RoundRobinScheduler()
+    environment = DebateEnvironment(
+        motion="Adopt autonomous rovers for frontier habitat logistics",
+        scheduler=scheduler,
+    )
+    manager = AgentManager()
+
+    moderator = manager.create_agent(
+        "transformer",
+        name="Moderator",
+        llm_backend=make_moderator_backend(
+            "Moderator",
+            "neutral facilitator",
+            environment=environment,
+        ),
+    )
+    moderator.set_attribute("role", "Moderator")
+
+    advocate = manager.create_agent(
+        "transformer",
+        name="Advocate",
+        llm_backend=make_debater_backend(
+            "Advocate",
+            "optimistic strategist",
+            stance="support",
+            environment=environment,
+        ),
+    )
+    advocate.set_attribute("role", "Debater")
+
+    skeptic = manager.create_agent(
+        "transformer",
+        name="Skeptic",
+        llm_backend=make_debater_backend(
+            "Skeptic",
+            "risk analyst",
+            stance="oppose",
+            environment=environment,
+        ),
+    )
+    skeptic.set_attribute("role", "Debater")
+
+    mediator = manager.create_agent(
+        "transformer",
+        name="Mediator",
+        llm_backend=make_debater_backend(
+            "Mediator",
+            "consensus architect",
+            stance="compromise",
+            environment=environment,
+        ),
+    )
+    mediator.set_attribute("role", "Debater")
+
+    environment.register_agent(moderator)
+    environment.register_agent(advocate)
+    environment.register_agent(skeptic)
+    environment.register_agent(mediator)
+
+    run_simulation("Multi-Agent Debate", environment, steps=6)
 
 
 def run_hierarchical_demo() -> None:
@@ -495,6 +908,57 @@ def run_hierarchical_demo() -> None:
     run_simulation("Hierarchical Mission Planning", environment, steps=5)
 
 
+def run_social_sim_demo() -> None:
+    scheduler = RoundRobinScheduler()
+    environment = CommunityScenarioEnvironment(
+        scenario="Coordinate an inclusive neighbourhood resilience festival",
+        scheduler=scheduler,
+    )
+    manager = AgentManager()
+
+    logistics = manager.create_agent(
+        "transformer",
+        name="Logistics",
+        llm_backend=make_social_actor_backend(
+            "Logistics",
+            "operations volunteer",
+            focus="logistics",
+            environment=environment,
+        ),
+    )
+    logistics.set_attribute("role", "Planner")
+
+    inclusion = manager.create_agent(
+        "transformer",
+        name="Inclusion",
+        llm_backend=make_social_actor_backend(
+            "Inclusion",
+            "community advocate",
+            focus="inclusion",
+            environment=environment,
+        ),
+    )
+    inclusion.set_attribute("role", "Wellbeing Lead")
+
+    culture = manager.create_agent(
+        "transformer",
+        name="Culture",
+        llm_backend=make_social_actor_backend(
+            "Culture",
+            "arts facilitator",
+            focus="culture",
+            environment=environment,
+        ),
+    )
+    culture.set_attribute("role", "Experience Designer")
+
+    environment.register_agent(logistics)
+    environment.register_agent(inclusion)
+    environment.register_agent(culture)
+
+    run_simulation("Social Dynamics Simulation", environment, steps=6)
+
+
 def run_npc_demo() -> None:
     scheduler = RoundRobinScheduler()
     environment = TavernEnvironment(
@@ -540,6 +1004,61 @@ def run_npc_demo() -> None:
     environment.register_agent(rogue)
 
     run_simulation("Game NPC Roleplay", environment, steps=6)
+
+
+def run_game_ai_demo() -> None:
+    scheduler = RoundRobinScheduler()
+    environment = QuestEncounterEnvironment(
+        encounters=(
+            ("ambush in the crystalline canyon", "high"),
+            ("arcane puzzle locking the vault", "medium"),
+            ("hydra boss awakening", "critical"),
+        ),
+        scheduler=scheduler,
+    )
+    manager = AgentManager()
+
+    tank = manager.create_agent(
+        "transformer",
+        name="Vanguard",
+        llm_backend=make_party_member_backend(
+            "Vanguard",
+            "shield-bearing tactician",
+            role="tank",
+            environment=environment,
+        ),
+    )
+    tank.set_attribute("role", "Frontline")
+
+    healer = manager.create_agent(
+        "transformer",
+        name="Lumina",
+        llm_backend=make_party_member_backend(
+            "Lumina",
+            "radiant healer",
+            role="healer",
+            environment=environment,
+        ),
+    )
+    healer.set_attribute("role", "Support")
+
+    mage = manager.create_agent(
+        "transformer",
+        name="Aeris",
+        llm_backend=make_party_member_backend(
+            "Aeris",
+            "elemental tactician",
+            role="caster",
+            environment=environment,
+        ),
+    )
+    mage.set_attribute("role", "Damage")
+
+    environment.register_agent(tank)
+    environment.register_agent(healer)
+    environment.register_agent(mage)
+
+    run_simulation("Tactical Party Coordination", environment, steps=6)
 
 
 def run_productivity_demo() -> None:
@@ -598,11 +1117,63 @@ def run_productivity_demo() -> None:
     run_simulation("Productivity Swarm", environment, steps=6)
 
 
+def run_support_demo() -> None:
+    scheduler = RoundRobinScheduler()
+    environment = SupportDeskEnvironment(
+        issue="Payment gateway outage affecting checkouts",
+        scheduler=scheduler,
+    )
+    manager = AgentManager()
+
+    customer = manager.create_agent(
+        "transformer",
+        name="Customer",
+        llm_backend=make_customer_backend(
+            "Customer",
+            "startup founder",
+            environment=environment,
+        ),
+    )
+    customer.set_attribute("role", "Reporter")
+
+    agent = manager.create_agent(
+        "transformer",
+        name="Agent",
+        llm_backend=make_support_agent_backend(
+            "Agent",
+            "incident responder",
+            environment=environment,
+        ),
+    )
+    agent.set_attribute("role", "Responder")
+
+    manager_agent = manager.create_agent(
+        "transformer",
+        name="DutyManager",
+        llm_backend=make_support_manager_backend(
+            "DutyManager",
+            "support lead",
+            environment=environment,
+        ),
+    )
+    manager_agent.set_attribute("role", "Supervisor")
+
+    environment.register_agent(customer)
+    environment.register_agent(agent)
+    environment.register_agent(manager_agent)
+
+    run_simulation("Customer Support Triage", environment, steps=6)
+
+
 def main() -> None:
     run_tool_demo()
     run_hierarchical_demo()
+    run_debate_demo()
+    run_social_sim_demo()
     run_npc_demo()
+    run_game_ai_demo()
     run_productivity_demo()
+    run_support_demo()
 
 
 if __name__ == "__main__":
