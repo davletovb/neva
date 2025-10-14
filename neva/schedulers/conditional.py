@@ -24,7 +24,10 @@ class ConditionalScheduler(Scheduler):
     def add(self, agent: AIAgent, **kwargs: object) -> None:
         condition = kwargs.get("condition") or kwargs.get("predicate")
         if condition is None:
-            condition = lambda _: True
+            def _always_true(_: AIAgent) -> bool:
+                return True
+
+            condition = _always_true
         if not callable(condition):
             raise ConfigurationError("ConditionalScheduler requires a callable condition.")
 
