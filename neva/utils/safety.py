@@ -1,5 +1,4 @@
 """Safety and validation helpers for user provided prompts."""
-
 from __future__ import annotations
 
 from collections.abc import Iterable
