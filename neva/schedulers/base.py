@@ -9,7 +9,6 @@ from neva.agents.base import AIAgent
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.environments.base import Environment
-    from neva.utils.observer import SimulationObserver
 
 
 class Scheduler(ABC):

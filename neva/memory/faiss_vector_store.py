@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
 
 from neva.utils.exceptions import MemoryConfigurationError
 
 from .base import MemoryModule, MemoryRecord
+
+
+if TYPE_CHECKING:  # pragma: no cover - imported for type checking only.
+    import numpy as np
 
 
 class FaissVectorStoreMemory(MemoryModule):
