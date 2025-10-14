@@ -228,6 +228,34 @@ metrics via the observer system, and invokes the agent's `respond` method with
 the current environmental context. This mirrors the simulation lifecycle used
 throughout the library, the quickstart script, and the accompanying tests.
 
+### Built-in scheduling strategies
+
+Neva ships with a pluggable scheduler registry (`neva.schedulers.register_scheduler`)
+and a suite of ready-to-use strategies:
+
+* `RoundRobinScheduler` – cycle through agents in a fixed order.
+* `RandomScheduler` – pick an available agent at random.
+* `PriorityScheduler` – prefer agents with higher priority values.
+* `LeastRecentlyUsedScheduler` – activate the agent that has waited the longest.
+* `WeightedRandomScheduler` – random sampling with configurable weights.
+* `EventDrivenScheduler` – run agents when they emit events.
+* `ConditionalScheduler` – run agents only when a predicate on their state is met.
+* `CompositeScheduler` – nest schedulers to manage agent sub-groups.
+
+Custom schedulers can be registered at runtime:
+
+```python
+from neva.schedulers import register_scheduler, create_scheduler, Scheduler
+
+
+class MyScheduler(Scheduler):
+    ...
+
+
+register_scheduler("my_scheduler", MyScheduler)
+scheduler = create_scheduler("my_scheduler")
+```
+
 ## Features
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore

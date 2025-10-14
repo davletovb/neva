@@ -1,5 +1,17 @@
+import pytest
+
 from neva.agents import AIAgent
-from neva.schedulers import CompositeScheduler, PriorityScheduler, RoundRobinScheduler
+from neva.schedulers import (
+    CompositeScheduler,
+    ConditionalScheduler,
+    EventDrivenScheduler,
+    PriorityScheduler,
+    RoundRobinScheduler,
+    create_scheduler,
+    register_scheduler,
+    unregister_scheduler,
+)
+from neva.utils.exceptions import SchedulingError
 
 
 class StubAgent(AIAgent):
@@ -78,3 +90,46 @@ def test_composite_scheduler_balances_groups():
 
     turns = [scheduler.get_next_agent() for _ in range(5)]
     assert [agent.name for agent in turns] == ["A", "C", "B", "C", "A"]
+
+
+def test_event_driven_scheduler_requires_event_signal():
+    scheduler = EventDrivenScheduler()
+    agent = StubAgent("triggered")
+    scheduler.add(agent)
+
+    with pytest.raises(SchedulingError):
+        scheduler.get_next_agent()
+
+    scheduler.notify_event(agent)
+    assert scheduler.get_next_agent() is agent
+
+
+def test_conditional_scheduler_respects_agent_state():
+    scheduler = ConditionalScheduler()
+    ready = StubAgent("ready")
+    waiting = StubAgent("waiting")
+    ready.ready = True
+    waiting.ready = False
+
+    predicate = lambda agent: getattr(agent, "ready", False)
+    scheduler.add(ready, condition=predicate)
+    scheduler.add(waiting, condition=predicate)
+
+    assert scheduler.get_next_agent() is ready
+
+    waiting.ready = True
+    scheduler.set_condition(waiting, predicate)
+    assert scheduler.get_next_agent() is waiting
+
+
+def test_scheduler_registry_supports_custom_registration():
+    class CustomScheduler(RoundRobinScheduler):
+        pass
+
+    register_scheduler("custom_round_robin", CustomScheduler, overwrite=True)
+    try:
+        created = create_scheduler("custom_round_robin")
+        assert isinstance(created, CustomScheduler)
+        assert isinstance(create_scheduler("CustomScheduler"), CustomScheduler)
+    finally:
+        unregister_scheduler("custom_round_robin")
