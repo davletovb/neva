@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Iterable, List
+from typing import Iterable
 
 from neva.utils.exceptions import (
     PromptValidationError,
@@ -32,7 +32,7 @@ class PromptValidator:
     )
 
     def __post_init__(self) -> None:
-        self._compiled_patterns: List[re.Pattern[str]] = [
+        self._compiled_patterns: list[re.Pattern[str]] = [
             re.compile(pattern, flags=re.IGNORECASE) for pattern in self.forbidden_patterns
         ]
 
