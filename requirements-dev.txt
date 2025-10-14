@@ -3,5 +3,12 @@ pytest==7.4.2
 coverage==7.3.2
 black==23.9.1
 mypy==1.6.1
+pytest-cov==4.1.0
+isort==5.12.0
+flake8==6.1.0
+pre-commit==3.4.0
+bandit==1.7.5
+sphinx==7.2.6
+types-requests==2.31.0.7
 opentelemetry-api==1.23.0
 opentelemetry-sdk==1.23.0

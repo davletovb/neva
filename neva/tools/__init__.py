@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from neva.agents.base import Tool
+
 from .math import MathTool
 from .summarizer import SummarizerTool
 from .translator import TranslatorTool
@@ -12,4 +14,5 @@ __all__ = [
     "SummarizerTool",
     "TranslatorTool",
     "WikipediaTool",
+    "Tool",
 ]

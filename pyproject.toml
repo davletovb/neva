@@ -29,6 +29,13 @@ black = "23.9.1"
 coverage = "7.3.2"
 mypy = "1.6.1"
 pytest = "7.4.2"
+pytest-cov = "4.1.0"
+isort = "5.12.0"
+flake8 = "6.1.0"
+pre-commit = "3.4.0"
+bandit = "1.7.5"
+sphinx = "7.2.6"
+types-requests = "2.31.0.7"
 
 [tool.poetry.extras]
 tools = ["wikipedia", "deep-translator", "transformers"]
@@ -51,5 +58,32 @@ line-length = 100
 target-version = ["py38"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --cov=neva --cov-report=term-missing --cov-report=xml --cov-report=html --cov-fail-under=80"
 testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+combine_as_imports = true
+known_first_party = ["neva"]
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
+strict = false
+follow_imports = "silent"
+show_error_codes = true
+plugins = []
+
+[tool.bandit]
+skips = ["B101"]
+
+[tool.coverage.run]
+omit = [
+    "neva/agents/gpt.py",
+    "neva/memory/faiss_vector_store.py",
+]

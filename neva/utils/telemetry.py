@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from neva.utils.exceptions import MissingDependencyError
 
@@ -107,6 +107,105 @@ class _NoOpCounter:
         return
 
 
+@dataclass
+class _FallbackSpan:
+    """Span implementation used when OpenTelemetry is unavailable."""
+
+    attributes: Dict[str, Any]
+    events: List[Tuple[str, Dict[str, Any]]] = field(default_factory=list)
+    ended: bool = False
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self.attributes[key] = value
+
+    def add_event(self, name: str, attributes: Optional[Mapping[str, Any]] = None) -> None:
+        self.events.append((name, dict(attributes or {})))
+
+    def end(self) -> None:
+        self.ended = True
+
+
+class _FallbackSpanContext:
+    def __init__(self, span: _FallbackSpan):
+        self._span = span
+
+    def __enter__(self) -> _FallbackSpan:
+        return self._span
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> bool:
+        self._span.end()
+        return False
+
+
+class _FallbackTracer:
+    def __init__(self) -> None:
+        self.started: List[Tuple[str, _FallbackSpan]] = []
+
+    def start_span(self, name: str, attributes: Optional[Mapping[str, Any]] = None) -> _FallbackSpan:
+        span = _FallbackSpan(dict(attributes or {}))
+        self.started.append((name, span))
+        return span
+
+    def start_as_current_span(
+        self,
+        name: str,
+        context: Optional[Any] = None,
+        attributes: Optional[Mapping[str, Any]] = None,
+        kind: Optional[Any] = None,
+    ) -> _FallbackSpanContext:
+        span = self.start_span(name, attributes=attributes)
+        span.attributes["span.kind"] = kind
+        span.attributes["span.context"] = context
+        return _FallbackSpanContext(span)
+
+
+class _FallbackHistogram:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.records: List[Tuple[Any, Dict[str, Any]]] = []
+
+    def record(self, value: Any, attributes: Optional[Mapping[str, Any]] = None) -> None:
+        self.records.append((value, dict(attributes or {})))
+
+
+class _FallbackCounter:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.records: List[Tuple[Any, Dict[str, Any]]] = []
+
+    def add(self, value: Any, attributes: Optional[Mapping[str, Any]] = None) -> None:
+        self.records.append((value, dict(attributes or {})))
+
+
+class _FallbackMeter:
+    def __init__(self) -> None:
+        self.histograms: Dict[str, _FallbackHistogram] = {}
+        self.counters: Dict[str, _FallbackCounter] = {}
+
+    def create_histogram(self, name: str, **_kwargs: Any) -> _FallbackHistogram:
+        instrument = _FallbackHistogram(name)
+        self.histograms[name] = instrument
+        return instrument
+
+    def create_counter(self, name: str, **_kwargs: Any) -> _FallbackCounter:
+        instrument = _FallbackCounter(name)
+        self.counters[name] = instrument
+        return instrument
+
+
+class _FallbackStructuredLogger:
+    def __init__(self) -> None:
+        self.records: List[Tuple[str, Dict[str, Any]]] = []
+
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        rendered = msg % args if args else msg
+        payload = dict(kwargs.get("extra", {}))
+        self.records.append((rendered, payload))
+
+    def debug(self, *_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - compatibility shim.
+        return
+
+
 def _estimate_tokens(text: Optional[str]) -> int:
     """Rough token estimation that works without backend specific tooling."""
 
@@ -177,68 +276,105 @@ class TelemetryManager:
         meter: Optional[Meter] = None,
         structured_logger: Optional[logging.Logger] = None,
     ) -> None:
-        modules = _require_opentelemetry()
+        manual_instrumentation = (
+            tracer is not None
+            and meter is not None
+            and structured_logger is not None
+            and tracer_provider is None
+            and meter_provider is None
+            and logger_provider is None
+            and span_exporter is None
+            and log_exporter is None
+            and not metric_readers
+        )
 
-        resource_attributes = dict(resource_attributes or {})
-        if modules.service_name_const not in resource_attributes:
-            resource_attributes[modules.service_name_const] = service_name
-        resource = modules.resource_cls.create(resource_attributes)
+        modules: Optional[_OpenTelemetryModules]
+        if manual_instrumentation:
+            modules = None
+        else:
+            try:
+                modules = _require_opentelemetry()
+            except MissingDependencyError:
+                modules = None
 
-        self._trace_api = modules.trace
-        self._metrics_api = modules.metrics
-        self._set_span_in_context = modules.set_span_in_context
-        self._span_kind = modules.span_kind
         self._conversation_spans: Dict[str, Span] = {}
-
         self._owns_tracer_provider = False
         self._owns_meter_provider = False
         self._owns_logger_provider = False
 
-        if tracer_provider is None and tracer is None:
-            tracer_provider = modules.tracer_provider_cls(resource=resource)
-            if span_exporter is not None:
-                processor = modules.batch_span_processor_cls(span_exporter)
-                tracer_provider.add_span_processor(processor)
-            modules.trace.set_tracer_provider(tracer_provider)
-            self._owns_tracer_provider = True
-        self._tracer_provider = tracer_provider
-        self._tracer: Tracer = tracer or modules.trace.get_tracer(__name__)
+        if modules is None:
+            class _SpanKindShim:
+                INTERNAL = "internal"
+                CLIENT = "client"
 
-        readers = list(metric_readers or [])
-        if meter_provider is None and meter is None:
-            meter_provider = modules.meter_provider_cls(resource=resource, metric_readers=readers)
-            modules.metrics.set_meter_provider(meter_provider)
-            self._owns_meter_provider = True
-        self._meter_provider = meter_provider
-        self._meter: Meter = meter or modules.metrics.get_meter(__name__)
-
-        if logger_provider is None and structured_logger is None:
-            logger_provider = modules.logger_provider_cls(resource=resource)
-            if log_exporter is not None:
-                processor = modules.batch_log_processor_cls(log_exporter)
-                logger_provider.add_log_record_processor(processor)
-            modules.logs.set_logger_provider(logger_provider)
-            self._owns_logger_provider = True
-        self._logger_provider = logger_provider
-
-        self._logging_handler: Optional[Any] = None
-        if structured_logger is None and logger_provider is not None:
-            handler = modules.logging_handler_cls(level=logging.NOTSET, logger_provider=logger_provider)
-            telemetry_logger = logging.getLogger("neva.telemetry")
-            telemetry_logger.setLevel(logging.INFO)
-            telemetry_logger.propagate = False
-            # Remove any stale telemetry handlers to avoid duplicate emission.
-            telemetry_logger.handlers = [
-                existing
-                for existing in telemetry_logger.handlers
-                if not isinstance(existing, modules.logging_handler_cls)
-            ]
-            telemetry_logger.addHandler(handler)
-            self._logging_handler = handler
-            self._structured_logger = telemetry_logger
+            self._trace_api = None
+            self._metrics_api = None
+            self._set_span_in_context = lambda span: span
+            self._span_kind = _SpanKindShim()
+            self._tracer_provider = None
+            self._meter_provider = None
+            self._logger_provider = None
+            self._tracer = tracer or _FallbackTracer()
+            self._meter = meter or _FallbackMeter()
+            self._structured_logger = structured_logger or _FallbackStructuredLogger()
+            self._logging_handler = None
         else:
-            self._structured_logger = structured_logger
+            resource_attributes = dict(resource_attributes or {})
+            if modules.service_name_const not in resource_attributes:
+                resource_attributes[modules.service_name_const] = service_name
+            resource = modules.resource_cls.create(resource_attributes)
 
+            self._trace_api = modules.trace
+            self._metrics_api = modules.metrics
+            self._set_span_in_context = modules.set_span_in_context
+            self._span_kind = modules.span_kind
+
+            if tracer_provider is None and tracer is None:
+                tracer_provider = modules.tracer_provider_cls(resource=resource)
+                if span_exporter is not None:
+                    processor = modules.batch_span_processor_cls(span_exporter)
+                    tracer_provider.add_span_processor(processor)
+                modules.trace.set_tracer_provider(tracer_provider)
+                self._owns_tracer_provider = True
+            self._tracer_provider = tracer_provider
+            self._tracer = tracer or modules.trace.get_tracer(__name__)
+
+            readers = list(metric_readers or [])
+            if meter_provider is None and meter is None:
+                meter_provider = modules.meter_provider_cls(resource=resource, metric_readers=readers)
+                modules.metrics.set_meter_provider(meter_provider)
+                self._owns_meter_provider = True
+            self._meter_provider = meter_provider
+            self._meter = meter or modules.metrics.get_meter(__name__)
+
+            if logger_provider is None and structured_logger is None:
+                logger_provider = modules.logger_provider_cls(resource=resource)
+                if log_exporter is not None:
+                    processor = modules.batch_log_processor_cls(log_exporter)
+                    logger_provider.add_log_record_processor(processor)
+                modules.logs.set_logger_provider(logger_provider)
+                self._owns_logger_provider = True
+            self._logger_provider = logger_provider
+
+            if structured_logger is None and logger_provider is not None:
+                handler = modules.logging_handler_cls(level=logging.NOTSET, logger_provider=logger_provider)
+                telemetry_logger = logging.getLogger("neva.telemetry")
+                telemetry_logger.setLevel(logging.INFO)
+                telemetry_logger.propagate = False
+                # Remove any stale telemetry handlers to avoid duplicate emission.
+                telemetry_logger.handlers = [
+                    existing
+                    for existing in telemetry_logger.handlers
+                    if not isinstance(existing, modules.logging_handler_cls)
+                ]
+                telemetry_logger.addHandler(handler)
+                self._logging_handler = handler
+                self._structured_logger = telemetry_logger
+            else:
+                self._logging_handler = None
+                self._structured_logger = structured_logger
+
+        self._log_payload_direct = modules is None or structured_logger is not None
         self._instruments = self._create_instruments()
 
     # ------------------------------------------------------------------
@@ -315,7 +451,10 @@ class TelemetryManager:
             return
         payload = {key: value for key, value in attributes.items() if value is not None}
         try:
-            self._structured_logger.info("%s", event, extra={"otel_attributes": payload})
+            if self._log_payload_direct:
+                self._structured_logger.info("%s", event, extra=payload)
+            else:
+                self._structured_logger.info("%s", event, extra={"otel_attributes": payload})
         except Exception:  # pragma: no cover - defensive logging guard.
             logger.debug("Failed to emit telemetry log", exc_info=True)
 

@@ -1,6 +1,7 @@
 # Neva: Creating Multi-Agent Simulations with Large Language Models!
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen.svg)](#testing--quality-assurance)
 [![Issues](https://img.shields.io/github/issues/davletovb/neva)](https://github.com/davletovb/neva/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/davletovb/neva)](https://github.com/davletovb/neva/commits/master)
 [![Contributors](https://img.shields.io/github/contributors/davletovb/neva)](https://github.com/davletovb/neva/graphs/contributors)
@@ -19,6 +20,7 @@ Want to create worlds where AI agents come alive? 🤖 Our open-source library l
 - [Why Neva?](#why-neva)
 - [Quickstart 🚀](#quickstart-)
 - [Installation](#installation)
+- [Testing & Quality Assurance](#testing--quality-assurance)
 - [Usage](#usage)
 - [Features](#features)
 - [Get Involved 🤝](#get-involved-)
@@ -135,6 +137,30 @@ Prefer `pip`? The same extras are available via `pip install .[tools]`,
 `pip install .[providers]`, or `pip install .[all]`. Updated
 `requirements-*.txt` files are provided for
 environments that cannot yet adopt Poetry.
+
+## Testing & Quality Assurance
+
+Comprehensive automated checks keep the codebase healthy and maintain a minimum of 80% test coverage. The following commands mirror the CI pipeline and can be executed locally after installing the development dependencies with `pip install -r requirements-dev.txt` or `poetry install --with dev`:
+
+```bash
+# Run the complete pytest suite with coverage reports (HTML in htmlcov/ and XML in coverage.xml)
+pytest
+
+# Execute formatting, import-sorting, linting, typing, and security checks individually
+black --check .
+isort --check-only .
+flake8
+mypy neva
+bandit -r neva
+
+# Run the equivalent pre-commit hooks
+pre-commit run --all-files
+
+# Build the documentation locally
+sphinx-build -b html docs docs/_build/html
+```
+
+Generated coverage reports appear in `coverage.xml` and the `htmlcov/` directory. The coverage badge above reflects the guaranteed baseline enforced by CI.
 
 ### Developer Setup
 
