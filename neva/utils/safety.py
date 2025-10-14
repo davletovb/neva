@@ -18,7 +18,6 @@ CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 def sanitize_input(text: str) -> str:
     """Remove control characters that can break terminal logs or JSON."""
-
     return CONTROL_CHARS_RE.sub("", text)
 
 
