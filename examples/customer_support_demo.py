@@ -89,9 +89,7 @@ def make_support_agent_backend(
         else:
             update = "confirms patches deployed and prepares customer-ready summary"
             environment.log_step(name, update, status="Monitoring")
-        return (
-            f"triages the '{environment.issue}' ticket, {update}, and coordinates next actions."
-        )
+        return f"triages the '{environment.issue}' ticket, {update}, and coordinates next actions."
 
     return make_persona_backend(name, persona, formatter)
 

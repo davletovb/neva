@@ -10,14 +10,20 @@ openai_stub = types.ModuleType("openai")
 sys.modules["openai"] = openai_stub
 
 transformers_stub = types.ModuleType("transformers")
+
+
 class DummyAutoModel:
     @staticmethod
     def from_pretrained(*args, **kwargs):
         return None
+
+
 class DummyAutoTokenizer:
     @staticmethod
     def from_pretrained(*args, **kwargs):
         return None
+
+
 transformers_stub.AutoModelForSeq2SeqLM = DummyAutoModel
 transformers_stub.AutoTokenizer = DummyAutoTokenizer
 sys.modules["transformers"] = transformers_stub
@@ -98,9 +104,7 @@ def test_batch_communicate_supports_parallel_execution():
         )
         receiver_ids.append(str(receiver.id))
 
-    responses = manager.batch_communicate(
-        str(sender.id), receiver_ids, "Ping", concurrent=True
-    )
+    responses = manager.batch_communicate(str(sender.id), receiver_ids, "Ping", concurrent=True)
 
     assert set(responses) == set(receiver_ids)
     assert all(count == 1 for count in call_counts.values())

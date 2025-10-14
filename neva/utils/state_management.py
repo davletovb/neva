@@ -112,4 +112,3 @@ def _json_default(value: object) -> Any:
     if hasattr(value, "__dataclass_fields__"):
         return asdict(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")
-

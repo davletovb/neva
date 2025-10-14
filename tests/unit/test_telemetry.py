@@ -213,7 +213,10 @@ def test_record_agent_registration_and_scheduler_decision():
 
     assert tracer.started[0][0] == "neva.conversation"
     conversation_span = tracer.started[0][1]
-    assert ("agent.registered", {"agent.name": "sentinel", "agent.role": "observer"}) in conversation_span.events
+    assert (
+        "agent.registered",
+        {"agent.name": "sentinel", "agent.role": "observer"},
+    ) in conversation_span.events
 
     log_event, payload = logger.records[-1]
     assert log_event == "agent_registered"
@@ -228,12 +231,15 @@ def test_record_agent_registration_and_scheduler_decision():
     )
 
     _, scheduler_span = tracer.started[0]
-    assert ("scheduler.decision", {
-        "conversation.id": "conversation-42",
-        "scheduler.name": "round_robin",
-        "agent.name": "sentinel",
-        "decision.reason": "initial",
-    }) in scheduler_span.events
+    assert (
+        "scheduler.decision",
+        {
+            "conversation.id": "conversation-42",
+            "scheduler.name": "round_robin",
+            "agent.name": "sentinel",
+            "decision.reason": "initial",
+        },
+    ) in scheduler_span.events
 
     log_event, payload = logger.records[-1]
     assert log_event == "scheduler_decision"

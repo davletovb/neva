@@ -78,4 +78,3 @@ class RateLimiter:
                 self._last_check = time.monotonic()
             else:
                 self._allowance -= 1.0
-

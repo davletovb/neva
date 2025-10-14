@@ -42,9 +42,7 @@ class MathTool(Tool):
         if isinstance(node, ast.BinOp):
             op_type = type(node.op)
             if op_type not in _ALLOWED_OPERATORS:
-                raise ToolExecutionError(
-                    f"Unsupported operator: {op_type.__name__}"
-                )
+                raise ToolExecutionError(f"Unsupported operator: {op_type.__name__}")
             left = self._eval_node(node.left)
             right = self._eval_node(node.right)
             return _ALLOWED_OPERATORS[op_type](left, right)

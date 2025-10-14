@@ -33,9 +33,7 @@ class WeightedRandomScheduler(Scheduler):
             (weight, agent) for weight, agent in self._entries if not self.is_paused(agent)
         ]
         if not active_entries:
-            raise SchedulingError(
-                "WeightedRandomScheduler has no active agents to schedule."
-            )
+            raise SchedulingError("WeightedRandomScheduler has no active agents to schedule.")
 
         total_weight = sum(weight for weight, _ in active_entries)
         random_weight = random.uniform(0, total_weight)

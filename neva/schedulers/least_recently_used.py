@@ -27,9 +27,7 @@ class LeastRecentlyUsedScheduler(Scheduler):
 
     def get_next_agent(self) -> AIAgent:
         if not self._queue:
-            raise SchedulingError(
-                "LeastRecentlyUsedScheduler has no agents to schedule."
-            )
+            raise SchedulingError("LeastRecentlyUsedScheduler has no agents to schedule.")
 
         total_considered = len(self._queue)
         for _ in range(total_considered):
@@ -40,9 +38,7 @@ class LeastRecentlyUsedScheduler(Scheduler):
             self.record_metrics(agent)
             return agent
 
-        raise SchedulingError(
-            "LeastRecentlyUsedScheduler has no active agents to schedule."
-        )
+        raise SchedulingError("LeastRecentlyUsedScheduler has no active agents to schedule.")
 
     def _handle_agent_removal(self, agent: AIAgent) -> None:
         self._queue = [queued for queued in self._queue if queued is not agent]

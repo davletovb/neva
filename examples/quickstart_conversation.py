@@ -33,10 +33,7 @@ class ConversationEnvironment(BasicEnvironment):
 
     def context(self) -> str:
         if not self.transcript:
-            return (
-                "Introduce yourself and propose a collaborative goal for this "
-                "simulation."
-            )
+            return "Introduce yourself and propose a collaborative goal for this " "simulation."
         return "Conversation so far: " + " | ".join(self.transcript[-3:])
 
     def step(self) -> str | None:

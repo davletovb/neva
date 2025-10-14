@@ -46,7 +46,7 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     except Exception as exc:  # pragma: no cover - dependency missing at runtime.
         raise MissingDependencyError(
             "OpenTelemetry is required for telemetry support. Install the 'observability' extra "
-            "via `pip install neva[observability]` or `poetry install --extras \"observability\"`."
+            'via `pip install neva[observability]` or `poetry install --extras "observability"`.'
         ) from exc
 
     return _OpenTelemetryModules(
@@ -141,7 +141,9 @@ class _FallbackTracer:
     def __init__(self) -> None:
         self.started: List[Tuple[str, _FallbackSpan]] = []
 
-    def start_span(self, name: str, attributes: Optional[Mapping[str, Any]] = None) -> _FallbackSpan:
+    def start_span(
+        self, name: str, attributes: Optional[Mapping[str, Any]] = None
+    ) -> _FallbackSpan:
         span = _FallbackSpan(dict(attributes or {}))
         self.started.append((name, span))
         return span
@@ -303,6 +305,7 @@ class TelemetryManager:
         self._owns_logger_provider = False
 
         if modules is None:
+
             class _SpanKindShim:
                 INTERNAL = "internal"
                 CLIENT = "client"
@@ -341,7 +344,9 @@ class TelemetryManager:
 
             readers = list(metric_readers or [])
             if meter_provider is None and meter is None:
-                meter_provider = modules.meter_provider_cls(resource=resource, metric_readers=readers)
+                meter_provider = modules.meter_provider_cls(
+                    resource=resource, metric_readers=readers
+                )
                 modules.metrics.set_meter_provider(meter_provider)
                 self._owns_meter_provider = True
             self._meter_provider = meter_provider
@@ -357,7 +362,9 @@ class TelemetryManager:
             self._logger_provider = logger_provider
 
             if structured_logger is None and logger_provider is not None:
-                handler = modules.logging_handler_cls(level=logging.NOTSET, logger_provider=logger_provider)
+                handler = modules.logging_handler_cls(
+                    level=logging.NOTSET, logger_provider=logger_provider
+                )
                 telemetry_logger = logging.getLogger("neva.telemetry")
                 telemetry_logger.setLevel(logging.INFO)
                 telemetry_logger.propagate = False
@@ -427,7 +434,9 @@ class TelemetryManager:
             logger.debug("Failed to create one or more telemetry instruments", exc_info=True)
         return instruments
 
-    def _ensure_conversation_span(self, conversation_id: str, attributes: Optional[Mapping[str, Any]] = None) -> Span:
+    def _ensure_conversation_span(
+        self, conversation_id: str, attributes: Optional[Mapping[str, Any]] = None
+    ) -> Span:
         span = self._conversation_spans.get(conversation_id)
         if span is not None:
             if attributes:
@@ -527,7 +536,9 @@ class TelemetryManager:
             total_tokens = prompt_tokens + completion_tokens
         if context_tokens is None and conversation_state is not None:
             try:
-                context_tokens = sum(_estimate_tokens(turn.message) for turn in conversation_state.turns)
+                context_tokens = sum(
+                    _estimate_tokens(turn.message) for turn in conversation_state.turns
+                )
             except Exception:  # pragma: no cover - defensive guard.
                 context_tokens = None
         if reasoning_steps is None:
@@ -574,11 +585,15 @@ class TelemetryManager:
             if prompt_tokens:
                 self._instruments.prompt_tokens.add(int(prompt_tokens), attributes=metric_attrs)
             if completion_tokens:
-                self._instruments.completion_tokens.add(int(completion_tokens), attributes=metric_attrs)
+                self._instruments.completion_tokens.add(
+                    int(completion_tokens), attributes=metric_attrs
+                )
             if total_tokens:
                 self._instruments.total_tokens.add(int(total_tokens), attributes=metric_attrs)
             if context_tokens:
-                self._instruments.context_tokens.record(int(context_tokens), attributes=metric_attrs)
+                self._instruments.context_tokens.record(
+                    int(context_tokens), attributes=metric_attrs
+                )
         except Exception:  # pragma: no cover - defensive guard around metric emission.
             logger.debug("Failed to record telemetry metrics for agent turn", exc_info=True)
 
@@ -654,11 +669,15 @@ class TelemetryManager:
             if prompt_tokens:
                 self._instruments.prompt_tokens.add(int(prompt_tokens), attributes=metric_attrs)
             if completion_tokens:
-                self._instruments.completion_tokens.add(int(completion_tokens), attributes=metric_attrs)
+                self._instruments.completion_tokens.add(
+                    int(completion_tokens), attributes=metric_attrs
+                )
             if total_tokens:
                 self._instruments.total_tokens.add(int(total_tokens), attributes=metric_attrs)
             if context_tokens:
-                self._instruments.context_tokens.record(int(context_tokens), attributes=metric_attrs)
+                self._instruments.context_tokens.record(
+                    int(context_tokens), attributes=metric_attrs
+                )
         except Exception:  # pragma: no cover - defensive guard.
             logger.debug("Failed to record telemetry metrics for LLM call", exc_info=True)
 

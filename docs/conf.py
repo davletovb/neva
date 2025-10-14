@@ -18,7 +18,9 @@ copyright = f"{current_year}, {author}"
 
 try:
     release = metadata.version("neva")
-except metadata.PackageNotFoundError:  # pragma: no cover - metadata unavailable when building locally
+except (
+    metadata.PackageNotFoundError
+):  # pragma: no cover - metadata unavailable when building locally
     release = "0.1.0"
 
 extensions = [

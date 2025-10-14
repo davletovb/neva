@@ -11,6 +11,7 @@ from neva.utils.exceptions import CacheConfigurationError
 openai_stub = types.ModuleType("openai")
 sys.modules.setdefault("openai", openai_stub)
 
+
 def test_llm_cache_behaves_as_lru() -> None:
     cache = LLMCache(max_size=2)
     cache.set("a", "1")

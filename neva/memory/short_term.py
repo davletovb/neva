@@ -23,9 +23,7 @@ class ShortTermMemory(MemoryModule):
     def remember(
         self, speaker: str, message: str, *, metadata: Optional[Dict[str, object]] = None
     ) -> None:
-        self._entries.append(
-            MemoryRecord(speaker=speaker, message=message, metadata=metadata)
-        )
+        self._entries.append(MemoryRecord(speaker=speaker, message=message, metadata=metadata))
 
     def recall(
         self,

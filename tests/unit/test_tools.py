@@ -19,7 +19,9 @@ def test_math_tool_rejects_invalid_expression():
 
 def test_translator_tool_uses_injected_backend():
     def factory():
-        return SimpleNamespace(translate=lambda text, dest=None: SimpleNamespace(text=f"{text}-{dest}"))
+        return SimpleNamespace(
+            translate=lambda text, dest=None: SimpleNamespace(text=f"{text}-{dest}")
+        )
 
     tool = TranslatorTool(translator_factory=factory, target_language="fr")
     assert tool.use("hello") == "hello-fr"

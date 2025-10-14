@@ -44,7 +44,9 @@ class EventDrivenScheduler(Scheduler):
         raise SchedulingError("EventDrivenScheduler has no pending events to schedule.")
 
     def _handle_agent_removal(self, agent: AIAgent) -> None:
-        self._event_queue = deque(existing for existing in self._event_queue if existing is not agent)
+        self._event_queue = deque(
+            existing for existing in self._event_queue if existing is not agent
+        )
 
 
 __all__ = ["EventDrivenScheduler"]

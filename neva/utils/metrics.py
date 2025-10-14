@@ -80,9 +80,7 @@ class ResponseTimeTracker:
         return statistics.mean(self.durations) if self.durations else 0.0
 
 
-def profile_memory_usage(
-    func: Callable[..., Any], *args: Any, **kwargs: Any
-) -> Tuple[int, int]:
+def profile_memory_usage(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Tuple[int, int]:
     """Run ``func`` and return (current, peak) memory usage in KiB."""
 
     tracemalloc.start()
@@ -106,4 +104,3 @@ def batch_prompt_summary(prompts: Iterable[str]) -> Dict[str, int]:
         "avg_length": int(statistics.mean(lengths)),
         "avg_tokens": int(statistics.mean(token_estimates)),
     }
-

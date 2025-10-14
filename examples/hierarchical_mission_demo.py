@@ -38,9 +38,12 @@ class MissionControlEnvironment(TranscriptEnvironment):
         return directive
 
     def context(self) -> str:  # type: ignore[override]
-        progress = ", ".join(
-            f"{agent}: {status}" for agent, status in sorted(self.state["progress"].items())
-        ) or "No updates yet"
+        progress = (
+            ", ".join(
+                f"{agent}: {status}" for agent, status in sorted(self.state["progress"].items())
+            )
+            or "No updates yet"
+        )
         return (
             f"Active directive: {self.state['directive']}. "
             f"Progress so far: {progress}. "

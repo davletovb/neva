@@ -35,9 +35,12 @@ class QuestEncounterEnvironment(TranscriptEnvironment):
 
     def context(self) -> str:  # type: ignore[override]
         encounter, threat = self._current_encounter()
-        status = ", ".join(
-            f"{agent}: {state}" for agent, state in sorted(self.state["team_status"].items())
-        ) or "Awaiting orders"
+        status = (
+            ", ".join(
+                f"{agent}: {state}" for agent, state in sorted(self.state["team_status"].items())
+            )
+            or "Awaiting orders"
+        )
         return (
             f"Active encounter: {encounter} (threat {threat}). "
             f"Team status: {status}. "

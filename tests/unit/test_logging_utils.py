@@ -39,7 +39,9 @@ def test_configure_logging_sets_json_formatter_and_level():
             super().__init__(stream)
             self.formatted: list[str] = []
 
-        def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - uses base implementation.
+        def emit(
+            self, record: logging.LogRecord
+        ) -> None:  # pragma: no cover - uses base implementation.
             message = self.format(record)
             self.formatted.append(message)
             stream.write(message + "\n")
