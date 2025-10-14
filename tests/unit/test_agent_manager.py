@@ -28,7 +28,7 @@ transformers_stub.AutoModelForSeq2SeqLM = DummyAutoModel
 transformers_stub.AutoTokenizer = DummyAutoTokenizer
 sys.modules["transformers"] = transformers_stub
 
-from neva.agents import AgentManager, ParallelExecutionConfig, TransformerAgent, GPTAgent
+from neva.agents import AgentManager, GPTAgent, ParallelExecutionConfig, TransformerAgent
 from neva.utils.exceptions import AgentCreationError
 
 

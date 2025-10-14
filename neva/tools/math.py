@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import ast
-import operator
 import logging
+import operator
 from typing import Callable, Dict
 
 from neva.agents.base import Tool
 from neva.utils.exceptions import ToolExecutionError
-
 
 logger = logging.getLogger(__name__)
 

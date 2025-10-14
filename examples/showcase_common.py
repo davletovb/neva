@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 from importlib import import_module
 from pathlib import Path
-import sys
 from typing import Callable, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

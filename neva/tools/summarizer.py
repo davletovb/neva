@@ -10,7 +10,6 @@ from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
 
 from .utils import missing_dependency_message
 
-
 logger = logging.getLogger(__name__)
 
 

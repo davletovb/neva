@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, List, Optional, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, List, Optional, Set
 
 from neva.agents.base import AIAgent
 
