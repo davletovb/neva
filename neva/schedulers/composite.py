@@ -17,9 +17,7 @@ if False:  # pragma: no cover - for type checking only
 class CompositeScheduler(Scheduler):
     """Coordinate multiple sub-schedulers managing agent sub-groups."""
 
-    def __init__(
-        self, group_scheduler_factory: Optional[Callable[[], Scheduler]] = None
-    ) -> None:
+    def __init__(self, group_scheduler_factory: Optional[Callable[[], Scheduler]] = None) -> None:
         super().__init__()
         self.simulation_observer = SimulationObserver()
         self._group_scheduler_factory: Callable[[], Scheduler] = (

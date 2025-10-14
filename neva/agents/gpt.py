@@ -90,9 +90,7 @@ class GPTAgent(AIAgent):
                     duration = perf_counter() - start
                     prompt_tokens = response_tokens = total_tokens = 0
                     if self._token_tracker is not None:
-                        prompt_tokens, response_tokens = self._token_tracker.record(
-                            prompt, content
-                        )
+                        prompt_tokens, response_tokens = self._token_tracker.record(prompt, content)
                         total_tokens = prompt_tokens + response_tokens
                     if self._cost_tracker is not None and total_tokens:
                         self._cost_tracker.add_usage(self.model, total_tokens)
@@ -135,7 +133,7 @@ class GPTAgent(AIAgent):
                     last_error = exc
                     if attempt > self._max_retries:
                         raise BackendError("LLM call failed") from exc
-                    sleep_time = min(30.0, self._retry_backoff ** attempt)
+                    sleep_time = min(30.0, self._retry_backoff**attempt)
                     self._logger.warning(
                         "Retrying LLM call due to error", extra={"error": str(exc)}
                     )
@@ -204,7 +202,11 @@ class GPTAgent(AIAgent):
             raise BackendError("Anthropic provider returned no content.")
         parts = []
         for block in content_blocks:
-            text = getattr(block, "text", None) or block.get("text") if isinstance(block, dict) else None
+            text = (
+                getattr(block, "text", None) or block.get("text")
+                if isinstance(block, dict)
+                else None
+            )
             if text:
                 parts.append(text)
         content = "".join(parts).strip()

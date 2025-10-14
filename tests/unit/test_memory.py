@@ -178,4 +178,3 @@ def test_memory_budget_limits_embedding_calls():
         memory.remember("user", f"item-{idx}")
 
     assert embed_calls == 2
-

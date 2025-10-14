@@ -39,9 +39,13 @@ class ProductivityEnvironment(TranscriptEnvironment):
     def context(self) -> str:  # type: ignore[override]
         active = self.state["active_task"] or "None"
         backlog_preview = ", ".join(list(self.backlog)[:2]) or "Empty"
-        progress = ", ".join(
-            f"{agent}: {status}" for agent, status in sorted(self.state["swarm_progress"].items())
-        ) or "No updates yet"
+        progress = (
+            ", ".join(
+                f"{agent}: {status}"
+                for agent, status in sorted(self.state["swarm_progress"].items())
+            )
+            or "No updates yet"
+        )
         completed = ", ".join(self.state["completed_tasks"][-2:]) or "None"
         return (
             f"Active task: {active}. Backlog preview: {backlog_preview}. "

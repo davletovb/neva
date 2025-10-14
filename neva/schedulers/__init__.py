@@ -42,9 +42,7 @@ def _resolve_to_canonical(name: str) -> str:
         return alias_target
 
     available = ", ".join(sorted(_REGISTRY)) or "<none>"
-    raise ConfigurationError(
-        f"Unknown scheduler '{name}'. Available schedulers: {available}."
-    )
+    raise ConfigurationError(f"Unknown scheduler '{name}'. Available schedulers: {available}.")
 
 
 def register_scheduler(

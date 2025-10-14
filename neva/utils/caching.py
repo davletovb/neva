@@ -38,4 +38,3 @@ class LLMCache:
     def clear(self) -> None:
         with self._lock:
             self._store.clear()
-

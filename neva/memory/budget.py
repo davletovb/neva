@@ -55,6 +55,7 @@ class MemoryBudget:
                 token_counts.pop(record_id, None)
 
         if self.max_tokens is not None:
+
             def total_tokens() -> int:
                 return sum(token_counts[record_id] for record_id, _ in history)
 

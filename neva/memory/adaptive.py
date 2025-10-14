@@ -146,9 +146,7 @@ class AdaptiveConversationMemory(MemoryModule):
             if speaker is None or record.speaker == speaker:
                 yield record
 
-    def recent_window(
-        self, size: int, *, speaker: Optional[str] = None
-    ) -> List[MemoryRecord]:
+    def recent_window(self, size: int, *, speaker: Optional[str] = None) -> List[MemoryRecord]:
         """Return the most recent ``size`` records, optionally filtered."""
 
         if size <= 0:
@@ -161,9 +159,7 @@ class AdaptiveConversationMemory(MemoryModule):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _maybe_store_semantic(
-        self, record_id: int, record: MemoryRecord
-    ) -> None:
+    def _maybe_store_semantic(self, record_id: int, record: MemoryRecord) -> None:
         if self._embedder is None:
             return
 

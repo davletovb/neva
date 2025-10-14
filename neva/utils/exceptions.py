@@ -93,4 +93,3 @@ class ToolExecutionError(ToolError):
 
 class ToolNotFoundError(ToolError):
     """Raised when attempting to use a tool that is not registered."""
-

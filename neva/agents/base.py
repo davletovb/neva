@@ -148,9 +148,7 @@ class AIAgent(ABC):
         self._memory: Optional[MemoryModule] = None
         self._cache = cache
         self._prompt_validator = prompt_validator or PromptValidator()
-        self._conversation_state = conversation_state or ConversationState(
-            agent_name=self.name
-        )
+        self._conversation_state = conversation_state or ConversationState(agent_name=self.name)
         self._response_time_tracker = response_time_tracker or ResponseTimeTracker()
         if memory is not None:
             self.set_memory(memory)
@@ -195,9 +193,7 @@ class AIAgent(ABC):
         if not self.tools:
             return "No tools are currently available."
 
-        descriptions = ", ".join(
-            f"{tool.name} ({tool.description})" for tool in self.tools
-        )
+        descriptions = ", ".join(f"{tool.name} ({tool.description})" for tool in self.tools)
         return f"Available tools: {descriptions}."
 
     def get_tool(self, name: str) -> Tool:
@@ -241,18 +237,12 @@ class AIAgent(ABC):
         """Invoke a registered tool using a standardised interface."""
 
         tool = self.get_tool(call.name)
-        arguments = (
-            dict(call.arguments)
-            if not isinstance(call.arguments, str)
-            else call.arguments
-        )
+        arguments = dict(call.arguments) if not isinstance(call.arguments, str) else call.arguments
         payload = self._normalise_tool_input(arguments)
         try:
             output = tool.use(payload)
         except ToolExecutionError as exc:
-            logger.warning(
-                "Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc
-            )
+            logger.warning("Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc)
             return ToolResponse(
                 name=tool.name,
                 arguments=arguments,
@@ -447,17 +437,13 @@ class AIAgent(ABC):
         """Asynchronously generate a response and persist the exchange."""
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.receive(message, sender=sender)
-        )
+        return await loop.run_in_executor(None, lambda: self.receive(message, sender=sender))
 
 
 class AgentManager:
     """Create and coordinate agents within a simulation."""
 
-    def __init__(
-        self, parallel_config: Optional[ParallelExecutionConfig] = None
-    ) -> None:
+    def __init__(self, parallel_config: Optional[ParallelExecutionConfig] = None) -> None:
         self.agents: Dict[str, AIAgent] = {}
         self.groups: Dict[str, List[str]] = {}
         self.parallel_config = parallel_config or ParallelExecutionConfig()
@@ -539,15 +525,11 @@ class AgentManager:
         if not receiver_list:
             return {}
 
-        concurrent = (
-            self.parallel_config.enabled if concurrent is None else concurrent
-        )
+        concurrent = self.parallel_config.enabled if concurrent is None else concurrent
         if not concurrent:
             responses: Dict[str, str] = {}
             for receiver_id in receiver_list:
-                responses[receiver_id] = self.communicate(
-                    sender_id, receiver_id, message
-                )
+                responses[receiver_id] = self.communicate(sender_id, receiver_id, message)
             return responses
 
         responses: Dict[str, str] = {}
@@ -604,9 +586,7 @@ class AgentManager:
         try:
             method = getattr(agent, action)
         except AttributeError as exc:
-            raise AgentActionError(
-                f"Agent {agent_id} has no action named '{action}'"
-            ) from exc
+            raise AgentActionError(f"Agent {agent_id} has no action named '{action}'") from exc
         try:
             method(*args, **kwargs)
         except Exception as exc:

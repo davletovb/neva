@@ -122,4 +122,3 @@ def configure_logging(
         root_logger.addHandler(handler)
 
     root_logger.setLevel(level)
-

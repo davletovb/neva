@@ -10,7 +10,18 @@ from datetime import datetime
 from functools import wraps
 from time import perf_counter
 from types import MethodType
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Protocol, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Protocol,
+    cast,
+)
 
 from neva.utils.exceptions import MissingDependencyError
 from neva.utils.telemetry import get_telemetry
@@ -72,28 +83,34 @@ class SimulationObserver:
         self._tool_usage_events: List[Dict[str, Any]] = []
         self._wrapped_tools: Dict[int, Callable[..., Any]] = {}
         self._latest_agent_name: Optional[str] = None
-        self._sentiment_positive_words = set(sentiment_positive_words or {
-            "achieve",
-            "awesome",
-            "collaborate",
-            "creative",
-            "excellent",
-            "great",
-            "progress",
-            "success",
-            "wonderful",
-        })
-        self._sentiment_negative_words = set(sentiment_negative_words or {
-            "angry",
-            "bad",
-            "conflict",
-            "difficult",
-            "fail",
-            "frustrated",
-            "issue",
-            "problem",
-            "struggle",
-        })
+        self._sentiment_positive_words = set(
+            sentiment_positive_words
+            or {
+                "achieve",
+                "awesome",
+                "collaborate",
+                "creative",
+                "excellent",
+                "great",
+                "progress",
+                "success",
+                "wonderful",
+            }
+        )
+        self._sentiment_negative_words = set(
+            sentiment_negative_words
+            or {
+                "angry",
+                "bad",
+                "conflict",
+                "difficult",
+                "fail",
+                "frustrated",
+                "issue",
+                "problem",
+                "struggle",
+            }
+        )
         self._sentiment_warning_emitted = False
 
         if enable_builtin_metrics:
@@ -150,9 +167,7 @@ class SimulationObserver:
             "latencies": list(self._latencies),
             "turn_count": self._turn_count,
             "participation": dict(self._participation),
-            "tool_usage": {
-                agent: dict(counter) for agent, counter in self._tool_usage.items()
-            },
+            "tool_usage": {agent: dict(counter) for agent, counter in self._tool_usage.items()},
             "tool_usage_events": list(self._tool_usage_events),
             "timestamp": now,
         }
@@ -388,9 +403,7 @@ class SimulationObserver:
             context: Optional[ContextDict] = None,
         ) -> Dict[str, Dict[str, int]]:
             if context is None:
-                return {
-                    agent: dict(counter) for agent, counter in self._tool_usage.items()
-                }
+                return {agent: dict(counter) for agent, counter in self._tool_usage.items()}
             usage = context.get("tool_usage", {})
             return {
                 agent: {tool: int(count) for tool, count in counters.items()}
@@ -430,13 +443,10 @@ class SimulationObserver:
             if lowered.startswith("let's") or "let us" in lowered or lowered.startswith("please"):
                 return "collaboration"
             if any(
-                lowered.startswith(prefix)
-                for prefix in ("do ", "please", "consider", "review")
+                lowered.startswith(prefix) for prefix in ("do ", "please", "consider", "review")
             ):
                 return "request"
-            if any(
-                lowered.startswith(prefix) for prefix in ("plan", "we should", "let's")
-            ):
+            if any(lowered.startswith(prefix) for prefix in ("plan", "we should", "let's")):
                 return "planning"
             return "statement"
 
