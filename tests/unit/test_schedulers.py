@@ -116,6 +116,7 @@ def test_conditional_scheduler_respects_agent_state():
 
     def predicate(agent: StubAgent) -> bool:
         return getattr(agent, "ready", False)
+
     scheduler.add(ready, condition=predicate)
     scheduler.add(waiting, condition=predicate)
 

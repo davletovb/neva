@@ -24,6 +24,7 @@ class ConditionalScheduler(Scheduler):
     def add(self, agent: AIAgent, **kwargs: object) -> None:
         condition = kwargs.get("condition") or kwargs.get("predicate")
         if condition is None:
+
             def _always_true(_: AIAgent) -> bool:
                 return True
 
