@@ -9,7 +9,6 @@ from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import ConfigurationError, SchedulingError
 from neva.utils.observer import SimulationObserver
 
-
 Condition = Callable[[AIAgent], bool]
 
 

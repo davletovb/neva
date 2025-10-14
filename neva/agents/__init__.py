@@ -1,9 +1,9 @@
 """Agent implementations and supporting abstractions."""
 
 from .base import (
-    AIAgent,
     AgentFactory,
     AgentManager,
+    AIAgent,
     InteractionHistory,
     LLMBackend,
     ParallelExecutionConfig,

@@ -1,7 +1,5 @@
 import pytest
 
-import pytest
-
 from neva.utils import safety
 from neva.utils.exceptions import PromptValidationError
 

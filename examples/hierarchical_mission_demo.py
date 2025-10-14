@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from examples.showcase_common import TranscriptEnvironment, make_persona_backend, run_simulation
 from neva.agents import AgentManager
 from neva.schedulers import RoundRobinScheduler
-
-from examples.showcase_common import TranscriptEnvironment, make_persona_backend, run_simulation
 
 
 class MissionControlEnvironment(TranscriptEnvironment):

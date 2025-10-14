@@ -29,17 +29,14 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     """Import OpenTelemetry modules lazily to keep the dependency optional."""
 
     try:
-        from opentelemetry import logs as otel_logs
-        from opentelemetry import metrics as otel_metrics
-        from opentelemetry import trace as otel_trace
+        from opentelemetry import logs as otel_logs, metrics as otel_metrics, trace as otel_trace
         from opentelemetry.context import Context, set_span_in_context
         from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogExporter
         from opentelemetry.sdk._logs.logging import LoggingHandler
         from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import MetricReader
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.resources import SERVICE_NAME as OTEL_SERVICE_NAME
+        from opentelemetry.sdk.resources import SERVICE_NAME as OTEL_SERVICE_NAME, Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
         from opentelemetry.trace import SpanKind
