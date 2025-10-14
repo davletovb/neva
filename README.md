@@ -55,19 +55,27 @@ lightweight sentiment/intent analysis) and writes them to
 
 ### Expanded showcases
 
-Looking for richer demonstrations? The `examples/showcase_use_cases.py`
-module strings together four self-contained simulations that spotlight core
-Neva capabilities:
+Looking for richer demonstrations? Each advanced simulation now lives in its
+own module under `examples/`, making it easier to explore or extend a single
+scenario. You can run everything at once with the convenience wrapper:
 
 ```bash
-python examples/showcase_use_cases.py
+python examples/run_showcase.py
 ```
 
-The showcase highlights tool-augmented research with a stubbed Wikipedia
-integration, hierarchical leader–follower coordination, emergent roleplay
-between game NPCs, and a productivity swarm that self-organises around shared
-tasks. Each vignette runs fully offline using scripted LLM backends while still
-triggering the observer’s tool-usage metrics.
+Or execute an individual vignette directly, for example the customer support
+triage flow:
+
+```bash
+python examples/customer_support_demo.py
+```
+
+The showcase lineup covers tool-augmented research with a stubbed Wikipedia
+integration, hierarchical leader–follower coordination, structured debates,
+community planning dynamics, emergent NPC roleplay, tactical party combat,
+productivity swarms, and a customer support escalation. Every script runs fully
+offline using scripted LLM backends while still triggering the observer’s
+tool-usage metrics.
 
 ### Observability & Experiment Tracking
 
