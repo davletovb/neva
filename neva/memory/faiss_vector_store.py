@@ -1,11 +1,18 @@
 """FAISS-backed vector memory implementation."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
+from neva.memory.base import MemoryModule, MemoryRecord
 from neva.utils.exceptions import MemoryConfigurationError
-
-from .base import MemoryModule, MemoryRecord
 
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only.
