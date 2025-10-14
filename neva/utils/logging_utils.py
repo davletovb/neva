@@ -39,6 +39,7 @@ class JsonLogFormatter(logging.Formatter):
         self._ensure_ascii = ensure_ascii
 
     def format(self, record: LogRecord) -> str:  # noqa: D401 - inherited docstring
+        record.message = record.getMessage()
         payload: MutableMapping[str, object] = {}
         for field_name, attribute in self._fields.items():
             value = getattr(record, attribute, None)
@@ -51,6 +52,33 @@ class JsonLogFormatter(logging.Formatter):
             payload["stack"] = record.stack_info
         if isinstance(record.args, dict):
             payload.update(record.args)
+        standard_fields = set(self._fields.values()) | {
+            "args",
+            "created",
+            "exc_info",
+            "exc_text",
+            "levelname",
+            "levelno",
+            "message",
+            "msecs",
+            "msg",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "process",
+            "processName",
+            "stack_info",
+        }
+        for key, value in record.__dict__.items():
+            if key in payload or key.startswith("_") or key in standard_fields:
+                continue
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                payload[key] = value
+            else:
+                try:
+                    payload[key] = json.loads(json.dumps(value))
+                except TypeError:
+                    payload[key] = str(value)
         return json.dumps(payload, ensure_ascii=self._ensure_ascii)
 
 

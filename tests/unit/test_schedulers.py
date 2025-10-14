@@ -5,8 +5,11 @@ from neva.schedulers import (
     CompositeScheduler,
     ConditionalScheduler,
     EventDrivenScheduler,
+    LeastRecentlyUsedScheduler,
     PriorityScheduler,
+    RandomScheduler,
     RoundRobinScheduler,
+    WeightedRandomScheduler,
     create_scheduler,
     register_scheduler,
     unregister_scheduler,
@@ -133,3 +136,52 @@ def test_scheduler_registry_supports_custom_registration():
         assert isinstance(create_scheduler("CustomScheduler"), CustomScheduler)
     finally:
         unregister_scheduler("custom_round_robin")
+
+
+def test_least_recently_used_scheduler_cycles_and_handles_removal():
+    scheduler = LeastRecentlyUsedScheduler()
+    alpha = StubAgent("alpha")
+    beta = StubAgent("beta")
+    scheduler.add(alpha)
+    scheduler.add(beta)
+
+    assert scheduler.get_next_agent() is alpha
+    assert scheduler.get_next_agent() is beta
+
+    scheduler.pause(beta)
+    scheduler.terminate(beta)
+    assert scheduler.get_next_agent() is alpha
+
+    scheduler.terminate(alpha)
+    with pytest.raises(SchedulingError):
+        scheduler.get_next_agent()
+
+
+def test_weighted_random_scheduler_respects_weights(monkeypatch):
+    scheduler = WeightedRandomScheduler()
+    light = StubAgent("light")
+    heavy = StubAgent("heavy")
+    scheduler.add(light, weight=1.0)
+    scheduler.add(heavy, weight=4.0)
+
+    samples = iter([0.5, 3.5])
+    monkeypatch.setattr(
+        "neva.schedulers.weighted_random.random.uniform", lambda _a, _b: next(samples)
+    )
+
+    assert scheduler.get_next_agent() is light
+    scheduler.pause(light)
+    assert scheduler.get_next_agent() is heavy
+
+
+def test_random_scheduler_requires_active_agents(monkeypatch):
+    scheduler = RandomScheduler()
+    agent = StubAgent("solo")
+    scheduler.add(agent)
+
+    monkeypatch.setattr("neva.schedulers.random.random.choice", lambda agents: agents[0])
+    assert scheduler.get_next_agent() is agent
+
+    scheduler.pause(agent)
+    with pytest.raises(SchedulingError):
+        scheduler.get_next_agent()

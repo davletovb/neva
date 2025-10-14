@@ -197,3 +197,70 @@ def test_configure_telemetry_controls_global_state():
     finally:
         reset_telemetry()
         assert get_telemetry() is None
+
+
+def test_record_agent_registration_and_scheduler_decision():
+    tracer = DummyTracer()
+    meter = DummyMeter()
+    logger = DummyLogger()
+    telemetry = TelemetryManager(tracer=tracer, meter=meter, structured_logger=logger)
+
+    telemetry.record_agent_registration(
+        conversation_id="conversation-42",
+        agent_name="sentinel",
+        attributes={"agent.role": "observer"},
+    )
+
+    assert tracer.started[0][0] == "neva.conversation"
+    conversation_span = tracer.started[0][1]
+    assert ("agent.registered", {"agent.name": "sentinel", "agent.role": "observer"}) in conversation_span.events
+
+    log_event, payload = logger.records[-1]
+    assert log_event == "agent_registered"
+    assert payload["agent.name"] == "sentinel"
+    assert payload["agent.role"] == "observer"
+
+    telemetry.record_scheduler_decision(
+        conversation_id="conversation-42",
+        scheduler_name="round_robin",
+        agent_name="sentinel",
+        attributes={"decision.reason": "initial"},
+    )
+
+    _, scheduler_span = tracer.started[0]
+    assert ("scheduler.decision", {
+        "conversation.id": "conversation-42",
+        "scheduler.name": "round_robin",
+        "agent.name": "sentinel",
+        "decision.reason": "initial",
+    }) in scheduler_span.events
+
+    log_event, payload = logger.records[-1]
+    assert log_event == "scheduler_decision"
+    assert payload["scheduler.name"] == "round_robin"
+    assert payload["decision.reason"] == "initial"
+
+
+def test_record_reasoning_step_adds_event_and_log():
+    tracer = DummyTracer()
+    meter = DummyMeter()
+    logger = DummyLogger()
+    telemetry = TelemetryManager(tracer=tracer, meter=meter, structured_logger=logger)
+
+    telemetry.record_reasoning_step(
+        conversation_id="conversation-99",
+        agent_name="analyst",
+        content="Thought: evaluate options",
+        index=3,
+        metadata={"confidence": 0.75},
+    )
+
+    span = tracer.started[0][1]
+    assert span.events[-1][0] == "agent.reasoning"
+    assert span.events[-1][1]["reasoning.index"] == 3
+    assert span.events[-1][1]["reasoning.content"] == "Thought: evaluate options"
+
+    log_event, payload = logger.records[-1]
+    assert log_event == "reasoning_step"
+    assert payload["agent.name"] == "analyst"
+    assert payload["confidence"] == 0.75
