@@ -236,7 +236,10 @@ class AIAgent(ABC):
         """Invoke a registered tool using a standardised interface."""
 
         tool = self.get_tool(call.name)
-        arguments = dict(call.arguments) if not isinstance(call.arguments, str) else call.arguments
+        if isinstance(call.arguments, str):
+            arguments: ToolArguments = call.arguments
+        else:
+            arguments = dict(call.arguments)
         payload = self._normalise_tool_input(arguments)
         try:
             output = tool.use(payload)
@@ -481,6 +484,7 @@ class AgentManager:
 
     def create_agent(self, agent_type: str, **kwargs) -> AIAgent:
         agent_type = agent_type.lower()
+        agent: AIAgent
         if agent_type == "transformer":
             from .transformer import TransformerAgent
 
@@ -525,13 +529,11 @@ class AgentManager:
             return {}
 
         concurrent = self.parallel_config.enabled if concurrent is None else concurrent
+        responses: Dict[str, str] = {}
         if not concurrent:
-            responses: Dict[str, str] = {}
             for receiver_id in receiver_list:
                 responses[receiver_id] = self.communicate(sender_id, receiver_id, message)
             return responses
-
-        responses: Dict[str, str] = {}
         batches = self._batched(receiver_list, self.parallel_config.batch_size)
         for batch in batches:
             batch_responses = self._execute_coroutine(

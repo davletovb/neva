@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from neva.utils.exceptions import MissingDependencyError
 
@@ -29,17 +43,37 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     """Import OpenTelemetry modules lazily to keep the dependency optional."""
 
     try:
-        from opentelemetry import logs as otel_logs, metrics as otel_metrics, trace as otel_trace
-        from opentelemetry.context import Context, set_span_in_context
-        from opentelemetry.sdk._logs import LoggerProvider
-        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogExporter
-        from opentelemetry.sdk._logs.logging import LoggingHandler
-        from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.metrics.export import MetricReader
-        from opentelemetry.sdk.resources import SERVICE_NAME as OTEL_SERVICE_NAME, Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-        from opentelemetry.trace import SpanKind
+        otel_trace = importlib.import_module("opentelemetry.trace")
+        otel_metrics = importlib.import_module("opentelemetry.metrics")
+        otel_logs = importlib.import_module("opentelemetry.logs")
+
+        context_module = importlib.import_module("opentelemetry.context")
+        Context = getattr(context_module, "Context")
+        set_span_in_context = getattr(context_module, "set_span_in_context")
+
+        sdk_logs = importlib.import_module("opentelemetry.sdk._logs")
+        LoggerProvider = getattr(sdk_logs, "LoggerProvider")
+        sdk_log_export = importlib.import_module("opentelemetry.sdk._logs.export")
+        BatchLogRecordProcessor = getattr(sdk_log_export, "BatchLogRecordProcessor")
+        LogExporter = getattr(sdk_log_export, "LogExporter")
+        logging_module = importlib.import_module("opentelemetry.sdk._logs.logging")
+        LoggingHandler = getattr(logging_module, "LoggingHandler")
+
+        sdk_metrics = importlib.import_module("opentelemetry.sdk.metrics")
+        MeterProvider = getattr(sdk_metrics, "MeterProvider")
+        metrics_export = importlib.import_module("opentelemetry.sdk.metrics.export")
+        MetricReader = getattr(metrics_export, "MetricReader")
+
+        resources_module = importlib.import_module("opentelemetry.sdk.resources")
+        OTEL_SERVICE_NAME = getattr(resources_module, "SERVICE_NAME")
+        Resource = getattr(resources_module, "Resource")
+
+        trace_module = importlib.import_module("opentelemetry.sdk.trace")
+        TracerProvider = getattr(trace_module, "TracerProvider")
+        trace_export = importlib.import_module("opentelemetry.sdk.trace.export")
+        BatchSpanProcessor = getattr(trace_export, "BatchSpanProcessor")
+        SpanExporter = getattr(trace_export, "SpanExporter")
+        SpanKind = getattr(otel_trace, "SpanKind")
     except Exception as exc:  # pragma: no cover - dependency missing at runtime.
         raise MissingDependencyError(
             "OpenTelemetry is required for telemetry support. Install the 'observability' extra "
@@ -129,7 +163,7 @@ class _FallbackSpanContext:
     def __enter__(self) -> _FallbackSpan:
         return self._span
 
-    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> bool:
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> Literal[False]:
         self._span.end()
         return False
 
@@ -296,10 +330,22 @@ class TelemetryManager:
             except MissingDependencyError:
                 modules = None
 
-        self._conversation_spans: Dict[str, Span] = {}
+        self._conversation_spans: Dict[str, Union[Span, _FallbackSpan]] = {}
         self._owns_tracer_provider = False
         self._owns_meter_provider = False
         self._owns_logger_provider = False
+
+        self._trace_api: Optional[Any]
+        self._metrics_api: Optional[Any]
+        self._set_span_in_context: Callable[[Any], Any]
+        self._span_kind: Any
+        self._tracer_provider: Optional[Any]
+        self._meter_provider: Optional[Any]
+        self._logger_provider: Optional[Any]
+        self._tracer: Union[Tracer, _FallbackTracer]
+        self._meter: Union[Meter, _FallbackMeter]
+        self._structured_logger: Optional[Union[logging.Logger, _FallbackStructuredLogger]]
+        self._logging_handler: Optional[logging.Handler]
 
         if modules is None:
 
@@ -433,7 +479,7 @@ class TelemetryManager:
 
     def _ensure_conversation_span(
         self, conversation_id: str, attributes: Optional[Mapping[str, Any]] = None
-    ) -> Span:
+    ) -> Union[Span, _FallbackSpan]:
         span = self._conversation_spans.get(conversation_id)
         if span is not None:
             if attributes:
@@ -715,7 +761,7 @@ class TelemetryManager:
             attributes=span_attrs,
             kind=self._span_kind.CLIENT,
         ) as span:
-            event_attrs = {
+            event_attrs: Dict[str, Any] = {
                 "tool.name": tool_name,
                 "tool.error": error,
             }
@@ -737,7 +783,7 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard.
             logger.debug("Failed to record telemetry metrics for tool call", exc_info=True)
 
-        log_payload = dict(metric_attrs)
+        log_payload: Dict[str, Any] = dict(metric_attrs)
         log_payload.update(
             {
                 "tool.duration_seconds": duration,
@@ -759,7 +805,7 @@ class TelemetryManager:
         index: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        payload = {
+        payload: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
             "reasoning.content": content,
@@ -782,7 +828,9 @@ class TelemetryManager:
     def shutdown(self) -> None:
         for conversation_id in list(self._conversation_spans.keys()):
             self.end_conversation(conversation_id)
-        if self._logging_handler is not None and self._structured_logger is not None:
+        if self._logging_handler is not None and isinstance(
+            self._structured_logger, logging.Logger
+        ):
             try:
                 self._structured_logger.removeHandler(self._logging_handler)
             except Exception:  # pragma: no cover - defensive guard.

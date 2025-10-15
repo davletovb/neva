@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Type, TypeVar
+from typing import Dict, Iterable, List, Optional, Type, TypeVar, cast
 
 from neva.utils.exceptions import ConfigurationError
 
@@ -88,14 +88,15 @@ def get_scheduler_class(name: str) -> Type[SchedulerType]:
     """Return the registered scheduler class for ``name``."""
 
     canonical = _resolve_to_canonical(name)
-    return _REGISTRY[canonical]
+    return cast(Type[SchedulerType], _REGISTRY[canonical])
 
 
 def create_scheduler(name: str, **kwargs: object) -> Scheduler:
     """Instantiate the scheduler associated with ``name``."""
 
-    scheduler_cls = get_scheduler_class(name)
-    return scheduler_cls(**kwargs)
+    scheduler_cls = cast(Type[Scheduler], get_scheduler_class(name))
+    scheduler = scheduler_cls(**kwargs)
+    return cast(Scheduler, scheduler)
 
 
 def available_schedulers() -> List[str]:
