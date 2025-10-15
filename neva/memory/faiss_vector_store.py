@@ -7,8 +7,8 @@ from neva.memory.base import MemoryModule, MemoryRecord
 from neva.utils.exceptions import MemoryConfigurationError
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only.
-    import faiss
-    import numpy as np
+    import faiss  # noqa: F401
+    import numpy as np  # noqa: F401
 
 
 class FaissVectorStoreMemory(MemoryModule):
@@ -44,7 +44,7 @@ class FaissVectorStoreMemory(MemoryModule):
 
         # Lazy import to keep dependencies optional
         try:
-            import faiss  # type: ignore[import-untyped]
+            import faiss  # type: ignore[import-untyped]  # noqa: F811
         except ImportError as exc:
             raise MemoryConfigurationError(
                 "FaissVectorStoreMemory requires the 'faiss' package. "
@@ -52,7 +52,7 @@ class FaissVectorStoreMemory(MemoryModule):
             ) from exc
 
         try:
-            import numpy as np
+            import numpy as np  # noqa: F811
         except ImportError as exc:
             raise MemoryConfigurationError(
                 "FaissVectorStoreMemory requires NumPy alongside faiss."
