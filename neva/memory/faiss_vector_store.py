@@ -76,9 +76,7 @@ class FaissVectorStoreMemory(MemoryModule):
         Args:
             dimension: The dimensionality of the embedding vectors.
         """
-        self._base_index = self._faiss.index_factory(
-            dimension, self._index_factory
-        )
+        self._base_index = self._faiss.index_factory(dimension, self._index_factory)
         self._index = self._faiss.IndexIDMap(self._base_index)
 
     def _encode(self, text: str) -> np.ndarray:  # type: ignore[name-defined]
@@ -94,14 +92,10 @@ class FaissVectorStoreMemory(MemoryModule):
             MemoryConfigurationError: If embeddings are not 1D sequences.
         """
         embedding = self._embedder(text)
-        vector = self._np.asarray(
-            tuple(float(x) for x in embedding), dtype="float32"
-        )
+        vector = self._np.asarray(tuple(float(x) for x in embedding), dtype="float32")
 
         if vector.ndim != 1:
-            msg = (
-                "Embeddings must be one-dimensional sequences of floats"
-            )
+            msg = "Embeddings must be one-dimensional sequences of floats"
             raise MemoryConfigurationError(msg)
 
         if self._normalize_embeddings:
@@ -181,9 +175,7 @@ class FaissVectorStoreMemory(MemoryModule):
         if not query:
             record_ids = self._order[-limit:]
             records = [self._records[rid] for rid in record_ids]
-            return "\n".join(
-                f"{r.speaker}: {r.message}" for r in records
-            )
+            return "\n".join(f"{r.speaker}: {r.message}" for r in records)
 
         # Semantic search requires index
         if self._index is None:
@@ -211,9 +203,7 @@ class FaissVectorStoreMemory(MemoryModule):
         results.sort(key=lambda item: (item[0], -item[1]), reverse=True)
         top_records = [record for _, _, record in results[:k]]
 
-        return "\n".join(
-            f"{r.speaker}: {r.message}" for r in top_records
-        )
+        return "\n".join(f"{r.speaker}: {r.message}" for r in top_records)
 
     def clear(self) -> None:
         """Clear all stored memories and reset the index."""
