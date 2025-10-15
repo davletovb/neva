@@ -1,4 +1,5 @@
 """FAISS-backed vector memory implementation."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple

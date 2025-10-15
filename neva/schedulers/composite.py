@@ -39,9 +39,7 @@ class CompositeScheduler(Scheduler):
             raise ConfigurationError("group must be provided as a string")
         group = raw_group
         scheduler_override_obj = kwargs.pop("scheduler", None)
-        if scheduler_override_obj is not None and not isinstance(
-            scheduler_override_obj, Scheduler
-        ):
+        if scheduler_override_obj is not None and not isinstance(scheduler_override_obj, Scheduler):
             raise ConfigurationError("scheduler override must inherit from Scheduler")
         scheduler_override = cast(Optional[Scheduler], scheduler_override_obj)
 
