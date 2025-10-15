@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from random import SystemRandom
+import random
+import sys
 from typing import Any, List, Tuple, cast
 
 from neva.agents.base import AIAgent
@@ -18,7 +19,7 @@ class WeightedRandomScheduler(Scheduler):
         super().__init__()
         self.simulation_observer = SimulationObserver()
         self._entries: List[Tuple[float, AIAgent]] = []
-        self._rng = SystemRandom()
+        self._rng = random
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
         raw_weight = kwargs.get("weight", 1.0)
@@ -59,3 +60,7 @@ class WeightedRandomScheduler(Scheduler):
 
 
 __all__ = ["WeightedRandomScheduler"]
+
+# Register ``random`` as a submodule so tests can monkeypatch
+# ``neva.schedulers.weighted_random.random`` directly.
+sys.modules.setdefault(__name__ + ".random", random)
