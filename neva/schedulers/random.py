@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from random import SystemRandom
+import random
+import sys
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
@@ -16,7 +17,7 @@ class RandomScheduler(Scheduler):
     def __init__(self) -> None:
         super().__init__()
         self.simulation_observer = SimulationObserver()
-        self._rng = SystemRandom()
+        self._rng = random
 
     def add(self, agent: AIAgent, **_: object) -> None:
         if agent not in self.agents:
@@ -33,3 +34,8 @@ class RandomScheduler(Scheduler):
 
 
 __all__ = ["RandomScheduler"]
+
+# Allow ``monkeypatch.setattr("neva.schedulers.random.random.choice", ...)``
+# by registering the standard library ``random`` module as a submodule of this
+# scheduler module.
+sys.modules.setdefault(__name__ + ".random", random)
