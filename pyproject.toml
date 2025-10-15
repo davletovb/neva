@@ -82,6 +82,7 @@ strict = false
 follow_imports = "silent"
 show_error_codes = true
 plugins = []
+files = ["neva"]
 
 [tool.bandit]
 skips = ["B101"]

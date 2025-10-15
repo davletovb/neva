@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import random
+from random import SystemRandom
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
@@ -16,6 +16,7 @@ class RandomScheduler(Scheduler):
     def __init__(self) -> None:
         super().__init__()
         self.simulation_observer = SimulationObserver()
+        self._rng = SystemRandom()
 
     def add(self, agent: AIAgent, **_: object) -> None:
         if agent not in self.agents:
@@ -26,7 +27,7 @@ class RandomScheduler(Scheduler):
         if not active_agents:
             raise SchedulingError("RandomScheduler has no active agents to schedule.")
 
-        agent = random.choice(active_agents)
+        agent = self._rng.choice(active_agents)
         self.record_metrics(agent)
         return agent
 

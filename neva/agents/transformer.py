@@ -84,7 +84,11 @@ class TransformerAgent(AIAgent):
             return response
 
         self._load_transformer()
-        assert self._model is not None and self._tokenizer is not None
+        if self._model is None or self._tokenizer is None:
+            raise BackendUnavailableError(
+                "Transformer model components failed to load; provide an ``llm_backend`` "
+                "or ensure the transformers dependencies are available."
+            )
 
         inputs = self._tokenizer(
             validated_prompt, return_tensors="pt", truncation=True, padding=True
