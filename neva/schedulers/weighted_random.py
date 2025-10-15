@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import random
+from random import SystemRandom
 from typing import Any, List, Tuple, cast
 
 from neva.agents.base import AIAgent
@@ -18,6 +18,7 @@ class WeightedRandomScheduler(Scheduler):
         super().__init__()
         self.simulation_observer = SimulationObserver()
         self._entries: List[Tuple[float, AIAgent]] = []
+        self._rng = SystemRandom()
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
         raw_weight = kwargs.get("weight", 1.0)
@@ -40,7 +41,7 @@ class WeightedRandomScheduler(Scheduler):
             raise SchedulingError("WeightedRandomScheduler has no active agents to schedule.")
 
         total_weight = sum(weight for weight, _ in active_entries)
-        random_weight = random.uniform(0, total_weight)
+        random_weight = self._rng.uniform(0, total_weight)
         for weight, agent in active_entries:
             if random_weight <= weight:
                 self.record_metrics(agent)

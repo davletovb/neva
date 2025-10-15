@@ -1,4 +1,5 @@
 """FAISS-backed vector memory implementation."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
@@ -127,8 +128,10 @@ class FaissVectorStoreMemory(MemoryModule):
         if self._index is None:
             self._build_index(vector.shape[0])
 
-        assert self._index is not None
-        assert self._base_index is not None
+        if self._index is None or self._base_index is None:
+            raise MemoryConfigurationError(
+                "FAISS index is not initialized; ensure the memory module is configured correctly."
+            )
 
         # Generate unique ID and store record
         record_id = self._id_counter
