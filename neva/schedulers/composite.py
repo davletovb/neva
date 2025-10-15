@@ -34,8 +34,19 @@ class CompositeScheduler(Scheduler):
             scheduler.set_environment(environment)
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        group = kwargs.pop("group", "default")
-        scheduler_override = kwargs.pop("scheduler", None)
+        group_value = kwargs.pop("group", "default")
+        if not isinstance(group_value, str):
+            raise ConfigurationError("group must be provided as a string identifier")
+        group = group_value
+
+        scheduler_override_value = kwargs.pop("scheduler", None)
+        scheduler_override: Optional[Scheduler]
+        if scheduler_override_value is None:
+            scheduler_override = None
+        elif isinstance(scheduler_override_value, Scheduler):
+            scheduler_override = scheduler_override_value
+        else:
+            raise ConfigurationError("scheduler override must be an instance of Scheduler")
 
         existing_group = self._group_membership.get(agent)
         if existing_group is not None and existing_group != group:
@@ -64,6 +75,8 @@ class CompositeScheduler(Scheduler):
             try:
                 agent = scheduler.get_next_agent()
             except SchedulingError:
+                continue
+            if agent is None:
                 continue
             if self.is_paused(agent):
                 scheduler.pause(agent)

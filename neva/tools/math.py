@@ -35,7 +35,10 @@ class MathTool(Tool):
 
     def _eval_node(self, node: ast.AST) -> float:
         if isinstance(node, ast.Num):  # pragma: no cover - python<3.8 fallback
-            return float(node.n)  # type: ignore[attr-defined]
+            value = node.n  # type: ignore[attr-defined]
+            if isinstance(value, (int, float)):
+                return float(value)
+            raise ToolExecutionError("Unsupported number type")
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
             return float(node.value)
         if isinstance(node, ast.BinOp):

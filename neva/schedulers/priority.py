@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Any, List, Tuple, cast
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
@@ -19,7 +19,11 @@ class PriorityScheduler(Scheduler):
         self._queue: List[Tuple[int, AIAgent]] = []
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        priority = int(kwargs.get("priority", 1))
+        raw_priority = kwargs.get("priority", 1)
+        try:
+            priority = int(cast(Any, raw_priority))
+        except (TypeError, ValueError):
+            raise SchedulingError("priority must be an integer value") from None
         self._queue.append((priority, agent))
         if agent not in self.agents:
             self.agents.append(agent)

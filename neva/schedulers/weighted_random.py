@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import List, Tuple
+from typing import Any, List, Tuple, cast
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
@@ -20,7 +20,11 @@ class WeightedRandomScheduler(Scheduler):
         self._entries: List[Tuple[float, AIAgent]] = []
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        weight = float(kwargs.get("weight", 1.0))
+        raw_weight = kwargs.get("weight", 1.0)
+        try:
+            weight = float(cast(Any, raw_weight))
+        except (TypeError, ValueError):
+            raise SchedulingError("weight must be a numeric value") from None
         self._entries.append((weight, agent))
         if agent not in self.agents:
             self.agents.append(agent)
