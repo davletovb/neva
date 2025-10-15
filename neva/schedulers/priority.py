@@ -19,7 +19,16 @@ class PriorityScheduler(Scheduler):
         self._queue: List[Tuple[int, AIAgent]] = []
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        priority = int(kwargs.get("priority", 1))
+        raw_priority = kwargs.get("priority", 1)
+        if isinstance(raw_priority, (int, float)):
+            priority = int(raw_priority)
+        elif isinstance(raw_priority, str):
+            try:
+                priority = int(raw_priority)
+            except ValueError as exc:
+                raise SchedulingError("priority must be an integer value") from exc
+        else:
+            raise SchedulingError("priority must be an integer value")
         self._queue.append((priority, agent))
         if agent not in self.agents:
             self.agents.append(agent)

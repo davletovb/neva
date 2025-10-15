@@ -20,7 +20,16 @@ class WeightedRandomScheduler(Scheduler):
         self._entries: List[Tuple[float, AIAgent]] = []
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        weight = float(kwargs.get("weight", 1.0))
+        raw_weight = kwargs.get("weight", 1.0)
+        if isinstance(raw_weight, (int, float)):
+            weight = float(raw_weight)
+        elif isinstance(raw_weight, str):
+            try:
+                weight = float(raw_weight)
+            except ValueError as exc:
+                raise SchedulingError("weight must be a numeric value") from exc
+        else:
+            raise SchedulingError("weight must be a numeric value")
         self._entries.append((weight, agent))
         if agent not in self.agents:
             self.agents.append(agent)

@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from neva.utils.exceptions import MissingDependencyError
 
@@ -29,8 +41,12 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     """Import OpenTelemetry modules lazily to keep the dependency optional."""
 
     try:
-        from opentelemetry import logs as otel_logs, metrics as otel_metrics, trace as otel_trace
-        from opentelemetry.context import Context, set_span_in_context
+        otel_logs = importlib.import_module("opentelemetry.logs")
+        otel_metrics = importlib.import_module("opentelemetry.metrics")
+        otel_trace = importlib.import_module("opentelemetry.trace")
+        context_mod = importlib.import_module("opentelemetry.context")
+        Context = getattr(context_mod, "Context")
+        set_span_in_context = getattr(context_mod, "set_span_in_context")
         from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogExporter
         from opentelemetry.sdk._logs.logging import LoggingHandler
@@ -39,7 +55,7 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
         from opentelemetry.sdk.resources import SERVICE_NAME as OTEL_SERVICE_NAME, Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-        from opentelemetry.trace import SpanKind
+        SpanKind = getattr(otel_trace, "SpanKind")
     except Exception as exc:  # pragma: no cover - dependency missing at runtime.
         raise MissingDependencyError(
             "OpenTelemetry is required for telemetry support. Install the 'observability' extra "
@@ -129,9 +145,8 @@ class _FallbackSpanContext:
     def __enter__(self) -> _FallbackSpan:
         return self._span
 
-    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> bool:
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
         self._span.end()
-        return False
 
 
 class _FallbackTracer:
@@ -296,16 +311,27 @@ class TelemetryManager:
             except MissingDependencyError:
                 modules = None
 
-        self._conversation_spans: Dict[str, Span] = {}
+        self._conversation_spans: Dict[str, Any] = {}
         self._owns_tracer_provider = False
         self._owns_meter_provider = False
         self._owns_logger_provider = False
+        self._trace_api: Any
+        self._metrics_api: Any
+        self._set_span_in_context: Callable[[Any], Any]
+        self._span_kind: Any
+        self._tracer_provider: Optional[Any]
+        self._meter_provider: Optional[Any]
+        self._logger_provider: Optional[Any]
+        self._tracer: Any
+        self._meter: Any
+        self._structured_logger: Optional[logging.Logger | _FallbackStructuredLogger]
+        self._logging_handler: Optional[logging.Handler]
 
         if modules is None:
 
             class _SpanKindShim:
-                INTERNAL = "internal"
-                CLIENT = "client"
+                INTERNAL: Any = "internal"
+                CLIENT: Any = "client"
 
             self._trace_api = None
             self._metrics_api = None
@@ -433,14 +459,14 @@ class TelemetryManager:
 
     def _ensure_conversation_span(
         self, conversation_id: str, attributes: Optional[Mapping[str, Any]] = None
-    ) -> Span:
+    ) -> Any:
         span = self._conversation_spans.get(conversation_id)
         if span is not None:
             if attributes:
                 for key, value in _normalise_attributes(attributes).items():
                     span.set_attribute(key, value)
             return span
-        payload = {"conversation.id": conversation_id}
+        payload: Dict[str, Any] = {"conversation.id": conversation_id}
         payload.update(_normalise_attributes(attributes))
         span = self._tracer.start_span("neva.conversation", attributes=payload)
         self._conversation_spans[conversation_id] = span
@@ -474,7 +500,7 @@ class TelemetryManager:
         agent_name: str,
         attributes: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        payload = {"agent.name": agent_name}
+        payload: Dict[str, Any] = {"agent.name": agent_name}
         payload.update(_normalise_attributes(attributes))
         span = self._ensure_conversation_span(conversation_id, attributes=payload)
         span.add_event("agent.registered", payload)
@@ -488,7 +514,7 @@ class TelemetryManager:
         agent_name: str,
         attributes: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        payload = {
+        payload: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "scheduler.name": scheduler_name,
             "agent.name": agent_name,
@@ -516,13 +542,13 @@ class TelemetryManager:
         metadata: Optional[Mapping[str, Any]] = None,
         conversation_state: Optional["ConversationState"] = None,
     ) -> None:
-        metric_attrs = {
+        metric_attrs: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
         }
         if model:
             metric_attrs["llm.model"] = model
-        span_attrs = dict(metric_attrs)
+        span_attrs: Dict[str, Any] = dict(metric_attrs)
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
         prompt_tokens = prompt_tokens if prompt_tokens is not None else _estimate_tokens(prompt)
@@ -559,7 +585,7 @@ class TelemetryManager:
                     )
             if tool_calls:
                 for index, call in enumerate(tool_calls, start=1):
-                    event_attrs = {
+                    event_attrs: Dict[str, Any] = {
                         "tool.sequence": index,
                         "tool.name": call.get("name"),
                         "tool.response": call.get("response"),
@@ -594,17 +620,19 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard around metric emission.
             logger.debug("Failed to record telemetry metrics for agent turn", exc_info=True)
 
-        log_payload = {
-            **metric_attrs,
-            "llm.model": model,
-            "agent.prompt": prompt,
-            "agent.response": response,
-            "agent.latency_seconds": latency,
-            "agent.prompt_tokens": prompt_tokens,
-            "agent.completion_tokens": completion_tokens,
-            "agent.total_tokens": total_tokens,
-            "agent.context_tokens": context_tokens,
-        }
+        log_payload: Dict[str, Any] = dict(metric_attrs)
+        log_payload.update(
+            {
+                "llm.model": model,
+                "agent.prompt": prompt,
+                "agent.response": response,
+                "agent.latency_seconds": latency,
+                "agent.prompt_tokens": prompt_tokens,
+                "agent.completion_tokens": completion_tokens,
+                "agent.total_tokens": total_tokens,
+                "agent.context_tokens": context_tokens,
+            }
+        )
         log_payload.update(_normalise_attributes(metadata))
         self._log_event("agent_turn", log_payload)
 
@@ -624,7 +652,7 @@ class TelemetryManager:
         metadata: Optional[Mapping[str, Any]] = None,
         conversation_state: Optional["ConversationState"] = None,
     ) -> None:
-        metric_attrs = {
+        metric_attrs: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
         }
@@ -648,7 +676,7 @@ class TelemetryManager:
         else:
             context_tokens = None
 
-        span_attrs = dict(metric_attrs)
+        span_attrs: Dict[str, Any] = dict(metric_attrs)
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
         with self._tracer.start_as_current_span(
@@ -678,14 +706,16 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard.
             logger.debug("Failed to record telemetry metrics for LLM call", exc_info=True)
 
-        log_payload = {
-            **metric_attrs,
-            "llm.latency_seconds": latency,
-            "llm.prompt_tokens": prompt_tokens,
-            "llm.completion_tokens": completion_tokens,
-            "llm.total_tokens": total_tokens,
-            "llm.context_tokens": context_tokens,
-        }
+        log_payload: Dict[str, Any] = dict(metric_attrs)
+        log_payload.update(
+            {
+                "llm.latency_seconds": latency,
+                "llm.prompt_tokens": prompt_tokens,
+                "llm.completion_tokens": completion_tokens,
+                "llm.total_tokens": total_tokens,
+                "llm.context_tokens": context_tokens,
+            }
+        )
         log_payload.update(_normalise_attributes(metadata))
         self._log_event("llm_call", log_payload)
 
@@ -701,12 +731,12 @@ class TelemetryManager:
         error: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        metric_attrs = {
+        metric_attrs: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
             "tool.name": tool_name,
         }
-        span_attrs = dict(metric_attrs)
+        span_attrs: Dict[str, Any] = dict(metric_attrs)
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
         with self._tracer.start_as_current_span(
@@ -715,7 +745,7 @@ class TelemetryManager:
             attributes=span_attrs,
             kind=self._span_kind.CLIENT,
         ) as span:
-            event_attrs = {
+            event_attrs: Dict[str, Any] = {
                 "tool.name": tool_name,
                 "tool.error": error,
             }
@@ -737,7 +767,7 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard.
             logger.debug("Failed to record telemetry metrics for tool call", exc_info=True)
 
-        log_payload = dict(metric_attrs)
+        log_payload: Dict[str, Any] = dict(metric_attrs)
         log_payload.update(
             {
                 "tool.duration_seconds": duration,
@@ -759,7 +789,7 @@ class TelemetryManager:
         index: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        payload = {
+        payload: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
             "reasoning.content": content,
@@ -782,7 +812,10 @@ class TelemetryManager:
     def shutdown(self) -> None:
         for conversation_id in list(self._conversation_spans.keys()):
             self.end_conversation(conversation_id)
-        if self._logging_handler is not None and self._structured_logger is not None:
+        if (
+            self._logging_handler is not None
+            and isinstance(self._structured_logger, logging.Logger)
+        ):
             try:
                 self._structured_logger.removeHandler(self._logging_handler)
             except Exception:  # pragma: no cover - defensive guard.

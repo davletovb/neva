@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import logging
 import operator
-from typing import Callable, Dict
+from typing import Callable, Dict, Union, cast
 
 from neva.agents.base import Tool
 from neva.utils.exceptions import ToolExecutionError
@@ -35,9 +35,11 @@ class MathTool(Tool):
 
     def _eval_node(self, node: ast.AST) -> float:
         if isinstance(node, ast.Num):  # pragma: no cover - python<3.8 fallback
-            return float(node.n)  # type: ignore[attr-defined]
+            numeric_value = cast(Union[int, float], getattr(node, "n"))
+            return float(numeric_value)
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return float(node.value)
+            value: Union[int, float] = cast(Union[int, float], node.value)
+            return float(value)
         if isinstance(node, ast.BinOp):
             op_type = type(node.op)
             if op_type not in _ALLOWED_OPERATORS:

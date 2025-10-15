@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -47,9 +47,11 @@ class ConversationState:
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "ConversationState":
         state = cls(agent_name=str(payload["agent_name"]))
-        turns = payload.get("turns", [])
-        for turn_payload in turns:  # type: ignore[assignment]
-            state.turns.append(ConversationTurn.from_dict(turn_payload))
+        raw_turns = payload.get("turns", [])
+        if isinstance(raw_turns, list):
+            for turn_payload in raw_turns:
+                if isinstance(turn_payload, dict):
+                    state.turns.append(ConversationTurn.from_dict(turn_payload))
         return state
 
 
@@ -86,8 +88,13 @@ def create_snapshot(
     agent_states: Optional[Iterable[ConversationState]] = None,
 ) -> SimulationSnapshot:
     environment_state = environment_state or {}
+    if agent_states is None:
+        agent_state_iter: Iterable[ConversationState] = ()
+    else:
+        agent_state_iter = agent_states
+
     agent_snapshot: Dict[str, Dict[str, object]] = {}
-    for state in agent_states or []:
+    for state in agent_state_iter:
         agent_snapshot[state.agent_name] = state.to_dict()
     return SimulationSnapshot(
         created_at=datetime.utcnow(),
@@ -109,6 +116,6 @@ def _json_default(value: object) -> Any:
         return value.isoformat()
     if hasattr(value, "to_dict"):
         return value.to_dict()
-    if hasattr(value, "__dataclass_fields__"):
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")

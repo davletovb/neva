@@ -8,7 +8,7 @@ from time import perf_counter, sleep
 from typing import Dict, Optional
 
 import openai
-import requests
+import requests  # type: ignore[import-untyped]
 
 from neva.agents.base import AIAgent, LLMBackend
 from neva.memory import MemoryModule

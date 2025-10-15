@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Type, TypeVar
+from typing import Dict, Iterable, List, Optional, Type
 
 from neva.utils.exceptions import ConfigurationError
 
@@ -15,8 +15,6 @@ from .priority import PriorityScheduler
 from .random import RandomScheduler
 from .round_robin import RoundRobinScheduler
 from .weighted_random import WeightedRandomScheduler
-
-SchedulerType = TypeVar("SchedulerType", bound=Scheduler)
 
 _REGISTRY: Dict[str, Type[Scheduler]] = {}
 _ALIASES: Dict[str, str] = {}
@@ -47,7 +45,7 @@ def _resolve_to_canonical(name: str) -> str:
 
 def register_scheduler(
     name: str,
-    scheduler_cls: Type[SchedulerType],
+    scheduler_cls: Type[Scheduler],
     *,
     overwrite: bool = False,
     aliases: Optional[Iterable[str]] = None,
@@ -84,7 +82,7 @@ def unregister_scheduler(name: str) -> None:
             _ALIASES.pop(alias)
 
 
-def get_scheduler_class(name: str) -> Type[SchedulerType]:
+def get_scheduler_class(name: str) -> Type[Scheduler]:
     """Return the registered scheduler class for ``name``."""
 
     canonical = _resolve_to_canonical(name)

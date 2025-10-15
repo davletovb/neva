@@ -236,15 +236,19 @@ class AIAgent(ABC):
         """Invoke a registered tool using a standardised interface."""
 
         tool = self.get_tool(call.name)
-        arguments = dict(call.arguments) if not isinstance(call.arguments, str) else call.arguments
-        payload = self._normalise_tool_input(arguments)
+        raw_arguments = call.arguments
+        if isinstance(raw_arguments, str):
+            response_arguments: ToolArguments = raw_arguments
+        else:
+            response_arguments = dict(raw_arguments)
+        payload = self._normalise_tool_input(response_arguments)
         try:
             output = tool.use(payload)
         except ToolExecutionError as exc:
             logger.warning("Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc)
             return ToolResponse(
                 name=tool.name,
-                arguments=arguments,
+                arguments=response_arguments,
                 output="",
                 error=str(exc),
             )
@@ -254,14 +258,14 @@ class AIAgent(ABC):
             )
             return ToolResponse(
                 name=tool.name,
-                arguments=arguments,
+                arguments=response_arguments,
                 output="",
                 error=str(exc),
             )
 
         return ToolResponse(
             name=tool.name,
-            arguments=arguments,
+            arguments=response_arguments,
             output=str(output),
         )
 
@@ -481,6 +485,7 @@ class AgentManager:
 
     def create_agent(self, agent_type: str, **kwargs) -> AIAgent:
         agent_type = agent_type.lower()
+        agent: AIAgent
         if agent_type == "transformer":
             from .transformer import TransformerAgent
 
@@ -526,10 +531,12 @@ class AgentManager:
 
         concurrent = self.parallel_config.enabled if concurrent is None else concurrent
         if not concurrent:
-            responses: Dict[str, str] = {}
+            sequential_responses: Dict[str, str] = {}
             for receiver_id in receiver_list:
-                responses[receiver_id] = self.communicate(sender_id, receiver_id, message)
-            return responses
+                sequential_responses[receiver_id] = self.communicate(
+                    sender_id, receiver_id, message
+                )
+            return sequential_responses
 
         responses: Dict[str, str] = {}
         batches = self._batched(receiver_list, self.parallel_config.batch_size)
