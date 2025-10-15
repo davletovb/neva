@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from threading import RLock
-from typing import MutableMapping, Optional
+from typing import Optional
 
 from neva.utils.exceptions import CacheConfigurationError
 
@@ -16,7 +16,7 @@ class LLMCache:
         if max_size <= 0:
             raise CacheConfigurationError("max_size must be a positive integer")
         self._max_size = max_size
-        self._store: MutableMapping[str, str] = OrderedDict()
+        self._store: OrderedDict[str, str] = OrderedDict()
         self._lock = RLock()
 
     def get(self, prompt: str) -> Optional[str]:

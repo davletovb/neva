@@ -219,6 +219,9 @@ class AIAgent(ABC):
         if isinstance(arguments, str):
             return arguments
 
+        if not isinstance(arguments, Mapping):
+            raise TypeError("Tool arguments must be a string or mapping")
+
         candidate_keys = ("input", "task", "query", "text")
         for key in candidate_keys:
             value = arguments.get(key)
@@ -230,13 +233,16 @@ class AIAgent(ABC):
             if isinstance(value, str):
                 return value
 
-        return json.dumps(arguments, sort_keys=True)
+        return json.dumps(dict(arguments), sort_keys=True)
 
     def call_tool(self, call: ToolCall) -> ToolResponse:
         """Invoke a registered tool using a standardised interface."""
 
         tool = self.get_tool(call.name)
-        arguments = dict(call.arguments) if not isinstance(call.arguments, str) else call.arguments
+        if isinstance(call.arguments, str):
+            arguments: ToolArguments = call.arguments
+        else:
+            arguments = dict(call.arguments)
         payload = self._normalise_tool_input(arguments)
         try:
             output = tool.use(payload)
@@ -484,7 +490,7 @@ class AgentManager:
         if agent_type == "transformer":
             from .transformer import TransformerAgent
 
-            agent = TransformerAgent(**kwargs)
+            agent: AIAgent = TransformerAgent(**kwargs)
         elif agent_type in {"gpt", "openai"}:
             from .gpt import GPTAgent
 
@@ -525,13 +531,12 @@ class AgentManager:
             return {}
 
         concurrent = self.parallel_config.enabled if concurrent is None else concurrent
+        responses: Dict[str, str] = {}
         if not concurrent:
-            responses: Dict[str, str] = {}
             for receiver_id in receiver_list:
                 responses[receiver_id] = self.communicate(sender_id, receiver_id, message)
             return responses
 
-        responses: Dict[str, str] = {}
         batches = self._batched(receiver_list, self.parallel_config.batch_size)
         for batch in batches:
             batch_responses = self._execute_coroutine(

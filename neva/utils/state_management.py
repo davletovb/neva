@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, cast
 
 
 @dataclass
@@ -47,9 +47,9 @@ class ConversationState:
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "ConversationState":
         state = cls(agent_name=str(payload["agent_name"]))
-        turns = payload.get("turns", [])
-        for turn_payload in turns:  # type: ignore[assignment]
-            state.turns.append(ConversationTurn.from_dict(turn_payload))
+        turns_raw = payload.get("turns", [])
+        for turn_payload in cast(Iterable[Mapping[str, str]], turns_raw):
+            state.turns.append(ConversationTurn.from_dict(dict(turn_payload)))
         return state
 
 
@@ -87,7 +87,12 @@ def create_snapshot(
 ) -> SimulationSnapshot:
     environment_state = environment_state or {}
     agent_snapshot: Dict[str, Dict[str, object]] = {}
-    for state in agent_states or []:
+    states: Iterable[ConversationState]
+    if agent_states is None:
+        states = ()
+    else:
+        states = agent_states
+    for state in states:
         agent_snapshot[state.agent_name] = state.to_dict()
     return SimulationSnapshot(
         created_at=datetime.utcnow(),
@@ -107,8 +112,9 @@ def load_snapshot(path: Path) -> SimulationSnapshot:
 def _json_default(value: object) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
-    if hasattr(value, "to_dict"):
-        return value.to_dict()
-    if hasattr(value, "__dataclass_fields__"):
+    to_dict_method = getattr(value, "to_dict", None)
+    if callable(to_dict_method):
+        return to_dict_method()
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")

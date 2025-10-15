@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
+
+from typing_extensions import Literal
 
 from neva.utils.exceptions import MissingDependencyError
 
@@ -29,17 +44,32 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     """Import OpenTelemetry modules lazily to keep the dependency optional."""
 
     try:
-        from opentelemetry import logs as otel_logs, metrics as otel_metrics, trace as otel_trace
-        from opentelemetry.context import Context, set_span_in_context
-        from opentelemetry.sdk._logs import LoggerProvider
-        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogExporter
-        from opentelemetry.sdk._logs.logging import LoggingHandler
-        from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.metrics.export import MetricReader
-        from opentelemetry.sdk.resources import SERVICE_NAME as OTEL_SERVICE_NAME, Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-        from opentelemetry.trace import SpanKind
+        otel_logs = importlib.import_module("opentelemetry.logs")
+        otel_metrics = importlib.import_module("opentelemetry.metrics")
+        otel_trace = importlib.import_module("opentelemetry.trace")
+        context_module = importlib.import_module("opentelemetry.context")
+        Context = getattr(context_module, "Context")
+        set_span_in_context = getattr(context_module, "set_span_in_context")
+        logs_module = importlib.import_module("opentelemetry.sdk._logs")
+        LoggerProvider = getattr(logs_module, "LoggerProvider")
+        logs_export_module = importlib.import_module("opentelemetry.sdk._logs.export")
+        BatchLogRecordProcessor = getattr(logs_export_module, "BatchLogRecordProcessor")
+        LogExporter = getattr(logs_export_module, "LogExporter")
+        logging_module = importlib.import_module("opentelemetry.sdk._logs.logging")
+        LoggingHandler = getattr(logging_module, "LoggingHandler")
+        metrics_module = importlib.import_module("opentelemetry.sdk.metrics")
+        MeterProvider = getattr(metrics_module, "MeterProvider")
+        metrics_export_module = importlib.import_module("opentelemetry.sdk.metrics.export")
+        MetricReader = getattr(metrics_export_module, "MetricReader")
+        resources_module = importlib.import_module("opentelemetry.sdk.resources")
+        OTEL_SERVICE_NAME = getattr(resources_module, "SERVICE_NAME")
+        Resource = getattr(resources_module, "Resource")
+        trace_module = importlib.import_module("opentelemetry.sdk.trace")
+        TracerProvider = getattr(trace_module, "TracerProvider")
+        trace_export_module = importlib.import_module("opentelemetry.sdk.trace.export")
+        BatchSpanProcessor = getattr(trace_export_module, "BatchSpanProcessor")
+        SpanExporter = getattr(trace_export_module, "SpanExporter")
+        SpanKind = getattr(otel_trace, "SpanKind")
     except Exception as exc:  # pragma: no cover - dependency missing at runtime.
         raise MissingDependencyError(
             "OpenTelemetry is required for telemetry support. Install the 'observability' extra "
@@ -129,7 +159,7 @@ class _FallbackSpanContext:
     def __enter__(self) -> _FallbackSpan:
         return self._span
 
-    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> bool:
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> Literal[False]:
         self._span.end()
         return False
 
@@ -296,10 +326,21 @@ class TelemetryManager:
             except MissingDependencyError:
                 modules = None
 
-        self._conversation_spans: Dict[str, Span] = {}
+        self._conversation_spans: Dict[str, Union[Span, _FallbackSpan]] = {}
         self._owns_tracer_provider = False
         self._owns_meter_provider = False
         self._owns_logger_provider = False
+        self._trace_api: Any = None
+        self._metrics_api: Any = None
+        self._set_span_in_context: Callable[[Any], Any]
+        self._span_kind: Any
+        self._tracer_provider: Optional[Any] = tracer_provider
+        self._meter_provider: Optional[Any] = meter_provider
+        self._logger_provider: Optional[Any] = logger_provider
+        self._tracer: Any
+        self._meter: Any
+        self._structured_logger: Optional[Union[logging.Logger, _FallbackStructuredLogger]]
+        self._logging_handler: Optional[logging.Handler]
 
         if modules is None:
 
@@ -433,7 +474,7 @@ class TelemetryManager:
 
     def _ensure_conversation_span(
         self, conversation_id: str, attributes: Optional[Mapping[str, Any]] = None
-    ) -> Span:
+    ) -> Union[Span, _FallbackSpan]:
         span = self._conversation_spans.get(conversation_id)
         if span is not None:
             if attributes:
@@ -516,13 +557,13 @@ class TelemetryManager:
         metadata: Optional[Mapping[str, Any]] = None,
         conversation_state: Optional["ConversationState"] = None,
     ) -> None:
-        metric_attrs = {
+        metric_attrs: Dict[str, str] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
         }
         if model:
             metric_attrs["llm.model"] = model
-        span_attrs = dict(metric_attrs)
+        span_attrs: Dict[str, Any] = dict(metric_attrs)
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
         prompt_tokens = prompt_tokens if prompt_tokens is not None else _estimate_tokens(prompt)
@@ -541,11 +582,12 @@ class TelemetryManager:
         if reasoning_steps is None:
             reasoning_steps = _extract_reasoning_steps(response)
 
+        span_kind_internal = getattr(self._span_kind, "INTERNAL", None)
         with self._tracer.start_as_current_span(
             "neva.agent.turn",
             context=context,
             attributes=span_attrs,
-            kind=self._span_kind.INTERNAL,
+            kind=span_kind_internal,
         ) as span:
             if prompt:
                 span.add_event("llm.prompt", {"llm.prompt": prompt})
@@ -594,7 +636,7 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard around metric emission.
             logger.debug("Failed to record telemetry metrics for agent turn", exc_info=True)
 
-        log_payload = {
+        log_payload: Dict[str, Any] = {
             **metric_attrs,
             "llm.model": model,
             "agent.prompt": prompt,
@@ -624,7 +666,7 @@ class TelemetryManager:
         metadata: Optional[Mapping[str, Any]] = None,
         conversation_state: Optional["ConversationState"] = None,
     ) -> None:
-        metric_attrs = {
+        metric_attrs: Dict[str, str] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
         }
@@ -648,14 +690,15 @@ class TelemetryManager:
         else:
             context_tokens = None
 
-        span_attrs = dict(metric_attrs)
+        span_attrs: Dict[str, Any] = dict(metric_attrs)
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
+        span_kind_client = getattr(self._span_kind, "CLIENT", None)
         with self._tracer.start_as_current_span(
             "neva.llm.call",
             context=context,
             attributes=span_attrs,
-            kind=self._span_kind.CLIENT,
+            kind=span_kind_client,
         ) as span:
             span.add_event("llm.prompt", {"llm.prompt": prompt})
             span.add_event("llm.completion", {"llm.completion": completion})
@@ -678,7 +721,7 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard.
             logger.debug("Failed to record telemetry metrics for LLM call", exc_info=True)
 
-        log_payload = {
+        log_payload: Dict[str, Any] = {
             **metric_attrs,
             "llm.latency_seconds": latency,
             "llm.prompt_tokens": prompt_tokens,
@@ -701,21 +744,22 @@ class TelemetryManager:
         error: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        metric_attrs = {
+        metric_attrs: Dict[str, str] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
             "tool.name": tool_name,
         }
-        span_attrs = dict(metric_attrs)
+        span_attrs: Dict[str, Any] = dict(metric_attrs)
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
+        span_kind_client = getattr(self._span_kind, "CLIENT", None)
         with self._tracer.start_as_current_span(
             "neva.tool.call",
             context=context,
             attributes=span_attrs,
-            kind=self._span_kind.CLIENT,
+            kind=span_kind_client,
         ) as span:
-            event_attrs = {
+            event_attrs: Dict[str, Any] = {
                 "tool.name": tool_name,
                 "tool.error": error,
             }
@@ -737,7 +781,7 @@ class TelemetryManager:
         except Exception:  # pragma: no cover - defensive guard.
             logger.debug("Failed to record telemetry metrics for tool call", exc_info=True)
 
-        log_payload = dict(metric_attrs)
+        log_payload: Dict[str, Any] = dict(metric_attrs)
         log_payload.update(
             {
                 "tool.duration_seconds": duration,
@@ -759,7 +803,7 @@ class TelemetryManager:
         index: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        payload = {
+        payload: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
             "reasoning.content": content,
@@ -782,11 +826,12 @@ class TelemetryManager:
     def shutdown(self) -> None:
         for conversation_id in list(self._conversation_spans.keys()):
             self.end_conversation(conversation_id)
-        if self._logging_handler is not None and self._structured_logger is not None:
-            try:
-                self._structured_logger.removeHandler(self._logging_handler)
-            except Exception:  # pragma: no cover - defensive guard.
-                logger.debug("Failed to detach telemetry logging handler", exc_info=True)
+        if self._logging_handler is not None:
+            if isinstance(self._structured_logger, logging.Logger):
+                try:
+                    self._structured_logger.removeHandler(self._logging_handler)
+                except Exception:  # pragma: no cover - defensive guard.
+                    logger.debug("Failed to detach telemetry logging handler", exc_info=True)
             self._logging_handler = None
         if self._owns_tracer_provider and self._tracer_provider is not None:
             try:

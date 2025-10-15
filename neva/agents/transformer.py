@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from neva.agents.base import AIAgent, LLMBackend
 from neva.memory import MemoryModule
@@ -40,10 +40,10 @@ class TransformerAgent(AIAgent):
             prompt_validator=prompt_validator,
         )
         self.model_name = model_name
-        self._model_loader = model_loader
-        self._tokenizer_loader = tokenizer_loader
-        self._model = None
-        self._tokenizer = None
+        self._model_loader: Optional[Callable[[str], Any]] = model_loader
+        self._tokenizer_loader: Optional[Callable[[str], Any]] = tokenizer_loader
+        self._model: Optional[Any] = None
+        self._tokenizer: Optional[Any] = None
 
     def _load_transformer(self) -> None:
         if self.llm_backend is not None:
@@ -63,6 +63,9 @@ class TransformerAgent(AIAgent):
 
             loader = AutoModelForSeq2SeqLM.from_pretrained
             tokenizer_loader = AutoTokenizer.from_pretrained
+
+        if loader is None or tokenizer_loader is None:
+            raise BackendUnavailableError("Model and tokenizer loaders must be provided")
 
         self._model = loader(self.model_name)
         self._tokenizer = tokenizer_loader(self.model_name)

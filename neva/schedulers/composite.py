@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, cast
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
@@ -34,8 +34,16 @@ class CompositeScheduler(Scheduler):
             scheduler.set_environment(environment)
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        group = kwargs.pop("group", "default")
-        scheduler_override = kwargs.pop("scheduler", None)
+        raw_group = kwargs.pop("group", "default")
+        if not isinstance(raw_group, str):
+            raise ConfigurationError("group must be provided as a string")
+        group = raw_group
+        scheduler_override_obj = kwargs.pop("scheduler", None)
+        if scheduler_override_obj is not None and not isinstance(
+            scheduler_override_obj, Scheduler
+        ):
+            raise ConfigurationError("scheduler override must inherit from Scheduler")
+        scheduler_override = cast(Optional[Scheduler], scheduler_override_obj)
 
         existing_group = self._group_membership.get(agent)
         if existing_group is not None and existing_group != group:
@@ -64,6 +72,8 @@ class CompositeScheduler(Scheduler):
             try:
                 agent = scheduler.get_next_agent()
             except SchedulingError:
+                continue
+            if agent is None:
                 continue
             if self.is_paused(agent):
                 scheduler.pause(agent)

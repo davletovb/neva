@@ -20,7 +20,13 @@ class WeightedRandomScheduler(Scheduler):
         self._entries: List[Tuple[float, AIAgent]] = []
 
     def add(self, agent: AIAgent, **kwargs: object) -> None:
-        weight = float(kwargs.get("weight", 1.0))
+        raw_weight = kwargs.get("weight", 1.0)
+        if not isinstance(raw_weight, (int, float, str)):
+            raise SchedulingError("weight must be convertible to float")
+        try:
+            weight = float(raw_weight)
+        except ValueError:
+            raise SchedulingError("weight must be convertible to float") from None
         self._entries.append((weight, agent))
         if agent not in self.agents:
             self.agents.append(agent)
