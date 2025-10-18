@@ -1,5 +1,7 @@
+import gc
 import json
 import sys
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -87,3 +89,24 @@ def test_log_to_mlflow_requires_dependency(monkeypatch):
         obs.log_to_mlflow()
 
     assert "MLflow is not installed" in str(exc.value)
+
+
+def test_tool_instrumentation_allows_garbage_collection():
+    class DummyTool:
+        name = "dummy"
+
+        def use(self, *_args, **_kwargs):
+            return "ok"
+
+    observer = SimulationObserver()
+    agent = SimpleNamespace(name="Observer", tools=[])
+    tool = DummyTool()
+    ref = weakref.ref(tool)
+
+    observer.watch_tool(agent, tool)
+    agent.tools.clear()
+    del tool
+
+    gc.collect()
+
+    assert ref() is None
