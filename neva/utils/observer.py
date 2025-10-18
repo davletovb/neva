@@ -81,7 +81,6 @@ class SimulationObserver:
         self._participation: Counter[str] = Counter()
         self._tool_usage: MutableMapping[str, Counter[str]] = defaultdict(Counter)
         self._tool_usage_events: List[Dict[str, Any]] = []
-        self._wrapped_tools: Dict[int, Callable[..., Any]] = {}
         self._latest_agent_name: Optional[str] = None
         self._sentiment_positive_words = set(
             sentiment_positive_words
@@ -249,8 +248,8 @@ class SimulationObserver:
         if tool is None:
             return
 
-        tool_id = id(tool)
-        if tool_id in self._wrapped_tools:
+        sentinel = f"__neva_observer_wrapped_{id(self)}__"
+        if getattr(tool, sentinel, False):
             return
 
         original_use = getattr(tool, "use", None)
@@ -268,7 +267,7 @@ class SimulationObserver:
                 self.record_tool_usage(agent, self_tool, duration=duration)
 
         tool.use = MethodType(instrumented_use, tool)  # type: ignore[assignment]
-        self._wrapped_tools[tool_id] = wrapped_use
+        setattr(tool, sentinel, True)
 
     def record_tool_usage(
         self, agent: Any, tool: ToolLike, *, duration: Optional[float] = None
