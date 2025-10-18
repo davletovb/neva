@@ -10,6 +10,7 @@ from neva.utils.caching import LLMCache
 from neva.utils.exceptions import BackendUnavailableError
 from neva.utils.safety import PromptValidator
 
+
 class _TransformerModel(Protocol):
     """Protocol for transformer models used by :class:`TransformerAgent`."""
 
