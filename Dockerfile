@@ -6,8 +6,8 @@ ARG WITH_EXTRAS=""
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update \ \
-    && apt-get install --no-install-recommends -y build-essential curl \ \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"

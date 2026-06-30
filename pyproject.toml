@@ -9,7 +9,37 @@ description = "Neva provides agent, environment, and scheduler abstractions for 
 authors = ["Neva Contributors"]
 readme = "README.md"
 license = "MIT"
+homepage = "https://github.com/davletovb/neva"
+repository = "https://github.com/davletovb/neva"
+documentation = "https://github.com/davletovb/neva#readme"
+keywords = [
+    "llm",
+    "agents",
+    "multi-agent",
+    "simulation",
+    "agent-based-modeling",
+    "ai",
+    "generative-ai",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 packages = [{ include = "neva" }]
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/davletovb/neva/issues"
+"Changelog" = "https://github.com/davletovb/neva/blob/main/CHANGELOG.md"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -23,6 +53,8 @@ transformers = { version = "^4.35.2", optional = true }
 mlflow = { version = "^2.9.1", optional = true }
 anthropic = { version = "^0.26.0", optional = true }
 "google-generativeai" = { version = "^0.3.2", optional = true }
+"faiss-cpu" = { version = "^1.7.4", optional = true }
+numpy = { version = "^1.26.4", optional = true }
 
 [tool.poetry.group.dev.dependencies]
 black = "23.9.1"
@@ -42,6 +74,7 @@ tools = ["wikipedia", "deep-translator", "transformers"]
 mlops = ["mlflow"]
 providers = ["anthropic", "google-generativeai"]
 observability = ["opentelemetry-api", "opentelemetry-sdk"]
+memory = ["faiss-cpu", "numpy"]
 all = [
     "wikipedia",
     "deep-translator",
@@ -51,6 +84,8 @@ all = [
     "google-generativeai",
     "opentelemetry-api",
     "opentelemetry-sdk",
+    "faiss-cpu",
+    "numpy",
 ]
 
 [tool.black]
