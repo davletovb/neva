@@ -43,8 +43,8 @@ packages = [{ include = "neva" }]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-openai = "0.28.1"
 requests = "^2.31.0"
+openai = { version = "^1.40.0", optional = true }
 wikipedia = { version = "1.4.0", optional = true }
 "opentelemetry-api" = { version = "^1.23.0", optional = true }
 "opentelemetry-sdk" = { version = "^1.23.0", optional = true }
@@ -72,7 +72,7 @@ types-requests = "2.31.0.7"
 [tool.poetry.extras]
 tools = ["wikipedia", "deep-translator", "transformers"]
 mlops = ["mlflow"]
-providers = ["anthropic", "google-generativeai"]
+providers = ["openai", "anthropic", "google-generativeai"]
 observability = ["opentelemetry-api", "opentelemetry-sdk"]
 memory = ["faiss-cpu", "numpy"]
 all = [
@@ -80,6 +80,7 @@ all = [
     "deep-translator",
     "transformers",
     "mlflow",
+    "openai",
     "anthropic",
     "google-generativeai",
     "opentelemetry-api",
@@ -124,6 +125,5 @@ skips = ["B101"]
 
 [tool.coverage.run]
 omit = [
-    "neva/agents/gpt.py",
     "neva/memory/faiss_vector_store.py",
 ]

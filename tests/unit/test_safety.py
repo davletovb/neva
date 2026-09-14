@@ -10,6 +10,11 @@ def test_prompt_validator_rejects_forbidden_pattern() -> None:
         validator.validate("DROP table users;")
 
 
+def test_prompt_validator_allows_ordinary_shutdown_language() -> None:
+    validator = safety.PromptValidator()
+    assert "shutdown" in validator.validate("Please shutdown the rover after the survey.")
+
+
 def test_prompt_validator_sanitises_control_characters() -> None:
     validator = safety.PromptValidator()
     result = validator.validate("hello\x07world")

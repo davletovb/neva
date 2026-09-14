@@ -28,8 +28,20 @@ transformers_stub.AutoModelForSeq2SeqLM = DummyAutoModel
 transformers_stub.AutoTokenizer = DummyAutoTokenizer
 sys.modules["transformers"] = transformers_stub
 
-from neva.agents import AgentManager, GPTAgent, ParallelExecutionConfig, TransformerAgent
-from neva.utils.exceptions import AgentCreationError
+from neva.agents import (
+    AgentFactory,
+    AgentManager,
+    GPTAgent,
+    InteractionHistory,
+    ParallelExecutionConfig,
+    TransformerAgent,
+)
+from neva.utils.exceptions import (
+    AgentActionError,
+    AgentCreationError,
+    AgentManagerError,
+    AgentNotFoundError,
+)
 
 
 def test_create_transformer_agent_returns_transformer_agent():
@@ -110,6 +122,29 @@ def test_batch_communicate_supports_parallel_execution():
     assert all(count == 1 for count in call_counts.values())
 
 
+def test_batch_communicate_rejects_nested_event_loop() -> None:
+    manager = AgentManager(parallel_config=ParallelExecutionConfig(enabled=True))
+    sender = manager.create_agent("transformer", name="Sender", llm_backend=lambda prompt: prompt)
+    receiver = manager.create_agent(
+        "transformer", name="Receiver", llm_backend=lambda prompt: prompt
+    )
+
+    async def _nested() -> None:
+        with pytest.raises(AgentManagerError):
+            manager.batch_communicate(str(sender.id), [str(receiver.id)], "hi", concurrent=True)
+
+    asyncio.run(_nested())
+
+
+def test_remove_from_group_unknown_member_raises() -> None:
+    manager = AgentManager()
+    manager.create_group("alpha", ["a1"])
+    with pytest.raises(AgentNotFoundError):
+        manager.remove_from_group("alpha", "missing")
+    manager.remove_from_group("alpha", "a1")
+    assert manager.groups["alpha"] == []
+
+
 def test_batch_communicate_async_returns_all_responses() -> None:
     config = ParallelExecutionConfig(enabled=True, max_concurrency=1, batch_size=2)
     manager = AgentManager(parallel_config=config)
@@ -154,3 +189,44 @@ def test_profile_population_memory_reports_usage() -> None:
 
     assert isinstance(current, int) and isinstance(peak, int)
     assert peak >= current >= 0
+
+
+def test_batch_communicate_sequential_and_empty():
+    manager = AgentManager()
+    sender = manager.create_agent("transformer", name="Sender", llm_backend=lambda prompt: prompt)
+    receiver = manager.create_agent(
+        "transformer",
+        name="Receiver",
+        llm_backend=lambda prompt: f"heard {prompt}",
+    )
+    responses = manager.batch_communicate(
+        str(sender.id), [str(receiver.id)], "Ping", concurrent=False
+    )
+    assert str(receiver.id) in responses
+    assert manager.batch_communicate(str(sender.id), [], "Ping") == {}
+
+
+def test_agent_factory_and_interaction_history():
+    agent = AgentFactory.create_agent("transformer", llm_backend=lambda prompt: prompt)
+    assert isinstance(agent, TransformerAgent)
+    history = InteractionHistory()
+    history.record("a", "b", "hello")
+    assert history.history[0]["message"] == "hello"
+
+
+def test_schedule_action_and_handle_error():
+    manager = AgentManager()
+    agent = manager.create_agent("transformer", name="Worker", llm_backend=lambda prompt: prompt)
+    manager.schedule_action(str(agent.id), "receive", "hello")
+    with pytest.raises(AgentActionError):
+        manager.schedule_action(str(agent.id), "missing_action")
+    with pytest.raises(AgentManagerError):
+        manager.handle_error(RuntimeError("boom"))
+
+
+def test_unknown_agent_lookups_raise():
+    manager = AgentManager()
+    with pytest.raises(AgentNotFoundError):
+        manager.get_agent("missing")
+    with pytest.raises(AgentNotFoundError):
+        manager.remove_agent("missing")

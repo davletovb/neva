@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from neva.memory.base import MemoryModule, MemoryRecord
 from neva.utils.exceptions import MemoryConfigurationError
@@ -59,8 +59,8 @@ class FaissVectorStoreMemory(MemoryModule):
                 "FaissVectorStoreMemory requires NumPy alongside faiss."
             ) from exc
 
-        self._faiss: faiss = faiss  # type: ignore[assignment]
-        self._np: np = np  # type: ignore[assignment]
+        self._faiss: Any = faiss
+        self._np: Any = np
         self._embedder = embedder
         self._top_k = top_k
         self._index_factory = index_factory
@@ -80,7 +80,7 @@ class FaissVectorStoreMemory(MemoryModule):
         self._base_index = self._faiss.index_factory(dimension, self._index_factory)
         self._index = self._faiss.IndexIDMap(self._base_index)
 
-    def _encode(self, text: str) -> np.ndarray:  # type: ignore[name-defined]
+    def _encode(self, text: str) -> Any:
         """Encode text into a normalized embedding vector.
 
         Args:

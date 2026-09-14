@@ -14,11 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by the FAISS vector store.
 - Repository `.gitignore` covering build, coverage, cache, and runtime
   artifacts.
+- Unit tests for `GPTAgent` Chat Completions providers, including Grok/xAI.
+
+### Changed
+- OpenAI-compatible providers (OpenAI and Grok/xAI) now call `/v1/chat/completions`
+  over `requests` instead of the legacy `openai==0.28.1` SDK.
+- Default models follow the selected provider (`gpt-4o-mini`, `grok-4.5`, …).
+- The `openai` package is an optional `providers` extra rather than a hard
+  dependency.
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a
   stray line continuation.
 - Updated the README "Last Commit" badge to point at the `main` branch.
+- Quickstart example adds the repository root to `sys.path` so
+  `python examples/quickstart_conversation.py` works from a fresh clone.
+- Grok/xAI provider now uses the OpenAI-compatible Chat Completions endpoint
+  and sends `max_tokens`.
+- FAISS memory module type annotations no longer break `mypy` when NumPy is
+  absent.
+- Wikipedia missing-dependency test actually runs.
+- `batch_communicate(concurrent=True)` uses `asyncio.run` and refuses to nest
+  inside an active event loop.
+- `remove_from_group` raises `AgentNotFoundError` instead of `ValueError`.
+- Prompt validator no longer rejects ordinary uses of the word "shutdown".
+- Tavern NPC demo no longer nests the full transcript into every line.
+- Anthropic content-block parsing now reads SDK objects as well as dicts.
 
 ## [0.1.0] - 2024-05-01
 ### Added

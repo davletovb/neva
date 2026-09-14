@@ -33,11 +33,10 @@ def test_summarizer_tool_uses_injected_backend():
 
 
 def test_wikipedia_tool_missing_dependency_raises(monkeypatch):
-    tool = WikipediaTool(summary_sentences=1)
-    if tool.__module__ != "neva.tools":  # pragma: no cover - defensive guard
-        pytest.skip("Unexpected module location")
+    import neva.tools.wikipedia as wiki_mod
 
-    monkeypatch.setattr("neva.tools.wikipedia", None)
+    monkeypatch.setattr(wiki_mod, "wikipedia", None)
+    tool = WikipediaTool(summary_sentences=1)
     with pytest.raises(MissingDependencyError) as exc:
         tool.use("Python (programming language)")
 
