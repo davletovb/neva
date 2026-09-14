@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol, cast, runtime_checkable
+
+
+def _utcnow_naive() -> datetime:
+    """Return naive UTC without relying on the deprecated ``datetime.utcnow``."""
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
 class ConversationTurn:
     speaker: str
     message: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=_utcnow_naive)
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -98,7 +104,7 @@ def create_snapshot(
     for state in agent_iter:
         agent_snapshot[state.agent_name] = state.to_dict()
     return SimulationSnapshot(
-        created_at=datetime.utcnow(),
+        created_at=_utcnow_naive(),
         environment_state=environment_state,
         agent_states=agent_snapshot,
     )

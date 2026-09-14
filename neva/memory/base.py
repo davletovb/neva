@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
+
+
+def _utcnow_naive() -> datetime:
+    """Return naive UTC without relying on the deprecated ``datetime.utcnow``."""
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -14,7 +20,7 @@ class MemoryRecord:
 
     speaker: str
     message: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=_utcnow_naive)
     metadata: Optional[Dict[str, object]] = None
 
 
