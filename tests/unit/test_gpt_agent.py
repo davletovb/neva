@@ -311,8 +311,18 @@ def test_http_error_is_retried_then_fails(monkeypatch):
         agent.respond("ping")
 
 
-def test_chat_completions_url_passthrough():
+def test_chat_completions_url_appends_to_custom_bases():
     assert (
-        _chat_completions_url("https://proxy.example/custom", "https://example.invalid")
-        == "https://proxy.example/custom"
+        _chat_completions_url("https://proxy.example/openai", "https://example.invalid")
+        == "https://proxy.example/openai/chat/completions"
+    )
+    assert (
+        _chat_completions_url("https://proxy.example/openai/", "https://example.invalid")
+        == "https://proxy.example/openai/chat/completions"
+    )
+    assert (
+        _chat_completions_url(
+            "https://proxy.example/openai/chat/completions/", "https://example.invalid"
+        )
+        == "https://proxy.example/openai/chat/completions"
     )

@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prompt validator no longer rejects ordinary uses of the word "shutdown".
 - Tavern NPC demo no longer nests the full transcript into every line.
 - Anthropic content-block parsing now reads SDK objects as well as dicts.
+- OpenTelemetry log SDK import prefers the public `opentelemetry.sdk.logs`
+  package and falls back to `_logs`.
+- Custom OpenAI/Grok `api_base` values that are not already a Chat Completions
+  endpoint now have `/chat/completions` appended.
 
 ## [0.1.0] - 2024-05-01
 ### Added

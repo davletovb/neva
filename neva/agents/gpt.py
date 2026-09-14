@@ -35,16 +35,19 @@ _CHAT_COMPLETION_URLS = {
 
 
 def _chat_completions_url(api_base: Optional[str], default_url: str) -> str:
-    """Resolve a Chat Completions URL from an optional base or full endpoint."""
+    """Resolve a Chat Completions URL from an optional base or full endpoint.
+
+    ``api_base`` is treated as a full endpoint only when it already ends with
+    ``chat/completions``. Every other value is a base URL and gets that path
+    appended, matching the previous OpenAI SDK behaviour for custom gateways.
+    """
 
     if not api_base:
         return default_url
     trimmed = api_base.rstrip("/")
     if trimmed.endswith("chat/completions"):
         return trimmed
-    if trimmed.endswith("/v1"):
-        return f"{trimmed}/chat/completions"
-    return trimmed
+    return f"{trimmed}/chat/completions"
 
 
 def _extract_chat_content(data: Dict[str, Any]) -> Optional[str]:
