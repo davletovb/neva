@@ -23,7 +23,7 @@ class PromptValidator:
 
     max_length: int = 4000
     forbidden_patterns: Iterable[str] = field(
-        default_factory=lambda: [r"<script>", r"drop\s+table", r"\bshutdown\b"]
+        default_factory=lambda: [r"<script\b", r"drop\s+table"]
     )
 
     def __post_init__(self) -> None:

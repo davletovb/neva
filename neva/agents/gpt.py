@@ -5,9 +5,8 @@ from __future__ import annotations
 import importlib
 import logging
 from time import perf_counter, sleep
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-import openai
 import requests
 
 from neva.agents.base import AIAgent, LLMBackend
@@ -18,6 +17,69 @@ from neva.utils.metrics import CostTracker, ResponseTimeTracker, TokenUsageTrack
 from neva.utils.safety import RateLimiter
 from neva.utils.telemetry import get_telemetry
 
+_DEFAULT_MODELS = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-3-5-sonnet-latest",
+    "gemini": "gemini-1.5-flash",
+    "google": "gemini-1.5-flash",
+    "google-gemini": "gemini-1.5-flash",
+    "xai": "grok-4.5",
+    "grok": "grok-4.5",
+}
+
+_CHAT_COMPLETION_URLS = {
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "xai": "https://api.x.ai/v1/chat/completions",
+    "grok": "https://api.x.ai/v1/chat/completions",
+}
+
+
+def _chat_completions_url(api_base: Optional[str], default_url: str) -> str:
+    """Resolve a Chat Completions URL from an optional base or full endpoint.
+
+    ``api_base`` is treated as a full endpoint only when it already ends with
+    ``chat/completions``. Every other value is a base URL and gets that path
+    appended, matching the previous OpenAI SDK behaviour for custom gateways.
+    """
+
+    if not api_base:
+        return default_url
+    trimmed = api_base.rstrip("/")
+    if trimmed.endswith("chat/completions"):
+        return trimmed
+    return f"{trimmed}/chat/completions"
+
+
+def _extract_chat_content(data: Dict[str, Any]) -> Optional[str]:
+    """Parse OpenAI-compatible Chat Completions JSON into a text reply."""
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+        if isinstance(choice, dict):
+            message = choice.get("message") or choice.get("delta") or {}
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get("text") or item.get("value")
+                        if text:
+                            parts.append(str(text))
+                    elif isinstance(item, str):
+                        parts.append(item)
+                content = "".join(parts)
+            if content:
+                return str(content).strip()
+            text = choice.get("text")
+            if text:
+                return str(text).strip()
+    for key in ("content", "text"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
 
 class GPTAgent(AIAgent):
     """Agent that communicates with a large language model provider."""
@@ -26,7 +88,7 @@ class GPTAgent(AIAgent):
         self,
         *,
         api_key: Optional[str] = None,
-        model: str = "gpt-3.5-turbo",
+        model: Optional[str] = None,
         provider: str = "openai",
         name: Optional[str] = None,
         llm_backend: Optional[LLMBackend] = None,
@@ -52,8 +114,8 @@ class GPTAgent(AIAgent):
             response_time_tracker=response_time_tracker,
         )
         self.api_key = api_key
-        self.model = model
         self.provider = provider.lower()
+        self.model = model or _DEFAULT_MODELS.get(self.provider, "gpt-4o-mini")
         self.api_base = api_base
         self._rate_limiter = rate_limiter or RateLimiter(rate=60, per=60.0)
         self._cache = resolved_cache
@@ -160,20 +222,32 @@ class GPTAgent(AIAgent):
             return self._invoke_grok(prompt)
         raise ConfigurationError(f"Unsupported provider '{self.provider}'.")
 
-    def _invoke_openai(self, prompt: str) -> str:
-        openai.api_key = self.api_key
-        if self.api_base is not None:
-            openai.api_base = self.api_base
-        response = openai.ChatCompletion.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=self._max_output_tokens,
-            request_timeout=self._request_timeout,
-        )
-        content = response.choices[0].message["content"].strip()
+    def _invoke_chat_completions(self, prompt: str, *, default_url: str, empty_error: str) -> str:
+        url = _chat_completions_url(self.api_base, default_url)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        headers.update(self._extra_headers)
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": self._max_output_tokens,
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=self._request_timeout)
+        response.raise_for_status()
+        data = response.json()
+        content = _extract_chat_content(data)
         if not content:
-            raise BackendError("Empty response from OpenAI provider.")
+            raise BackendError(empty_error)
         return content
+
+    def _invoke_openai(self, prompt: str) -> str:
+        return self._invoke_chat_completions(
+            prompt,
+            default_url=_CHAT_COMPLETION_URLS["openai"],
+            empty_error="Empty response from OpenAI provider.",
+        )
 
     def _invoke_anthropic(self, prompt: str) -> str:
         try:
@@ -202,13 +276,12 @@ class GPTAgent(AIAgent):
             raise BackendError("Anthropic provider returned no content.")
         parts = []
         for block in content_blocks:
-            text = (
-                getattr(block, "text", None) or block.get("text")
-                if isinstance(block, dict)
-                else None
-            )
+            if isinstance(block, dict):
+                text = block.get("text")
+            else:
+                text = getattr(block, "text", None)
             if text:
-                parts.append(text)
+                parts.append(str(text))
         content = "".join(parts).strip()
         if not content:
             raise BackendError("Anthropic provider returned empty content.")
@@ -239,40 +312,11 @@ class GPTAgent(AIAgent):
         raise BackendError("Gemini provider returned empty content.")
 
     def _invoke_grok(self, prompt: str) -> str:
-        url = self.api_base or "https://api.x.ai/v1/messages"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        headers.update(self._extra_headers)
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        response = requests.post(url, headers=headers, json=payload, timeout=self._request_timeout)
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or data.get("messages")
-        content: Optional[str] = None
-        if isinstance(message, list) and message:
-            message = message[-1]
-        if isinstance(message, dict):
-            content = message.get("content")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    text = item.get("text") or item.get("value")
-                    if text:
-                        parts.append(str(text))
-                elif isinstance(item, str):
-                    parts.append(item)
-            content = "".join(parts)
-        if not content:
-            content = data.get("content") or data.get("text")
-        if not content:
-            raise BackendError("Grok provider returned empty content.")
-        return str(content).strip()
+        return self._invoke_chat_completions(
+            prompt,
+            default_url=_CHAT_COMPLETION_URLS["grok"],
+            empty_error="Grok provider returned empty content.",
+        )
 
     def respond(self, message: str) -> str:
         prompt = self.prepare_prompt(message)

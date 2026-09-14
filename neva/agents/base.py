@@ -12,8 +12,8 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
     Callable,
+    Coroutine,
     Dict,
     Iterable,
     List,
@@ -471,16 +471,16 @@ class AgentManager:
             return [items[:]]
         return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
-    def _execute_coroutine(self, coro: Awaitable[Dict[str, str]]) -> Dict[str, str]:
-        loop = asyncio.new_event_loop()
+    def _execute_coroutine(self, coro: Coroutine[Any, Any, Dict[str, str]]) -> Dict[str, str]:
         try:
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(coro)
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            return result
-        finally:
-            asyncio.set_event_loop(None)
-            loop.close()
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        coro.close()
+        raise AgentManagerError(
+            "batch_communicate(concurrent=True) cannot run inside an active event loop. "
+            "Await batch_communicate_async instead."
+        )
 
     def create_agent(self, agent_type: str, **kwargs) -> AIAgent:
         agent_type = agent_type.lower()
@@ -580,7 +580,10 @@ class AgentManager:
         self.groups.setdefault(group_id, []).append(agent_id)
 
     def remove_from_group(self, group_id: str, agent_id: str) -> None:
-        self.groups.setdefault(group_id, []).remove(agent_id)
+        members = self.groups.get(group_id)
+        if not members or agent_id not in members:
+            raise AgentNotFoundError(f"Agent {agent_id} is not in group '{group_id}'.")
+        members.remove(agent_id)
 
     def schedule_action(self, agent_id: str, action: str, *args, **kwargs) -> None:
         agent = self.get_agent(agent_id)

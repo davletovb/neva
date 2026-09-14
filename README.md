@@ -99,12 +99,10 @@ your observability stack:
 
 ```python
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-from opentelemetry.sdk._logs.export import ConsoleLogExporter
 from neva.utils.telemetry import configure_telemetry
 
 telemetry = configure_telemetry(
     span_exporter=ConsoleSpanExporter(),
-    log_exporter=ConsoleLogExporter(),
 )
 ```
 

@@ -51,13 +51,34 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
         Context = getattr(context_module, "Context")
         set_span_in_context = getattr(context_module, "set_span_in_context")
 
-        sdk_logs = importlib.import_module("opentelemetry.sdk._logs")
+        try:
+            sdk_logs = importlib.import_module("opentelemetry.sdk.logs")
+        except Exception:
+            sdk_logs = importlib.import_module("opentelemetry.sdk._logs")
         LoggerProvider = getattr(sdk_logs, "LoggerProvider")
-        sdk_log_export = importlib.import_module("opentelemetry.sdk._logs.export")
+        try:
+            sdk_log_export = importlib.import_module("opentelemetry.sdk.logs.export")
+        except Exception:
+            sdk_log_export = importlib.import_module("opentelemetry.sdk._logs.export")
         BatchLogRecordProcessor = getattr(sdk_log_export, "BatchLogRecordProcessor")
         LogExporter = getattr(sdk_log_export, "LogExporter")
-        logging_module = importlib.import_module("opentelemetry.sdk._logs.logging")
-        LoggingHandler = getattr(logging_module, "LoggingHandler")
+        LoggingHandler = None
+        for module_name in (
+            "opentelemetry.sdk.logs",
+            "opentelemetry.sdk._logs",
+            "opentelemetry.sdk._logs.logging",
+        ):
+            try:
+                logging_module = importlib.import_module(module_name)
+            except Exception:
+                logging_module = None
+            if logging_module is None:
+                continue
+            LoggingHandler = getattr(logging_module, "LoggingHandler", None)
+            if LoggingHandler is not None:
+                break
+        if LoggingHandler is None:
+            raise ImportError("OpenTelemetry LoggingHandler is unavailable")
 
         sdk_metrics = importlib.import_module("opentelemetry.sdk.metrics")
         MeterProvider = getattr(sdk_metrics, "MeterProvider")

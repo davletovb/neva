@@ -54,8 +54,7 @@ def make_npc_backend(
     def formatter(prompt: str) -> str:
         del prompt
         event = environment._current_event()
-        rumours = environment.recent_dialogue()
-        return f"reacts to '{event}' while weaving it into tavern gossip ({rumours})."
+        return f"reacts to '{event}'."
 
     return make_persona_backend(name, persona, formatter)
 
