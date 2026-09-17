@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default models follow the selected provider (`gpt-4o-mini`, `grok-4.5`, …).
 - The `openai` package is an optional `providers` extra rather than a hard
   dependency.
-- `GPTAgent` now sends recorded conversation turns as chat messages (and
-  flattens them for Gemini) so live providers see prior dialogue.
+- `GPTAgent` now sends a recent-turn window as chat messages (flattened for
+  Gemini) so live providers see prior dialogue. The window is bounded by
+  `max_context_chars` (default 24,000); `ConversationState` itself is unchanged.
 - README describes input hygiene, per-instance rate limits, and thread-safety
   boundaries instead of calling them "robust safety rails".
 
@@ -53,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `error_policy="return"` applies to `SchedulingError` from `get_next_agent()`.
 - `MathTool` rejects exponentiation outside a bounded range.
 - Observer timestamps no longer use deprecated `datetime.utcnow()`.
+- Token accounting uses the text actually sent (including history). Gemini
+  `usage_metadata` is honoured when the SDK provides it.
 
 ## [0.1.0] - 2024-05-01
 ### Added

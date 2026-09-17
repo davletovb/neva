@@ -34,6 +34,9 @@ _CHAT_COMPLETION_URLS = {
     "grok": "https://api.x.ai/v1/chat/completions",
 }
 
+# ~6k tokens at 4 chars/token; leaves headroom for the current prompt and completion.
+_DEFAULT_MAX_CONTEXT_CHARS = 24000
+
 
 def _chat_completions_url(api_base: Optional[str], default_url: str) -> str:
     """Resolve a Chat Completions URL from an optional base or full endpoint.
@@ -96,6 +99,32 @@ def _extract_chat_content(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _provider_usage_from_gemini(response: Any) -> Optional[Dict[str, Any]]:
+    """Map Gemini ``usage_metadata`` onto the Chat Completions usage shape."""
+
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage_metadata")
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        prompt_tokens = usage.get("prompt_token_count") or usage.get("prompt_tokens")
+        completion_tokens = usage.get("candidates_token_count") or usage.get("completion_tokens")
+    else:
+        prompt_tokens = getattr(usage, "prompt_token_count", None) or getattr(
+            usage, "prompt_tokens", None
+        )
+        completion_tokens = getattr(usage, "candidates_token_count", None) or getattr(
+            usage, "completion_tokens", None
+        )
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+    return {
+        "prompt_tokens": int(prompt_tokens or 0),
+        "completion_tokens": int(completion_tokens or 0),
+    }
+
+
 class GPTAgent(AIAgent):
     """Agent that communicates with a large language model provider."""
 
@@ -119,6 +148,7 @@ class GPTAgent(AIAgent):
         api_base: Optional[str] = None,
         request_timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        max_context_chars: int = _DEFAULT_MAX_CONTEXT_CHARS,
     ) -> None:
         resolved_cache = cache or LLMCache(max_size=256)
         super().__init__(
@@ -128,6 +158,8 @@ class GPTAgent(AIAgent):
             cache=resolved_cache,
             response_time_tracker=response_time_tracker,
         )
+        if max_context_chars <= 0:
+            raise ConfigurationError("max_context_chars must be positive")
         self.api_key = api_key
         self.provider = provider.lower()
         self.model = model or _DEFAULT_MODELS.get(self.provider, "gpt-4o-mini")
@@ -142,6 +174,7 @@ class GPTAgent(AIAgent):
         self._max_output_tokens = max_output_tokens
         self._request_timeout = request_timeout
         self._extra_headers = dict(extra_headers or {})
+        self._max_context_chars = max_context_chars
         self._last_provider_usage: Optional[Dict[str, Any]] = None
 
     def _default_backend(self) -> LLMBackend:
@@ -170,7 +203,9 @@ class GPTAgent(AIAgent):
                     prompt_tokens = response_tokens = total_tokens = 0
                     if self._token_tracker is not None:
                         prompt_tokens, response_tokens = self._token_tracker.record(
-                            prompt, content, usage=self._last_provider_usage
+                            self._request_text(prompt),
+                            content,
+                            usage=self._last_provider_usage,
                         )
                         total_tokens = prompt_tokens + response_tokens
                     if self._cost_tracker is not None and total_tokens:
@@ -327,11 +362,13 @@ class GPTAgent(AIAgent):
 
         generative_ai.configure(api_key=self.api_key)
         model = generative_ai.GenerativeModel(self.model)
+        request_text = self._prompt_with_history(prompt)
         response = model.generate_content(
-            self._prompt_with_history(prompt),
+            request_text,
             generation_config={"max_output_tokens": self._max_output_tokens},
             request_options={"timeout": self._request_timeout, "retry": None},
         )
+        self._last_provider_usage = _provider_usage_from_gemini(response)
         if hasattr(response, "text") and response.text:
             return response.text.strip()
         candidates = getattr(response, "candidates", None)
@@ -352,37 +389,71 @@ class GPTAgent(AIAgent):
             empty_error="Grok provider returned empty content.",
         )
 
+    def _turn_text(self, turn: Any) -> str:
+        if turn.speaker == self.name or turn.speaker in {"user", "system"}:
+            return str(turn.message)
+        return f"{turn.speaker}: {turn.message}"
+
+    def _history_window(self, prompt: str) -> List[Any]:
+        """Return a recent contiguous suffix of turns that fits the char budget.
+
+        ConversationState itself is unbounded; only the provider payload is
+        trimmed. A leading assistant turn is dropped so Chat Completions /
+        Anthropic requests still start with a user message.
+        """
+
+        remaining = max(0, self._max_context_chars - len(prompt))
+        window: List[Any] = []
+        for turn in reversed(self.conversation_state.turns):
+            size = len(self._turn_text(turn)) + 1
+            if size > remaining:
+                break
+            window.append(turn)
+            remaining -= size
+        window.reverse()
+        while window and window[0].speaker == self.name:
+            window.pop(0)
+        return window
+
     def _chat_messages(self, prompt: str) -> List[Dict[str, str]]:
         """Build Chat Completions messages from recorded turns plus ``prompt``."""
 
         messages: List[Dict[str, str]] = []
-        for turn in self.conversation_state.turns:
+        for turn in self._history_window(prompt):
+            content = self._turn_text(turn)
             if turn.speaker == self.name:
-                messages.append({"role": "assistant", "content": turn.message})
-            elif turn.speaker in {"user", "system"}:
-                messages.append({"role": "user", "content": turn.message})
+                messages.append({"role": "assistant", "content": content})
             else:
-                messages.append({"role": "user", "content": f"{turn.speaker}: {turn.message}"})
+                messages.append({"role": "user", "content": content})
         messages.append({"role": "user", "content": prompt})
         return messages
 
     def _prompt_with_history(self, prompt: str) -> str:
         """Flatten recorded turns in front of ``prompt`` for string-only APIs."""
 
-        if not self.conversation_state.turns:
+        window = self._history_window(prompt)
+        if not window:
             return prompt
-        lines = [f"{turn.speaker}: {turn.message}" for turn in self.conversation_state.turns]
+        lines = [f"{turn.speaker}: {turn.message}" for turn in window]
         return "Conversation so far:\n" + "\n".join(lines) + "\n\n" + prompt
+
+    def _request_text(self, prompt: str) -> str:
+        """Text actually sent to the provider, used for token estimates."""
+
+        if self.provider in {"gemini", "google", "google-gemini"}:
+            return self._prompt_with_history(prompt)
+        return "\n".join(message["content"] for message in self._chat_messages(prompt))
 
     def _scoped_key(self, prompt: str) -> str:
         """Cache key bound to the provider/model configuration in effect."""
 
-        history = [(turn.speaker, turn.message) for turn in self.conversation_state.turns]
+        history = [(turn.speaker, turn.message) for turn in self._history_window(prompt)]
         scope = {
             "provider": self.provider,
             "model": self.model,
             "api_base": self.api_base,
             "max_output_tokens": self._max_output_tokens,
+            "max_context_chars": self._max_context_chars,
             "history": history,
         }
         return json.dumps({"scope": scope, "prompt": prompt}, sort_keys=True)

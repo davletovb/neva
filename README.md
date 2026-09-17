@@ -292,7 +292,8 @@ scheduler = create_scheduler("my_scheduler")
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
   helpers let you persist simulations mid-run and resume them later. Live
-  providers receive prior turns as chat messages, not only the current prompt.
+  providers receive a recent-turn window as chat messages, not the full
+  unbounded transcript.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
