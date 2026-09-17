@@ -28,6 +28,8 @@ _DEFAULT_MODELS = {
     "grok": "grok-4.5",
 }
 
+_GEMINI_PROVIDERS = {"gemini", "google", "google-gemini"}
+
 _CHAT_COMPLETION_URLS = {
     "openai": "https://api.openai.com/v1/chat/completions",
     "xai": "https://api.x.ai/v1/chat/completions",
@@ -277,7 +279,7 @@ class GPTAgent(AIAgent):
             return self._invoke_openai(prompt)
         if self.provider == "anthropic":
             return self._invoke_anthropic(prompt)
-        if self.provider in {"gemini", "google", "google-gemini"}:
+        if self.provider in _GEMINI_PROVIDERS:
             return self._invoke_gemini(prompt)
         if self.provider in {"xai", "grok"}:
             return self._invoke_grok(prompt)
@@ -394,25 +396,41 @@ class GPTAgent(AIAgent):
             return str(turn.message)
         return f"{turn.speaker}: {turn.message}"
 
+    def _format_request(self, turns: List[Any], prompt: str) -> str:
+        """Serialize ``turns`` plus ``prompt`` the way this provider will send them."""
+
+        if self.provider in _GEMINI_PROVIDERS:
+            if not turns:
+                return prompt
+            lines = [f"{turn.speaker}: {turn.message}" for turn in turns]
+            return "Conversation so far:\n" + "\n".join(lines) + "\n\n" + prompt
+        contents = [self._turn_text(turn) for turn in turns]
+        contents.append(prompt)
+        return "\n".join(contents)
+
     def _history_window(self, prompt: str) -> List[Any]:
         """Return a recent contiguous suffix of turns that fits the char budget.
 
-        ConversationState itself is unbounded; only the provider payload is
-        trimmed. A leading assistant turn is dropped so Chat Completions /
-        Anthropic requests still start with a user message.
+        The budget is measured on the provider-specific serialized request, not
+        raw turn text. ConversationState itself is unbounded. Chat Completions
+        and Anthropic drop a leading assistant turn so the request still starts
+        with a user message.
         """
 
-        remaining = max(0, self._max_context_chars - len(prompt))
+        if len(self._format_request([], prompt)) > self._max_context_chars:
+            raise ConfigurationError(
+                f"Current prompt is {len(prompt)} characters, which exceeds "
+                f"max_context_chars={self._max_context_chars}"
+            )
         window: List[Any] = []
         for turn in reversed(self.conversation_state.turns):
-            size = len(self._turn_text(turn)) + 1
-            if size > remaining:
+            candidate = [turn, *window]
+            if len(self._format_request(candidate, prompt)) > self._max_context_chars:
                 break
-            window.append(turn)
-            remaining -= size
-        window.reverse()
-        while window and window[0].speaker == self.name:
-            window.pop(0)
+            window = candidate
+        if self.provider not in _GEMINI_PROVIDERS:
+            while window and window[0].speaker == self.name:
+                window.pop(0)
         return window
 
     def _chat_messages(self, prompt: str) -> List[Dict[str, str]]:
@@ -431,18 +449,12 @@ class GPTAgent(AIAgent):
     def _prompt_with_history(self, prompt: str) -> str:
         """Flatten recorded turns in front of ``prompt`` for string-only APIs."""
 
-        window = self._history_window(prompt)
-        if not window:
-            return prompt
-        lines = [f"{turn.speaker}: {turn.message}" for turn in window]
-        return "Conversation so far:\n" + "\n".join(lines) + "\n\n" + prompt
+        return self._format_request(self._history_window(prompt), prompt)
 
     def _request_text(self, prompt: str) -> str:
         """Text actually sent to the provider, used for token estimates."""
 
-        if self.provider in {"gemini", "google", "google-gemini"}:
-            return self._prompt_with_history(prompt)
-        return "\n".join(message["content"] for message in self._chat_messages(prompt))
+        return self._format_request(self._history_window(prompt), prompt)
 
     def _scoped_key(self, prompt: str) -> str:
         """Cache key bound to the provider/model configuration in effect."""

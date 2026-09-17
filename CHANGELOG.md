@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency.
 - `GPTAgent` now sends a recent-turn window as chat messages (flattened for
   Gemini) so live providers see prior dialogue. The window is bounded by
-  `max_context_chars` (default 24,000); `ConversationState` itself is unchanged.
+  `max_context_chars` (default 24,000) measured on the serialized provider
+  request; a current prompt that cannot fit raises `ConfigurationError`.
+  `ConversationState` itself is unchanged.
 - README describes input hygiene, per-instance rate limits, and thread-safety
   boundaries instead of calling them "robust safety rails".
 

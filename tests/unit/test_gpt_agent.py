@@ -495,7 +495,7 @@ def test_chat_messages_prefix_other_speakers():
 
 
 def test_prompt_with_history_flattens_turns():
-    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout", provider="gemini")
     assert agent._prompt_with_history("now") == "now"
     agent.receive("hello", sender="user")
     flattened = agent._prompt_with_history("now")
@@ -555,8 +555,7 @@ def test_history_window_drops_oldest_turns():
     assert [turn.message for turn in window] == ["22222222", "ack"]
     messages = agent._chat_messages("3333")
     assert [item["content"] for item in messages] == ["22222222", "ack", "3333"]
-    assert "11111111" not in agent._prompt_with_history("3333")
-    assert "22222222" in agent._prompt_with_history("3333")
+    assert agent._request_text("3333") == "22222222\nack\n3333"
 
 
 def test_history_window_drops_leading_assistant():
@@ -589,6 +588,97 @@ def test_provider_payload_omits_turns_outside_the_window(monkeypatch):
     agent._invoke_grok("3333")
     contents = [item["content"] for item in calls[0]["messages"]]
     assert contents == ["22222222", "ack", "3333"]
+
+
+def test_oversized_current_prompt_raises():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout", max_context_chars=8)
+    with pytest.raises(ConfigurationError, match="exceeds max_context_chars=8"):
+        agent._history_window("123456789")
+    with pytest.raises(ConfigurationError, match="exceeds max_context_chars=8"):
+        agent.respond("123456789")
+
+
+def test_gemini_serialized_history_respects_budget():
+    agent = GPTAgent(
+        llm_backend=lambda prompt: "ack",
+        name="Scout",
+        provider="gemini",
+        max_context_chars=24,
+    )
+    agent._remember("user", "22222222")
+    agent._remember("Scout", "ack")
+    flattened = agent._prompt_with_history("3333")
+    assert flattened == "3333"
+    assert len(flattened) <= 24
+
+
+def test_gemini_keeps_turns_that_fit_serialized_budget():
+    agent = GPTAgent(
+        llm_backend=lambda prompt: "ack",
+        name="Scout",
+        provider="gemini",
+        max_context_chars=52,
+    )
+    agent._remember("user", "11111111")
+    agent._remember("Scout", "ack")
+    agent._remember("user", "22222222")
+    agent._remember("Scout", "ack")
+    flattened = agent._prompt_with_history("3333")
+    assert flattened == ("Conversation so far:\nuser: 22222222\nScout: ack\n\n3333")
+    assert len(flattened) == 52
+    assert "user: 11111111" not in flattened
+    assert agent._request_text("3333") == flattened
+
+
+def test_gemini_invoke_sends_budgeted_text(monkeypatch):
+    captured = []
+
+    class _Model:
+        def __init__(self, model):
+            self.model = model
+
+        def generate_content(self, prompt, **kwargs):
+            captured.append(prompt)
+            return type("Resp", (), {"text": "ok"})()
+
+    class _GenAI:
+        @staticmethod
+        def configure(api_key):
+            del api_key
+
+        GenerativeModel = _Model
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.importlib.import_module",
+        lambda name: _GenAI
+        if name == "google.generativeai"
+        else (_ for _ in ()).throw(ImportError(name)),
+    )
+    tight = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        name="Scout",
+        max_retries=0,
+        max_context_chars=24,
+    )
+    tight._remember("user", "22222222")
+    tight._remember("Scout", "ack")
+    tight._invoke_gemini("3333")
+    assert captured == ["3333"]
+
+    captured.clear()
+    roomy = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        name="Scout",
+        max_retries=0,
+        max_context_chars=52,
+    )
+    roomy._remember("user", "22222222")
+    roomy._remember("Scout", "ack")
+    roomy._invoke_gemini("3333")
+    assert len(captured[0]) == 52
+    assert captured[0] == roomy._request_text("3333")
 
 
 def test_gemini_token_tracker_counts_flattened_history(monkeypatch):
