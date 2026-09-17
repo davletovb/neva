@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from collections.abc import Iterable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -63,17 +64,33 @@ class RateLimiter:
         self._last_check = time.monotonic()
         self._lock = threading.Lock()
 
-    def acquire(self) -> None:
-        """Block until one token is available.
+    def acquire(self, *, cancel_event: Optional[threading.Event] = None) -> None:
+        """Block until one token is available, optionally allowing cancellation.
 
-        Sleep happens outside the lock so callers sharing this limiter are not
-        serialized for the full wait. Limits apply to this instance only; pass
-        the same limiter into multiple agents to share a provider budget.
+        A set cancel_event raises concurrent.futures.CancelledError without
+        consuming a token. Token waits use Event.wait outside the lock. Lock
+        acquisition itself is not interruptible; cancellation is checked again
+        after acquiring it. Cancellation racing with token admission may lose
+        that race and does not revoke a token already granted: a caller that
+        can be cancelled should re-check ``cancel_event.is_set()`` after
+        acquire() returns before proceeding.
+
+        concurrent.futures.CancelledError inherits Exception and is distinct
+        from asyncio.CancelledError. Callers with broad retry handlers should
+        catch and re-raise this cancellation before handling other exceptions.
+
+        Limits apply to this instance only; pass the same limiter to share a
+        request-rate budget. This does not cancel in-flight provider calls or
+        automatically propagate cancellation from agents or asyncio tasks.
         """
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError("Rate limiter acquisition cancelled")
 
         while True:
             sleep_time = 0.0
             with self._lock:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CancelledError("Rate limiter acquisition cancelled")
                 current = time.monotonic()
                 time_passed = current - self._last_check
                 self._last_check = current
@@ -84,7 +101,10 @@ class RateLimiter:
                     self._allowance -= 1.0
                     return
                 sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
-            time.sleep(sleep_time)
+            if cancel_event is None:
+                time.sleep(sleep_time)
+            elif cancel_event.wait(sleep_time):
+                raise CancelledError("Rate limiter acquisition cancelled")
 
 
 class CircuitBreaker:
