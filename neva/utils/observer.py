@@ -7,7 +7,7 @@ import json
 import logging
 from collections import Counter, defaultdict
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from threading import RLock
 from time import perf_counter
@@ -28,6 +28,12 @@ from typing import (
 
 from neva.utils.exceptions import MissingDependencyError
 from neva.utils.telemetry import get_telemetry
+
+
+def _utcnow_naive() -> datetime:
+    """Return naive UTC without relying on the deprecated ``datetime.utcnow``."""
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class ToolLike(Protocol):
@@ -171,7 +177,7 @@ class SimulationObserver:
         if status not in {"scheduled", "completed", "failed"}:
             raise ValueError(f"Unknown turn status: {status}")
         agent_list: List[Any] = list(agents)
-        now = datetime.utcnow()
+        now = _utcnow_naive()
         with self._lock:
             self._latest_latency = latency if status == "completed" else None
             if active_agent is not None:
@@ -360,7 +366,7 @@ class SimulationObserver:
         event: Dict[str, Any] = {
             "agent": agent_name,
             "tool": tool_name,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": _utcnow_naive().isoformat(),
         }
         if duration is not None:
             event["duration_seconds"] = duration

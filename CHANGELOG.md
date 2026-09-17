@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default models follow the selected provider (`gpt-4o-mini`, `grok-4.5`, …).
 - The `openai` package is an optional `providers` extra rather than a hard
   dependency.
+- `GPTAgent` now sends a recent-turn window as chat messages (flattened for
+  Gemini) so live providers see prior dialogue. The window is bounded by
+  `max_context_chars` (default 24,000) measured on the serialized provider
+  request; a current prompt that cannot fit raises `ConfigurationError`.
+  `ConversationState` itself is unchanged.
+- README describes input hygiene, per-instance rate limits, and thread-safety
+  boundaries instead of calling them "robust safety rails".
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a
@@ -44,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and falls back to `_logs`.
 - Custom OpenAI/Grok `api_base` values that are not already a Chat Completions
   endpoint now have `/chat/completions` appended.
+- `RateLimiter.acquire()` sleeps outside its lock so shared limiters are not
+  serialized for the full wait.
+- `error_policy="return"` applies to `SchedulingError` from `get_next_agent()`.
+- `MathTool` rejects exponentiation outside a bounded range.
+- Observer timestamps no longer use deprecated `datetime.utcnow()`.
+- Token accounting uses the text actually sent (including history). Gemini
+  `usage_metadata` is honoured when the SDK provides it.
 
 ## [0.1.0] - 2024-05-01
 ### Added

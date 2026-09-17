@@ -2,7 +2,8 @@ import pytest
 
 from neva.agents import TransformerAgent
 from neva.environments import BasicEnvironment, Environment
-from neva.schedulers import RoundRobinScheduler
+from neva.schedulers import EventDrivenScheduler, RoundRobinScheduler
+from neva.utils.exceptions import SchedulingError
 
 
 def test_basic_environment_exposes_error_policy():
@@ -73,3 +74,14 @@ def test_step_returns_error_sentinel_when_configured():
     snapshot = env.scheduler.simulation_observer.latest_snapshot()
     assert snapshot["failed_turn_count"] == 1
     assert snapshot["turn_count"] == 0
+
+
+def test_error_policy_covers_scheduling_error():
+    env = Environment(EventDrivenScheduler(), error_policy="return", error_value="NO_EVENT")
+    env.register_agent(TransformerAgent(name="A", llm_backend=lambda prompt: "A"))
+    assert env.step() == "NO_EVENT"
+
+    env_raise = Environment(EventDrivenScheduler(), error_policy="raise")
+    env_raise.register_agent(TransformerAgent(name="A", llm_backend=lambda prompt: "A"))
+    with pytest.raises(SchedulingError, match="no pending events"):
+        env_raise.step()

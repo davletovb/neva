@@ -17,6 +17,15 @@ def test_math_tool_rejects_invalid_expression():
         tool.use("__import__('os').system('ls')")
 
 
+def test_math_tool_rejects_huge_exponentiation():
+    tool = MathTool()
+    assert tool.use("2 ** 8") == "256.0"
+    with pytest.raises(ToolExecutionError, match="Exponentiation"):
+        tool.use("2 ** 100")
+    with pytest.raises(ToolExecutionError, match="Exponentiation"):
+        tool.use("1000001 ** 2")
+
+
 def test_translator_tool_uses_injected_backend():
     def factory():
         return SimpleNamespace(

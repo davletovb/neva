@@ -1,8 +1,14 @@
 import pytest
 import requests
 
-from neva.agents.gpt import GPTAgent, _chat_completions_url, _extract_chat_content
+from neva.agents.gpt import (
+    GPTAgent,
+    _chat_completions_url,
+    _extract_chat_content,
+    _provider_usage_from_gemini,
+)
 from neva.utils.exceptions import BackendError, ConfigurationError
+from neva.utils.metrics import TokenUsageTracker
 
 
 class _FakeResponse:
@@ -464,3 +470,296 @@ def test_chat_completions_url_appends_to_custom_bases():
         )
         == "https://proxy.example/openai/chat/completions"
     )
+
+
+def test_chat_messages_without_history_is_single_user_turn():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    assert agent._chat_messages("ping") == [{"role": "user", "content": "ping"}]
+
+
+def test_chat_messages_include_recorded_turns():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    agent.receive("hello", sender="user")
+    messages = agent._chat_messages("next")
+    assert messages[0] == {"role": "user", "content": "hello"}
+    assert messages[1] == {"role": "assistant", "content": "ack"}
+    assert messages[2] == {"role": "user", "content": "next"}
+
+
+def test_chat_messages_prefix_other_speakers():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    agent.receive("knock", sender="Innkeeper")
+    messages = agent._chat_messages("reply")
+    assert messages[0] == {"role": "user", "content": "Innkeeper: knock"}
+    assert messages[1] == {"role": "assistant", "content": "ack"}
+
+
+def test_prompt_with_history_flattens_turns():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout", provider="gemini")
+    assert agent._prompt_with_history("now") == "now"
+    agent.receive("hello", sender="user")
+    flattened = agent._prompt_with_history("now")
+    assert flattened.startswith("Conversation so far:")
+    assert "user: hello" in flattened
+    assert "Scout: ack" in flattened
+    assert flattened.endswith("now")
+
+
+def test_provider_payload_includes_conversation_history(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        return _FakeResponse({"choices": [{"message": {"content": f"r{len(calls)}"}}]})
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
+    agent.receive("hello", sender="user")
+    assert len(calls[0]["messages"]) == 1
+    assert calls[0]["messages"][0]["role"] == "user"
+    assert "hello" in calls[0]["messages"][0]["content"]
+
+    agent.receive("follow up", sender="user")
+    messages = calls[1]["messages"]
+    assert messages[0] == {"role": "user", "content": "hello"}
+    assert messages[1] == {"role": "assistant", "content": "r1"}
+    assert messages[2]["role"] == "user"
+    assert "follow up" in messages[2]["content"]
+
+
+def test_cache_key_includes_conversation_history():
+    calls = []
+
+    def backend(prompt: str) -> str:
+        calls.append(prompt)
+        return f"r{len(calls)}"
+
+    agent = GPTAgent(llm_backend=backend, name="Scout")
+    agent.receive("hello", sender="user")
+    agent.receive("hello", sender="user")
+    assert len(calls) == 2
+
+
+def test_max_context_chars_must_be_positive():
+    with pytest.raises(ConfigurationError, match="max_context_chars"):
+        GPTAgent(llm_backend=lambda prompt: "ack", max_context_chars=0)
+
+
+def test_history_window_drops_oldest_turns():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout", max_context_chars=24)
+    agent._remember("user", "11111111")
+    agent._remember("Scout", "ack")
+    agent._remember("user", "22222222")
+    agent._remember("Scout", "ack")
+    window = agent._history_window("3333")
+    assert [turn.message for turn in window] == ["22222222", "ack"]
+    messages = agent._chat_messages("3333")
+    assert [item["content"] for item in messages] == ["22222222", "ack", "3333"]
+    assert agent._request_text("3333") == "22222222\nack\n3333"
+
+
+def test_history_window_drops_leading_assistant():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout", max_context_chars=10)
+    agent._remember("user", "hello")
+    agent._remember("Scout", "ack")
+    assert agent._history_window("prompt") == []
+    assert agent._chat_messages("prompt") == [{"role": "user", "content": "prompt"}]
+
+
+def test_provider_payload_omits_turns_outside_the_window(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    agent = GPTAgent(
+        api_key="xai-test",
+        provider="grok",
+        name="Scout",
+        max_retries=0,
+        max_context_chars=24,
+    )
+    agent._remember("user", "11111111")
+    agent._remember("Scout", "ack")
+    agent._remember("user", "22222222")
+    agent._remember("Scout", "ack")
+    agent._invoke_grok("3333")
+    contents = [item["content"] for item in calls[0]["messages"]]
+    assert contents == ["22222222", "ack", "3333"]
+
+
+def test_oversized_current_prompt_raises():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout", max_context_chars=8)
+    with pytest.raises(ConfigurationError, match="exceeds max_context_chars=8"):
+        agent._history_window("123456789")
+    with pytest.raises(ConfigurationError, match="exceeds max_context_chars=8"):
+        agent.respond("123456789")
+
+
+def test_gemini_serialized_history_respects_budget():
+    agent = GPTAgent(
+        llm_backend=lambda prompt: "ack",
+        name="Scout",
+        provider="gemini",
+        max_context_chars=24,
+    )
+    agent._remember("user", "22222222")
+    agent._remember("Scout", "ack")
+    flattened = agent._prompt_with_history("3333")
+    assert flattened == "3333"
+    assert len(flattened) <= 24
+
+
+def test_gemini_keeps_turns_that_fit_serialized_budget():
+    agent = GPTAgent(
+        llm_backend=lambda prompt: "ack",
+        name="Scout",
+        provider="gemini",
+        max_context_chars=52,
+    )
+    agent._remember("user", "11111111")
+    agent._remember("Scout", "ack")
+    agent._remember("user", "22222222")
+    agent._remember("Scout", "ack")
+    flattened = agent._prompt_with_history("3333")
+    assert flattened == ("Conversation so far:\nuser: 22222222\nScout: ack\n\n3333")
+    assert len(flattened) == 52
+    assert "user: 11111111" not in flattened
+    assert agent._request_text("3333") == flattened
+
+
+def test_gemini_invoke_sends_budgeted_text(monkeypatch):
+    captured = []
+
+    class _Model:
+        def __init__(self, model):
+            self.model = model
+
+        def generate_content(self, prompt, **kwargs):
+            captured.append(prompt)
+            return type("Resp", (), {"text": "ok"})()
+
+    class _GenAI:
+        @staticmethod
+        def configure(api_key):
+            del api_key
+
+        GenerativeModel = _Model
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.importlib.import_module",
+        lambda name: _GenAI
+        if name == "google.generativeai"
+        else (_ for _ in ()).throw(ImportError(name)),
+    )
+    tight = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        name="Scout",
+        max_retries=0,
+        max_context_chars=24,
+    )
+    tight._remember("user", "22222222")
+    tight._remember("Scout", "ack")
+    tight._invoke_gemini("3333")
+    assert captured == ["3333"]
+
+    captured.clear()
+    roomy = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        name="Scout",
+        max_retries=0,
+        max_context_chars=52,
+    )
+    roomy._remember("user", "22222222")
+    roomy._remember("Scout", "ack")
+    roomy._invoke_gemini("3333")
+    assert len(captured[0]) == 52
+    assert captured[0] == roomy._request_text("3333")
+
+
+def test_gemini_token_tracker_counts_flattened_history(monkeypatch):
+    tracker = TokenUsageTracker()
+    captured = []
+
+    class _Model:
+        def __init__(self, model):
+            self.model = model
+
+        def generate_content(self, prompt, **kwargs):
+            captured.append(prompt)
+            return type("Resp", (), {"text": "ok"})()
+
+    class _GenAI:
+        @staticmethod
+        def configure(api_key):
+            del api_key
+
+        GenerativeModel = _Model
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.importlib.import_module",
+        lambda name: _GenAI
+        if name == "google.generativeai"
+        else (_ for _ in ()).throw(ImportError(name)),
+    )
+    agent = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        name="Scout",
+        max_retries=0,
+        token_tracker=tracker,
+    )
+    agent.receive("hello there friend", sender="user")
+    agent.receive("follow up question", sender="user")
+    assert "Conversation so far:" in captured[1]
+    assert tracker.records[1][0] > tracker.records[0][0]
+
+
+def test_gemini_uses_provider_usage_metadata(monkeypatch):
+    tracker = TokenUsageTracker()
+
+    class _Usage:
+        prompt_token_count = 21
+        candidates_token_count = 4
+
+    class _Model:
+        def __init__(self, model):
+            self.model = model
+
+        def generate_content(self, prompt, **kwargs):
+            return type("Resp", (), {"text": "ok", "usage_metadata": _Usage()})()
+
+    class _GenAI:
+        @staticmethod
+        def configure(api_key):
+            del api_key
+
+        GenerativeModel = _Model
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.importlib.import_module",
+        lambda name: _GenAI
+        if name == "google.generativeai"
+        else (_ for _ in ()).throw(ImportError(name)),
+    )
+    agent = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        name="Scout",
+        max_retries=0,
+        token_tracker=tracker,
+    )
+    assert "ok" in agent.respond("hello")
+    assert tracker.records[-1] == (21, 4)
+    assert tracker.estimated_calls == 0
+
+
+def test_provider_usage_from_gemini_accepts_dicts_and_objects():
+    assert _provider_usage_from_gemini({}) is None
+    assert _provider_usage_from_gemini(
+        {"usage_metadata": {"prompt_token_count": 2, "candidates_token_count": 1}}
+    ) == {"prompt_tokens": 2, "completion_tokens": 1}

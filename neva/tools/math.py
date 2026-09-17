@@ -23,6 +23,10 @@ _ALLOWED_OPERATORS: Dict[type, Callable[[float, float], float]] = {
 }
 
 
+_MAX_ABS_BASE = 1e6
+_MAX_ABS_EXPONENT = 32
+
+
 class MathTool(Tool):
     """Safely evaluate basic mathematical expressions."""
 
@@ -42,6 +46,8 @@ class MathTool(Tool):
                 raise ToolExecutionError(f"Unsupported operator: {op_type.__name__}")
             left = self._eval_node(node.left)
             right = self._eval_node(node.right)
+            if op_type is ast.Pow and (abs(left) > _MAX_ABS_BASE or abs(right) > _MAX_ABS_EXPONENT):
+                raise ToolExecutionError("Exponentiation exceeds the allowed range")
             return _ALLOWED_OPERATORS[op_type](left, right)
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
             value = self._eval_node(node.operand)
