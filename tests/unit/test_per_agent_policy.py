@@ -66,6 +66,26 @@ def test_raise_override_and_default_inheritance():
     assert env.step() == "default"
 
 
+def test_raise_override_rejects_error_value():
+    env = Environment(RoundRobinScheduler())
+    with pytest.raises(ValueError, match="unused"):
+        env.register_agent(
+            TransformerAgent(llm_backend=fail), error_policy="raise", error_value="x"
+        )
+    assert env.agents == []
+
+
+def test_malformed_override_without_value_returns_none():
+    env = Environment(RoundRobinScheduler())
+    env.register_agent(TransformerAgent(llm_backend=fail), error_policy="return")
+    snapshot = env.snapshot()
+    del snapshot.runtime_state["environment_extra"]["_agent_error_policies"][str(env.agents[0].id)][
+        "value"
+    ]
+    env.restore(SimulationSnapshot.from_json(snapshot.to_json()))
+    assert env.step() is None
+
+
 def test_return_override_defaults_to_none_not_environment_value():
     env = Environment(RoundRobinScheduler(), error_policy="return", error_value="default")
     env.register_agent(TransformerAgent(llm_backend=fail), error_policy="return")

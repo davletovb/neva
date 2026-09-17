@@ -58,6 +58,8 @@ class Environment:
             raise ValueError("error_policy must be 'raise', 'return', or None")
         if error_policy is None and error_value is not None:
             raise ValueError("error_value requires an explicit error_policy")
+        if error_policy == "raise" and error_value is not None:
+            raise ValueError("error_value is unused with error_policy='raise'")
         if error_policy is not None:
             if not hasattr(self, "_agent_error_policies"):
                 self._agent_error_policies = {}
@@ -120,8 +122,8 @@ class Environment:
             overrides = getattr(self, "_agent_error_policies", {})
             policy = overrides.get(str(agent.id))
             if policy is not None:
-                if policy["policy"] == "return":
-                    return policy["value"]
+                if policy.get("policy") == "return":
+                    return policy.get("value")
             elif self.error_policy == "return":
                 return self.error_value
             raise
