@@ -7,6 +7,7 @@ pytest.importorskip("opentelemetry.sdk")
 
 from neva.utils.telemetry import (
     TelemetryManager,
+    _content_fields,
     configure_telemetry,
     get_telemetry,
     reset_telemetry,
@@ -129,12 +130,17 @@ def test_record_agent_turn_tracks_metrics_and_traces():
     assert "neva.conversation" in names
     assert "neva.agent.turn" in names
     agent_span = next(span for name, span in tracer.started if name == "neva.agent.turn")
-    assert ("llm.prompt", {"llm.prompt": "Hello there"}) in agent_span.events
+    prompt_event = next(event for event in agent_span.events if event[0] == "llm.prompt")
+    assert "llm.prompt" not in prompt_event[1]
+    assert prompt_event[1]["llm.prompt.chars"] == len("Hello there")
+    assert "llm.prompt.sha256" in prompt_event[1]
     latency_records = meter.histograms["neva.agent.response.latency"].records
     assert pytest.approx(latency_records[0][0]) == 0.42
     log_event, payload = logger.records[-1]
     assert log_event == "agent_turn"
     assert payload["agent.name"] == "agent-alpha"
+    assert "agent.prompt" not in payload
+    assert payload["agent.prompt.chars"] == len("Hello there")
 
 
 def test_record_llm_api_call_emits_metrics():
@@ -188,6 +194,8 @@ def test_record_tool_call_tracks_usage():
     log_event, payload = logger.records[-1]
     assert log_event == "tool_call"
     assert payload["tool.name"] == "search"
+    assert "tool.arguments" not in payload
+    assert payload["tool.arguments.chars"] == len('{"query": "neva"}')
 
 
 def test_configure_telemetry_controls_global_state():
@@ -264,9 +272,72 @@ def test_record_reasoning_step_adds_event_and_log():
     span = tracer.started[0][1]
     assert span.events[-1][0] == "agent.reasoning"
     assert span.events[-1][1]["reasoning.index"] == 3
-    assert span.events[-1][1]["reasoning.content"] == "Thought: evaluate options"
+    assert "reasoning.content" not in span.events[-1][1]
+    assert span.events[-1][1]["reasoning.content.chars"] == len("Thought: evaluate options")
 
     log_event, payload = logger.records[-1]
     assert log_event == "reasoning_step"
     assert payload["agent.name"] == "analyst"
     assert payload["confidence"] == 0.75
+    assert "reasoning.content" not in payload
+
+
+def test_include_content_emits_raw_text():
+    tracer = DummyTracer()
+    meter = DummyMeter()
+    logger = DummyLogger()
+    telemetry = TelemetryManager(
+        tracer=tracer,
+        meter=meter,
+        structured_logger=logger,
+        include_content=True,
+    )
+    telemetry.record_agent_turn(
+        conversation_id="conversation-raw",
+        agent_name="agent-alpha",
+        prompt="Hello there",
+        response="General Kenobi",
+        latency=0.1,
+    )
+    agent_span = next(span for name, span in tracer.started if name == "neva.agent.turn")
+    assert ("llm.prompt", {"llm.prompt": "Hello there"}) in agent_span.events
+    _, payload = logger.records[-1]
+    assert payload["agent.prompt"] == "Hello there"
+    assert payload["agent.response"] == "General Kenobi"
+
+
+def test_content_fields_skips_empty_strings_only():
+    assert _content_fields("llm.prompt", "", include_content=True) == {}
+    assert _content_fields("llm.prompt", None, include_content=True) == {}
+
+
+def test_content_fields_accepts_ambiguous_array_like_values():
+    class Ambiguous:
+        def __eq__(self, other):  # pragma: no cover - exercised via == ""
+            raise ValueError("ambiguous equality")
+
+        def __bool__(self):  # pragma: no cover - numpy-style truthiness
+            raise ValueError("ambiguous truth value")
+
+        def __str__(self) -> str:
+            return "[1 2 3]"
+
+    fields = _content_fields("tool.response", Ambiguous(), include_content=False)
+    assert fields["tool.response.chars"] == len("[1 2 3]")
+    assert "tool.response.sha256" in fields
+
+    tracer = DummyTracer()
+    meter = DummyMeter()
+    logger = DummyLogger()
+    telemetry = TelemetryManager(tracer=tracer, meter=meter, structured_logger=logger)
+    telemetry.record_tool_call(
+        conversation_id="conversation-arr",
+        agent_name="gamma",
+        tool_name="numpy-tool",
+        arguments=Ambiguous(),
+        output=Ambiguous(),
+    )
+    _, payload = logger.records[-1]
+    assert payload["tool.name"] == "numpy-tool"
+    assert "tool.arguments.sha256" in payload
+    assert "tool.response.sha256" in payload

@@ -303,9 +303,10 @@ scheduler = create_scheduler("my_scheduler")
   consecutive retryable failures (pass the same object to share a provider
   circuit). HTTP retries cover 429/5xx, not authorization failures. Default
   `CostTracker` prices cover gpt-4o-mini, grok-4.5, and the other built-in
-  models; override them for billing. This is not protection against prompt
-  injection, unauthorized tool use, or account-wide overspend. Tools run with
-  the process's network identity.
+  models; override them for billing. Telemetry omits raw prompts and
+  completions unless `include_content=True`. This is not protection against
+  prompt injection, unauthorized tool use, or account-wide overspend. Tools
+  run with the process's network identity.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Default rate
   limits do not span agents or processes.
