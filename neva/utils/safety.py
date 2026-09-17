@@ -6,8 +6,14 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Optional
 
-from neva.utils.exceptions import PromptValidationError, RateLimiterConfigurationError
+from neva.utils.exceptions import (
+    CircuitBreakerConfigurationError,
+    CircuitOpenError,
+    PromptValidationError,
+    RateLimiterConfigurationError,
+)
 
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -79,3 +85,63 @@ class RateLimiter:
                     return
                 sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
             time.sleep(sleep_time)
+
+
+class CircuitBreaker:
+    """Fail fast after consecutive retryable failures; probe after a cooldown.
+
+    Pass the same instance to multiple agents to share a provider circuit.
+    Limits apply to this instance only.
+    """
+
+    def __init__(self, failure_threshold: int = 5, cooldown: float = 30.0) -> None:
+        if failure_threshold <= 0:
+            raise CircuitBreakerConfigurationError("failure_threshold must be positive")
+        if cooldown < 0:
+            raise CircuitBreakerConfigurationError("cooldown must be non-negative")
+        self._failure_threshold = failure_threshold
+        self._cooldown = cooldown
+        self._failures = 0
+        self._opened_at: Optional[float] = None
+        self._probe_in_flight = False
+        self._lock = threading.Lock()
+
+    def allow(self) -> None:
+        """Raise ``CircuitOpenError`` when the circuit is open and cooling down."""
+
+        with self._lock:
+            if self._opened_at is None:
+                return
+            remaining = self._cooldown - (time.monotonic() - self._opened_at)
+            if remaining > 0:
+                raise CircuitOpenError(f"circuit open; retry after {remaining:.1f}s")
+            if self._probe_in_flight:
+                raise CircuitOpenError("circuit open; a recovery probe is already in flight")
+            self._probe_in_flight = True
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._failures = 0
+            self._opened_at = None
+            self._probe_in_flight = False
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._failures += 1
+            self._probe_in_flight = False
+            if self._opened_at is not None or self._failures >= self._failure_threshold:
+                self._opened_at = time.monotonic()
+
+    def record_rejected(self) -> None:
+        """Release an in-flight probe without counting provider downtime.
+
+        A half-open probe that fails for a non-retryable reason (auth, config)
+        must not stay marked in-flight, or later calls can never probe again.
+        The circuit stays open and a new probe waits for the cooldown.
+        """
+
+        with self._lock:
+            if not self._probe_in_flight:
+                return
+            self._probe_in_flight = False
+            self._opened_at = time.monotonic()

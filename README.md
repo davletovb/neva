@@ -299,10 +299,13 @@ scheduler = create_scheduler("my_scheduler")
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
   stripped of control characters, with a small regex denylist (`<script`,
   `DROP TABLE`). `RateLimiter` is a per-instance token bucket (pass the same
-  object to share a provider budget). HTTP retries cover 429/5xx, not
-  authorization failures. This is not protection against prompt injection,
-  unauthorized tool use, or account-wide overspend. Tools run with the
-  process's network identity.
+  object to share a provider budget). `CircuitBreaker` fails fast after
+  consecutive retryable failures (pass the same object to share a provider
+  circuit). HTTP retries cover 429/5xx, not authorization failures. Default
+  `CostTracker` prices cover gpt-4o-mini, grok-4.5, and the other built-in
+  models; override them for billing. This is not protection against prompt
+  injection, unauthorized tool use, or account-wide overspend. Tools run with
+  the process's network identity.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Default rate
   limits do not span agents or processes.
