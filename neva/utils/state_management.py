@@ -160,8 +160,10 @@ def save_snapshot(
 def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationSnapshot:
     """Load UTF-8 JSON with an optional positive byte limit (None is unlimited).
 
-    Read at most limit + 1 bytes and reject overflow before decoding/parsing.
-    The limit does not bound the memory used by the decoded object graph.
+    Limited loads read in 64 KiB chunks (at most limit + 1 bytes total) and
+    reject overflow before decoding or parsing, so a generous limit never
+    triggers a proportional preallocation. The limit does not bound the memory
+    used by the decoded object graph.
     """
     _validate_max_bytes(max_bytes)
     raw = b"" if max_bytes is None else None
