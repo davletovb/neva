@@ -3,7 +3,11 @@ import threading
 import pytest
 
 from neva.utils import safety
-from neva.utils.exceptions import PromptValidationError
+from neva.utils.exceptions import (
+    CircuitBreakerConfigurationError,
+    CircuitOpenError,
+    PromptValidationError,
+)
 
 
 def test_prompt_validator_rejects_forbidden_pattern() -> None:
@@ -77,3 +81,31 @@ def test_rate_limiter_sleeps_outside_lock(monkeypatch) -> None:
             limiter._lock.release()
     waiter.join(timeout=1.0)
     assert not waiter.is_alive()
+
+
+def test_circuit_breaker_rejects_invalid_config() -> None:
+    with pytest.raises(CircuitBreakerConfigurationError):
+        safety.CircuitBreaker(failure_threshold=0)
+    with pytest.raises(CircuitBreakerConfigurationError):
+        safety.CircuitBreaker(cooldown=-1)
+
+
+def test_circuit_breaker_opens_and_probes(monkeypatch) -> None:
+    now = [0.0]
+    monkeypatch.setattr(safety.time, "monotonic", lambda: now[0])
+    breaker = safety.CircuitBreaker(failure_threshold=2, cooldown=10.0)
+
+    breaker.allow()
+    breaker.record_failure()
+    breaker.allow()
+    breaker.record_failure()
+    with pytest.raises(CircuitOpenError, match="circuit open"):
+        breaker.allow()
+
+    now[0] += 10.0
+    breaker.allow()
+    with pytest.raises(CircuitOpenError, match="probe"):
+        breaker.allow()
+    breaker.record_success()
+    breaker.allow()
+    breaker.allow()

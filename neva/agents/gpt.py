@@ -13,9 +13,9 @@ import requests
 from neva.agents.base import AIAgent, LLMBackend
 from neva.memory import MemoryModule
 from neva.utils.caching import LLMCache
-from neva.utils.exceptions import BackendError, ConfigurationError
+from neva.utils.exceptions import BackendError, CircuitOpenError, ConfigurationError
 from neva.utils.metrics import CostTracker, ResponseTimeTracker, TokenUsageTracker
-from neva.utils.safety import RateLimiter
+from neva.utils.safety import CircuitBreaker, RateLimiter
 from neva.utils.telemetry import get_telemetry
 
 _DEFAULT_MODELS = {
@@ -140,6 +140,7 @@ class GPTAgent(AIAgent):
         llm_backend: Optional[LLMBackend] = None,
         memory: Optional[MemoryModule] = None,
         rate_limiter: Optional[RateLimiter] = None,
+        circuit_breaker: Optional[CircuitBreaker] = None,
         cache: Optional[LLMCache] = None,
         token_tracker: Optional[TokenUsageTracker] = None,
         cost_tracker: Optional[CostTracker] = None,
@@ -167,6 +168,7 @@ class GPTAgent(AIAgent):
         self.model = model or _DEFAULT_MODELS.get(self.provider, "gpt-4o-mini")
         self.api_base = api_base
         self._rate_limiter = rate_limiter or RateLimiter(rate=60, per=60.0)
+        self._circuit_breaker = circuit_breaker or CircuitBreaker()
         self._cache = resolved_cache
         self._token_tracker = token_tracker or TokenUsageTracker()
         self._cost_tracker = cost_tracker or CostTracker()
@@ -189,6 +191,9 @@ class GPTAgent(AIAgent):
             cached = self._cache_lookup(prompt)
             if cached is not None:
                 return cached
+
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.allow()
 
             attempt = 0
             last_error: Optional[Exception] = None
@@ -251,12 +256,16 @@ class GPTAgent(AIAgent):
                             self._logger.debug(
                                 "Failed to emit telemetry for LLM call", exc_info=True
                             )
+                    if self._circuit_breaker is not None:
+                        self._circuit_breaker.record_success()
                     return content
                 except Exception as exc:  # pragma: no cover - network error path.
                     last_error = exc
-                    if isinstance(exc, ConfigurationError):
+                    if isinstance(exc, (ConfigurationError, CircuitOpenError)):
                         raise
                     if not _is_retryable_error(exc) or attempt > self._max_retries:
+                        if _is_retryable_error(exc) and self._circuit_breaker is not None:
+                            self._circuit_breaker.record_failure()
                         raise BackendError("LLM call failed") from exc
                     sleep_time = min(30.0, self._retry_backoff**attempt)
                     self._logger.warning(
@@ -264,6 +273,8 @@ class GPTAgent(AIAgent):
                     )
                     sleep(sleep_time)
 
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_failure()
             if last_error is not None:
                 raise BackendError("LLM call failed") from last_error
             raise BackendError("LLM call failed")

@@ -7,8 +7,9 @@ from neva.agents.gpt import (
     _extract_chat_content,
     _provider_usage_from_gemini,
 )
-from neva.utils.exceptions import BackendError, ConfigurationError
+from neva.utils.exceptions import BackendError, CircuitOpenError, ConfigurationError
 from neva.utils.metrics import TokenUsageTracker
+from neva.utils.safety import CircuitBreaker
 
 
 class _FakeResponse:
@@ -763,3 +764,74 @@ def test_provider_usage_from_gemini_accepts_dicts_and_objects():
     assert _provider_usage_from_gemini(
         {"usage_metadata": {"prompt_token_count": 2, "candidates_token_count": 1}}
     ) == {"prompt_tokens": 2, "completion_tokens": 1}
+
+
+def test_grok_usage_is_priced(monkeypatch):
+    def fake_post(url, headers=None, json=None, timeout=None):
+        return _FakeResponse(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 1000},
+            }
+        )
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
+    assert "ok" in agent.respond("ping")
+    assert agent._cost_tracker.total_cost() == pytest.approx(0.008)
+
+
+def test_circuit_opens_after_retryable_failures(monkeypatch):
+    calls = []
+    now = [0.0]
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(1)
+        return _FakeResponse({}, status_code=503)
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("neva.utils.safety.time.monotonic", lambda: now[0])
+    breaker = CircuitBreaker(failure_threshold=2, cooldown=30.0)
+    agent = GPTAgent(
+        api_key="xai-test",
+        provider="grok",
+        name="Scout",
+        max_retries=0,
+        circuit_breaker=breaker,
+    )
+    with pytest.raises(BackendError):
+        agent.respond("a")
+    with pytest.raises(BackendError):
+        agent.respond("b")
+    assert len(calls) == 2
+    with pytest.raises(CircuitOpenError):
+        agent.respond("c")
+    assert len(calls) == 2
+    now[0] += 30.0
+    with pytest.raises(BackendError):
+        agent.respond("d")
+    assert len(calls) == 3
+
+
+def test_permanent_errors_do_not_open_the_circuit(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(1)
+        return _FakeResponse({}, status_code=401)
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    breaker = CircuitBreaker(failure_threshold=1, cooldown=30.0)
+    agent = GPTAgent(
+        api_key="xai-test",
+        provider="grok",
+        name="Scout",
+        max_retries=0,
+        circuit_breaker=breaker,
+    )
+    with pytest.raises(BackendError):
+        agent.respond("a")
+    with pytest.raises(BackendError):
+        agent.respond("b")
+    assert len(calls) == 2

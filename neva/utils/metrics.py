@@ -58,12 +58,22 @@ class TokenUsageTracker:
 
 @dataclass
 class CostTracker:
-    """Estimate the monetary cost of LLM usage based on token counts."""
+    """Estimate the monetary cost of LLM usage based on token counts.
+
+    Default table is USD per 1k tokens for Neva's built-in models (list
+    prices as of 2026-09). Override ``pricing_per_1k_tokens`` for billing.
+    Split input/output dicts are used for current models; legacy flat rates
+    remain for ``gpt-3.5-turbo`` and ``gpt-4``.
+    """
 
     pricing_per_1k_tokens: Dict[str, Any] = field(
         default_factory=lambda: {
             "gpt-3.5-turbo": 0.002,
             "gpt-4": 0.03,
+            "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+            "grok-4.5": {"input": 0.002, "output": 0.006},
+            "claude-3-5-sonnet-latest": {"input": 0.003, "output": 0.015},
+            "gemini-1.5-flash": {"input": 0.000075, "output": 0.0003},
         }
     )
     usage: Dict[str, int] = field(default_factory=dict)

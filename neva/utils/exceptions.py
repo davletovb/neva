@@ -31,6 +31,14 @@ class BackendUnavailableError(BackendError):
     """Raised when a required backend cannot be initialised."""
 
 
+class CircuitOpenError(BackendError):
+    """Raised when a circuit breaker is open and the provider should not be called."""
+
+
+class CircuitBreakerConfigurationError(ConfigurationError):
+    """Raised when circuit breaker parameters are invalid."""
+
+
 class CacheError(NevaError):
     """Base class for cache related errors."""
 

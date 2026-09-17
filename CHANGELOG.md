@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repository `.gitignore` covering build, coverage, cache, and runtime
   artifacts.
 - Unit tests for `GPTAgent` Chat Completions providers, including Grok/xAI.
+- `CircuitBreaker` fails fast after consecutive retryable provider failures
+  and allows a single probe after a cooldown. Pass the same instance to
+  share a provider circuit across agents.
 
 ### Changed
 - OpenAI-compatible providers (OpenAI and Grok/xAI) now call `/v1/chat/completions`
@@ -29,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConversationState` itself is unchanged.
 - README describes input hygiene, per-instance rate limits, and thread-safety
   boundaries instead of calling them "robust safety rails".
+- `CostTracker` default prices cover `gpt-4o-mini`, `grok-4.5`,
+  `claude-3-5-sonnet-latest`, and `gemini-1.5-flash` (USD per 1k tokens,
+  list prices as of 2026-09). Override `pricing_per_1k_tokens` for billing.
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a

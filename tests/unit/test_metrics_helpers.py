@@ -49,6 +49,17 @@ def test_cost_tracker_estimates_cost() -> None:
     assert tracker.total_cost() == tracker.pricing_per_1k_tokens["gpt-3.5-turbo"]
 
 
+def test_default_prices_cover_builtin_models() -> None:
+    tracker = CostTracker()
+    tracker.add_usage("gpt-4o-mini", 2000, prompt_tokens=1000, response_tokens=1000)
+    assert tracker.total_cost() == pytest.approx(0.00015 + 0.0006)
+    grok = CostTracker()
+    grok.add_usage("grok-4.5", 2000, prompt_tokens=1000, response_tokens=1000)
+    assert grok.total_cost() == pytest.approx(0.002 + 0.006)
+    assert "gemini-1.5-flash" in tracker.pricing_per_1k_tokens
+    assert "claude-3-5-sonnet-latest" in tracker.pricing_per_1k_tokens
+
+
 def test_response_time_tracker_records_duration() -> None:
     tracker = ResponseTimeTracker()
     with tracker.track():
