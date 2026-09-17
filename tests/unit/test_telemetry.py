@@ -7,6 +7,7 @@ pytest.importorskip("opentelemetry.sdk")
 
 from neva.utils.telemetry import (
     TelemetryManager,
+    _content_fields,
     configure_telemetry,
     get_telemetry,
     reset_telemetry,
@@ -303,3 +304,40 @@ def test_include_content_emits_raw_text():
     _, payload = logger.records[-1]
     assert payload["agent.prompt"] == "Hello there"
     assert payload["agent.response"] == "General Kenobi"
+
+
+def test_content_fields_skips_empty_strings_only():
+    assert _content_fields("llm.prompt", "", include_content=True) == {}
+    assert _content_fields("llm.prompt", None, include_content=True) == {}
+
+
+def test_content_fields_accepts_ambiguous_array_like_values():
+    class Ambiguous:
+        def __eq__(self, other):  # pragma: no cover - exercised via == ""
+            raise ValueError("ambiguous equality")
+
+        def __bool__(self):  # pragma: no cover - numpy-style truthiness
+            raise ValueError("ambiguous truth value")
+
+        def __str__(self) -> str:
+            return "[1 2 3]"
+
+    fields = _content_fields("tool.response", Ambiguous(), include_content=False)
+    assert fields["tool.response.chars"] == len("[1 2 3]")
+    assert "tool.response.sha256" in fields
+
+    tracer = DummyTracer()
+    meter = DummyMeter()
+    logger = DummyLogger()
+    telemetry = TelemetryManager(tracer=tracer, meter=meter, structured_logger=logger)
+    telemetry.record_tool_call(
+        conversation_id="conversation-arr",
+        agent_name="gamma",
+        tool_name="numpy-tool",
+        arguments=Ambiguous(),
+        output=Ambiguous(),
+    )
+    _, payload = logger.records[-1]
+    assert payload["tool.name"] == "numpy-tool"
+    assert "tool.arguments.sha256" in payload
+    assert "tool.response.sha256" in payload

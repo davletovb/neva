@@ -281,9 +281,11 @@ def _content_fields(key: str, value: Optional[Any], *, include_content: bool) ->
     prompts, completions, and tool payloads do not leave the process.
     """
 
-    if value is None or value == "":
+    if value is None:
         return {}
     if isinstance(value, str):
+        if not value:
+            return {}
         text = value
     else:
         try:
