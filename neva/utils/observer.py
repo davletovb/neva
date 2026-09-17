@@ -75,7 +75,8 @@ class SimulationObserver:
 
         # Internal state to support built-in metrics.
         self._turn_count = 0
-        self._last_turn_timestamp: Optional[datetime] = None
+        self._scheduled_turn_count = 0
+        self._failed_turn_count = 0
         self._latest_latency: Optional[float] = None
         self._latencies: List[float] = []
         self._participation: Counter[str] = Counter()
@@ -137,26 +138,34 @@ class SimulationObserver:
         environment: Optional[Any] = None,
         *,
         active_agent: Optional[Any] = None,
+        status: str = "completed",
+        latency: Optional[float] = None,
     ) -> None:
-        """Collect the current value for each registered metric."""
+        """Record a scheduled, completed, or failed turn.
 
+        Direct callers retain completed-turn semantics. Latency must be an
+        explicitly measured duration, never an interval between observations.
+        """
+        if status not in {"scheduled", "completed", "failed"}:
+            raise ValueError(f"Unknown turn status: {status}")
         agent_list: List[Any] = list(agents)
         now = datetime.utcnow()
-        latency: Optional[float] = None
-        if self._last_turn_timestamp is not None:
-            latency_delta = now - self._last_turn_timestamp
-            latency = latency_delta.total_seconds()
-            self._latest_latency = latency
-            self._latencies.append(latency)
-        self._last_turn_timestamp = now
-
+        self._latest_latency = latency if status == "completed" else None
         if active_agent is not None:
-            self._turn_count += 1
             agent_name = getattr(active_agent, "name", str(active_agent))
             self._latest_agent_name = agent_name
-            self._participation[agent_name] += 1
+            if status == "scheduled":
+                self._scheduled_turn_count += 1
+            elif status == "failed":
+                self._failed_turn_count += 1
+            else:
+                self._turn_count += 1
+                self._participation[agent_name] += 1
+                if latency is not None:
+                    self._latencies.append(latency)
         else:
             self._latest_agent_name = None
+        latency = self._latest_latency
 
         context: ContextDict = {
             "active_agent": active_agent,
@@ -198,6 +207,42 @@ class SimulationObserver:
         """Return the most recent value for each tracked metric."""
 
         return {name: values[-1] if values else None for name, values in self.data.items()}
+
+    def checkpoint_state(self) -> Dict[str, Any]:
+        """Return JSON-safe observer state for simulation checkpoints."""
+
+        return {
+            "turn_count": self._turn_count,
+            "scheduled_turn_count": self._scheduled_turn_count,
+            "failed_turn_count": self._failed_turn_count,
+            "latencies": list(self._latencies),
+            "latest_latency": self._latest_latency,
+            "participation": dict(self._participation),
+            "tool_usage": {agent: dict(counter) for agent, counter in self._tool_usage.items()},
+            "tool_usage_events": list(self._tool_usage_events),
+            "latest_agent_name": self._latest_agent_name,
+            "data": json.loads(json.dumps(self.data, default=self._json_default)),
+        }
+
+    def restore_checkpoint_state(self, state: Dict[str, Any]) -> None:
+        """Restore observer counters and metric history from a checkpoint."""
+
+        self._turn_count = int(state.get("turn_count", 0))
+        self._scheduled_turn_count = int(state.get("scheduled_turn_count", 0))
+        self._failed_turn_count = int(state.get("failed_turn_count", 0))
+        self._latencies = [float(value) for value in state.get("latencies", [])]
+        self._latest_latency = state.get("latest_latency")
+        self._participation = Counter(
+            {k: int(v) for k, v in state.get("participation", {}).items()}
+        )
+        self._tool_usage = defaultdict(
+            Counter, {k: Counter(v) for k, v in state.get("tool_usage", {}).items()}
+        )
+        self._tool_usage_events = list(state.get("tool_usage_events", []))
+        self._latest_agent_name = state.get("latest_agent_name")
+        for metric_name, values in state.get("data", {}).items():
+            if metric_name in self.metrics:
+                self.data[metric_name] = list(values)
 
     def log_to_mlflow(
         self,
@@ -327,6 +372,9 @@ class SimulationObserver:
             return int(value) if isinstance(value, int) else self._turn_count
 
         self.add_metric("turn_count", turn_count_metric)
+        self.add_metric("completed_turn_count", turn_count_metric)
+        self.add_metric("scheduled_turn_count", lambda _agents, _env: self._scheduled_turn_count)
+        self.add_metric("failed_turn_count", lambda _agents, _env: self._failed_turn_count)
 
         def participation_metric(
             _agents: Iterable[Any],

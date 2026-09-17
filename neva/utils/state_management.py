@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,23 +71,32 @@ class SimulationSnapshot:
     created_at: datetime
     environment_state: Dict[str, object]
     agent_states: Dict[str, Dict[str, object]]
+    version: int = 1
+    runtime_state: Optional[Dict[str, Any]] = None
 
     def to_json(self) -> str:
         serialisable = {
             "created_at": self.created_at.isoformat(),
             "environment_state": self.environment_state,
             "agent_states": self.agent_states,
+            "version": self.version,
+            "runtime_state": self.runtime_state,
         }
         return json.dumps(serialisable, default=_json_default, indent=2)
 
     @classmethod
     def from_json(cls, raw: str) -> "SimulationSnapshot":
         payload = json.loads(raw)
+        version = payload.get("version", 1)
+        if version not in (1, 2):
+            raise ValueError(f"Unsupported snapshot version: {version}")
         created_at = datetime.fromisoformat(payload["created_at"])
         return cls(
             created_at=created_at,
             environment_state=payload["environment_state"],
             agent_states=payload["agent_states"],
+            version=version,
+            runtime_state=payload.get("runtime_state"),
         )
 
 
@@ -105,7 +115,7 @@ def create_snapshot(
         agent_snapshot[state.agent_name] = state.to_dict()
     return SimulationSnapshot(
         created_at=_utcnow_naive(),
-        environment_state=environment_state,
+        environment_state=deepcopy(environment_state),
         agent_states=agent_snapshot,
     )
 

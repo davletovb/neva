@@ -12,7 +12,7 @@ class _FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(f"status {self.status_code}")
+            raise requests.HTTPError(f"status {self.status_code}", response=self)
 
     def json(self):
         return self._payload
@@ -243,12 +243,73 @@ def test_anthropic_success_and_empty(monkeypatch):
         agent._invoke_anthropic("hello")
 
 
+def test_anthropic_passes_request_timeout(monkeypatch):
+    captured = {}
+    client_options = {}
+
+    class _Block:
+        text = "ok"
+
+    class _Messages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type("Resp", (), {"content": [_Block()]})()
+
+    class _Client:
+        def __init__(self, **kwargs):
+            client_options.update(kwargs)
+            self.messages = _Messages()
+
+    class _Mod:
+        Anthropic = _Client
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.importlib.import_module",
+        lambda name: _Mod if name == "anthropic" else (_ for _ in ()).throw(ImportError(name)),
+    )
+    agent = GPTAgent(api_key="k", provider="anthropic", max_retries=0, request_timeout=12.5)
+    assert agent._invoke_anthropic("hello") == "ok"
+    assert captured["timeout"] == 12.5
+    assert client_options["max_retries"] == 0
+    assert captured["max_tokens"] == 1024
+
+
+def test_gemini_passes_request_timeout(monkeypatch):
+    captured = {}
+
+    class _Model:
+        def __init__(self, model):
+            self.model = model
+
+        def generate_content(self, prompt, **kwargs):
+            captured.update(kwargs)
+            return type("Resp", (), {"text": "ok"})()
+
+    class _GenAI:
+        @staticmethod
+        def configure(api_key):
+            del api_key
+
+        GenerativeModel = _Model
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.importlib.import_module",
+        lambda name: _GenAI
+        if name == "google.generativeai"
+        else (_ for _ in ()).throw(ImportError(name)),
+    )
+    agent = GPTAgent(api_key="k", provider="gemini", max_retries=0, request_timeout=7.5)
+    assert agent._invoke_gemini("hello") == "ok"
+    assert captured["request_options"] == {"timeout": 7.5, "retry": None}
+    assert captured["generation_config"] == {"max_output_tokens": 1024}
+
+
 def test_gemini_success_and_candidates(monkeypatch):
     class _Model:
         def __init__(self, model):
             self.model = model
 
-        def generate_content(self, prompt):
+        def generate_content(self, prompt, **kwargs):
             del prompt
             return type("Resp", (), {"text": "gemini-ok"})()
 
@@ -280,7 +341,7 @@ def test_gemini_success_and_candidates(monkeypatch):
         def __init__(self, model):
             self.model = model
 
-        def generate_content(self, prompt):
+        def generate_content(self, prompt, **kwargs):
             del prompt
             return type("Resp", (), {"text": "", "candidates": [_Candidate()]})()
 
@@ -309,6 +370,83 @@ def test_http_error_is_retried_then_fails(monkeypatch):
     agent = GPTAgent(api_key="xai-test", provider="xai", name="Scout", max_retries=0)
     with pytest.raises(BackendError):
         agent.respond("ping")
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_permanent_http_errors_are_not_retried(monkeypatch, status):
+    calls, sleeps = [], []
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        return _FakeResponse({}, status_code=status)
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", post)
+    monkeypatch.setattr("neva.agents.gpt.sleep", sleeps.append)
+    agent = GPTAgent(api_key="test", max_retries=3)
+    with pytest.raises(BackendError) as caught:
+        agent.respond("hello")
+    assert isinstance(caught.value.__cause__, requests.HTTPError)
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize("status", [408, 409, 429, 500, 503, 529])
+def test_transient_http_errors_respect_retry_budget(monkeypatch, status):
+    calls, sleeps = [], []
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        return _FakeResponse({}, status_code=status)
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", post)
+    monkeypatch.setattr("neva.agents.gpt.sleep", sleeps.append)
+    with pytest.raises(BackendError):
+        GPTAgent(api_key="test", max_retries=2).respond("hello")
+    assert len(calls) == 3
+    assert len(sleeps) == 2
+
+
+@pytest.mark.parametrize("error", [ConfigurationError("bad config"), ValueError("bad json")])
+def test_local_errors_are_not_retried(monkeypatch, error):
+    calls, sleeps = [], []
+
+    def invoke(prompt):
+        calls.append(prompt)
+        raise error
+
+    agent = GPTAgent(api_key="test")
+    monkeypatch.setattr(agent, "_invoke_provider", invoke)
+    monkeypatch.setattr("neva.agents.gpt.sleep", sleeps.append)
+    expected = ConfigurationError if isinstance(error, ConfigurationError) else BackendError
+    with pytest.raises(expected):
+        agent.respond("hello")
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize("status, attempts", [(401, 1), (429, 3), (503, 3)])
+@pytest.mark.parametrize("sdk", ["anthropic", "google"])
+def test_sdk_errors_are_classified_without_importing_sdk(monkeypatch, status, attempts, sdk):
+    class SDKError(Exception):
+        pass
+
+    error = SDKError("provider error")
+    if sdk == "anthropic":
+        error.status_code = status
+    else:
+        error.code = status
+    calls = []
+
+    def invoke(prompt):
+        calls.append(prompt)
+        raise error
+
+    agent = GPTAgent(api_key="test", max_retries=2)
+    monkeypatch.setattr(agent, "_invoke_provider", invoke)
+    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _: None)
+    with pytest.raises(BackendError):
+        agent.respond("hello")
+    assert len(calls) == attempts
 
 
 def test_chat_completions_url_appends_to_custom_bases():

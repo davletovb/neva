@@ -23,15 +23,31 @@ class Scheduler(ABC):
     def set_environment(self, environment: "Environment") -> None:
         self.environment = environment
 
-    def record_metrics(self, active_agent: Optional[AIAgent] = None) -> None:
+    def record_metrics(
+        self,
+        active_agent: Optional[AIAgent] = None,
+        *,
+        status: str = "scheduled",
+        latency: Optional[float] = None,
+    ) -> None:
+        """Record selection by default; environments report the outcome explicitly."""
         observer = getattr(self, "simulation_observer", None)
         if observer is not None:
             try:
                 observer.collect_data(
-                    list(self.agents), self.environment, active_agent=active_agent
+                    list(self.agents),
+                    self.environment,
+                    active_agent=active_agent,
+                    status=status,
+                    latency=latency,
                 )
             except TypeError:
-                observer.collect_data(list(self.agents), self.environment)
+                # Legacy two-argument observers record at selection time only,
+                # matching the legacy single-call-per-step API: the outcome
+                # report is skipped so a step contributes exactly one
+                # observation.
+                if status == "scheduled":
+                    observer.collect_data(list(self.agents), self.environment)
 
     # ------------------------------------------------------------------
     # Agent lifecycle controls
