@@ -164,8 +164,20 @@ def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationS
     The limit does not bound the memory used by the decoded object graph.
     """
     _validate_max_bytes(max_bytes)
+    raw = b"" if max_bytes is None else None
     with path.open("rb") as source:
-        raw = source.read() if max_bytes is None else source.read(max_bytes + 1)
+        if max_bytes is None:
+            raw = source.read()
+        else:
+            chunks = []
+            remaining = max_bytes + 1
+            while remaining > 0:
+                chunk = source.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
     if max_bytes is not None and len(raw) > max_bytes:
         raise ValueError("Snapshot exceeds max_bytes")
     return SimulationSnapshot.from_json(raw.decode("utf-8"))
