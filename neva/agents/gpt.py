@@ -192,13 +192,12 @@ class GPTAgent(AIAgent):
             if cached is not None:
                 return cached
 
-            if self._circuit_breaker is not None:
-                self._circuit_breaker.allow()
-
             attempt = 0
             last_error: Optional[Exception] = None
             while attempt <= self._max_retries:
                 attempt += 1
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker.allow()
                 if self._rate_limiter is not None:
                     self._rate_limiter.acquire()
                 start = perf_counter()
@@ -261,20 +260,29 @@ class GPTAgent(AIAgent):
                     return content
                 except Exception as exc:  # pragma: no cover - network error path.
                     last_error = exc
-                    if isinstance(exc, (ConfigurationError, CircuitOpenError)):
+                    if isinstance(exc, CircuitOpenError):
                         raise
-                    if not _is_retryable_error(exc) or attempt > self._max_retries:
-                        if _is_retryable_error(exc) and self._circuit_breaker is not None:
+                    if isinstance(exc, ConfigurationError):
+                        if self._circuit_breaker is not None:
+                            self._circuit_breaker.record_rejected()
+                        raise
+                    if _is_retryable_error(exc):
+                        if self._circuit_breaker is not None:
                             self._circuit_breaker.record_failure()
-                        raise BackendError("LLM call failed") from exc
-                    sleep_time = min(30.0, self._retry_backoff**attempt)
-                    self._logger.warning(
-                        "Retrying LLM call due to error", extra={"error": str(exc)}
-                    )
-                    sleep(sleep_time)
+                        if attempt > self._max_retries:
+                            raise BackendError("LLM call failed") from exc
+                        if self._circuit_breaker is not None:
+                            self._circuit_breaker.allow()
+                        sleep_time = min(30.0, self._retry_backoff**attempt)
+                        self._logger.warning(
+                            "Retrying LLM call due to error", extra={"error": str(exc)}
+                        )
+                        sleep(sleep_time)
+                        continue
+                    if self._circuit_breaker is not None:
+                        self._circuit_breaker.record_rejected()
+                    raise BackendError("LLM call failed") from exc
 
-            if self._circuit_breaker is not None:
-                self._circuit_breaker.record_failure()
             if last_error is not None:
                 raise BackendError("LLM call failed") from last_error
             raise BackendError("LLM call failed")

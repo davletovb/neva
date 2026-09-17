@@ -106,6 +106,11 @@ def test_circuit_breaker_opens_and_probes(monkeypatch) -> None:
     breaker.allow()
     with pytest.raises(CircuitOpenError, match="probe"):
         breaker.allow()
+    breaker.record_rejected()
+    with pytest.raises(CircuitOpenError, match="retry after"):
+        breaker.allow()
+    now[0] += 10.0
+    breaker.allow()
     breaker.record_success()
     breaker.allow()
     breaker.allow()

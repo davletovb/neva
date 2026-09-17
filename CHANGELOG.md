@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifacts.
 - Unit tests for `GPTAgent` Chat Completions providers, including Grok/xAI.
 - `CircuitBreaker` fails fast after consecutive retryable provider failures
-  and allows a single probe after a cooldown. Pass the same instance to
-  share a provider circuit across agents.
+  (each retryable HTTP attempt counts) and allows a single probe after a
+  cooldown. A rejected probe releases the in-flight slot so later calls can
+  try again. Pass the same instance to share a provider circuit across agents.
 
 ### Changed
 - OpenAI-compatible providers (OpenAI and Grok/xAI) now call `/v1/chat/completions`

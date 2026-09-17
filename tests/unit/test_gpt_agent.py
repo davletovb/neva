@@ -835,3 +835,62 @@ def test_permanent_errors_do_not_open_the_circuit(monkeypatch):
     with pytest.raises(BackendError):
         agent.respond("b")
     assert len(calls) == 2
+
+
+def test_circuit_counts_each_retryable_attempt(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(1)
+        return _FakeResponse({}, status_code=503)
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    breaker = CircuitBreaker(failure_threshold=2, cooldown=30.0)
+    agent = GPTAgent(
+        api_key="xai-test",
+        provider="grok",
+        name="Scout",
+        max_retries=5,
+        circuit_breaker=breaker,
+    )
+    with pytest.raises(CircuitOpenError):
+        agent.respond("outage")
+    assert len(calls) == 2
+
+
+def test_half_open_probe_401_does_not_stick(monkeypatch):
+    calls = []
+    now = [0.0]
+    statuses = [503, 503, 401, 401]
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(1)
+        return _FakeResponse({}, status_code=statuses[len(calls) - 1])
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("neva.utils.safety.time.monotonic", lambda: now[0])
+    breaker = CircuitBreaker(failure_threshold=2, cooldown=30.0)
+    agent = GPTAgent(
+        api_key="xai-test",
+        provider="grok",
+        name="Scout",
+        max_retries=0,
+        circuit_breaker=breaker,
+    )
+    with pytest.raises(BackendError):
+        agent.respond("a")
+    with pytest.raises(BackendError):
+        agent.respond("b")
+    now[0] += 30.0
+    with pytest.raises(BackendError):
+        agent.respond("c")
+    assert len(calls) == 3
+    with pytest.raises(CircuitOpenError, match="retry after"):
+        agent.respond("d")
+    assert len(calls) == 3
+    now[0] += 30.0
+    with pytest.raises(BackendError):
+        agent.respond("e")
+    assert len(calls) == 4

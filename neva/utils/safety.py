@@ -131,3 +131,17 @@ class CircuitBreaker:
             self._probe_in_flight = False
             if self._opened_at is not None or self._failures >= self._failure_threshold:
                 self._opened_at = time.monotonic()
+
+    def record_rejected(self) -> None:
+        """Release an in-flight probe without counting provider downtime.
+
+        A half-open probe that fails for a non-retryable reason (auth, config)
+        must not stay marked in-flight, or later calls can never probe again.
+        The circuit stays open and a new probe waits for the cooldown.
+        """
+
+        with self._lock:
+            if not self._probe_in_flight:
+                return
+            self._probe_in_flight = False
+            self._opened_at = time.monotonic()
