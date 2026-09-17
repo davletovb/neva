@@ -72,7 +72,7 @@ Correction to the original review: receivers use their own backend limiters, not
 
 ### 2. Durable failure recovery — partial
 
-- Per-agent recovery policies, beyond the current environment-wide policy.
+- On `feat/per-agent-recovery-policy` (pending review/merge): optional `register_agent(agent, error_policy="raise"|"return", error_value=...)` overrides for selected-turn failures. Omitted policies inherit the environment default. Version-2 checkpoints preserve overrides; older checkpoints without overrides remain loadable. This is not durable recovery or replay.
 - Durable failure records/dead-letter storage and replay controls.
 - Escalation policies and richer recovery-state observability.
 - Broader concurrent and interruption-path testing of the existing circuit breaker.
