@@ -208,6 +208,42 @@ class SimulationObserver:
 
         return {name: values[-1] if values else None for name, values in self.data.items()}
 
+    def checkpoint_state(self) -> Dict[str, Any]:
+        """Return JSON-safe observer state for simulation checkpoints."""
+
+        return {
+            "turn_count": self._turn_count,
+            "scheduled_turn_count": self._scheduled_turn_count,
+            "failed_turn_count": self._failed_turn_count,
+            "latencies": list(self._latencies),
+            "latest_latency": self._latest_latency,
+            "participation": dict(self._participation),
+            "tool_usage": {agent: dict(counter) for agent, counter in self._tool_usage.items()},
+            "tool_usage_events": list(self._tool_usage_events),
+            "latest_agent_name": self._latest_agent_name,
+            "data": json.loads(json.dumps(self.data, default=self._json_default)),
+        }
+
+    def restore_checkpoint_state(self, state: Dict[str, Any]) -> None:
+        """Restore observer counters and metric history from a checkpoint."""
+
+        self._turn_count = int(state.get("turn_count", 0))
+        self._scheduled_turn_count = int(state.get("scheduled_turn_count", 0))
+        self._failed_turn_count = int(state.get("failed_turn_count", 0))
+        self._latencies = [float(value) for value in state.get("latencies", [])]
+        self._latest_latency = state.get("latest_latency")
+        self._participation = Counter(
+            {k: int(v) for k, v in state.get("participation", {}).items()}
+        )
+        self._tool_usage = defaultdict(
+            Counter, {k: Counter(v) for k, v in state.get("tool_usage", {}).items()}
+        )
+        self._tool_usage_events = list(state.get("tool_usage_events", []))
+        self._latest_agent_name = state.get("latest_agent_name")
+        for metric_name, values in state.get("data", {}).items():
+            if metric_name in self.metrics:
+                self.data[metric_name] = list(values)
+
     def log_to_mlflow(
         self,
         *,

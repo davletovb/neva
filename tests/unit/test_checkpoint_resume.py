@@ -19,6 +19,25 @@ def test_completed_turn_metrics_recorded_after_step():
     assert snapshot["latest_response_latency_seconds"] is not None
 
 
+def test_checkpoint_preserves_observer_metrics():
+    env = make_environment()
+    env.agents[0].set_llm_backend(lambda prompt: (_ for _ in ()).throw(RuntimeError("down")))
+    with pytest.raises(RuntimeError):
+        env.step()
+    env.agents[0].set_llm_backend(lambda prompt: "A")
+    env.step()
+    snapshot = SimulationSnapshot.from_json(env.snapshot().to_json())
+    restored = make_environment()
+    restored.restore(snapshot)
+    original = env.scheduler.simulation_observer.latest_snapshot()
+    restored_metrics = restored.scheduler.simulation_observer.latest_snapshot()
+    assert restored_metrics["turn_count"] == original["turn_count"] == 1
+    assert restored_metrics["scheduled_turn_count"] == original["scheduled_turn_count"] == 2
+    assert restored_metrics["failed_turn_count"] == 1
+    assert restored_metrics["per_agent_participation"] == {"A": 0, "B": 1}
+    assert restored_metrics["latest_response_latency_seconds"] is not None
+
+
 def test_failed_turn_metrics_recorded():
     def boom(prompt):
         raise RuntimeError("backend down")

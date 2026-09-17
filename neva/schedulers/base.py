@@ -42,7 +42,12 @@ class Scheduler(ABC):
                     latency=latency,
                 )
             except TypeError:
-                observer.collect_data(list(self.agents), self.environment)
+                # Legacy two-argument observers record at selection time only,
+                # matching the legacy single-call-per-step API: the outcome
+                # report is skipped so a step contributes exactly one
+                # observation.
+                if status == "scheduled":
+                    observer.collect_data(list(self.agents), self.environment)
 
     # ------------------------------------------------------------------
     # Agent lifecycle controls

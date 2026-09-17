@@ -1,6 +1,7 @@
 import pytest
 
 from neva.agents import AIAgent
+from neva.environments import Environment
 from neva.schedulers import (
     CompositeScheduler,
     ConditionalScheduler,
@@ -23,6 +24,34 @@ class StubAgent(AIAgent):
 
     def respond(self, message: str) -> str:  # pragma: no cover - not used here.
         return message
+
+
+class StubEnvironment(Environment):
+    def __init__(self, scheduler):
+        super().__init__(scheduler)
+        self._context_calls = 0
+
+    def context(self) -> str:
+        self._context_calls += 1
+        return f"context-{self._context_calls}"
+
+
+def test_legacy_observer_records_once_per_step():
+    scheduler = RoundRobinScheduler()
+    env = StubEnvironment(scheduler)
+    env.register_agent(StubAgent("A"))
+    env.register_agent(StubAgent("B"))
+
+    calls = []
+
+    def legacy_collect(agents, environment=None):
+        calls.append((list(agents), environment))
+
+    scheduler.simulation_observer.collect_data = legacy_collect
+    env.step()
+    env.step()
+    assert len(calls) == 2
+    assert calls[0][1] is env
 
 
 def test_selection_is_not_a_completed_turn():
