@@ -66,7 +66,7 @@ Full-suite verification exposed an existing clock inconsistency in `test_rate_li
 - Automatic provider/account-wide coordination across agents and processes.
 - Token/spend budgets and hard enforcement; static cost estimates do not enforce spending.
 - Global cross-thread/cross-loop concurrency limits, if required.
-- Shared-limiter fairness, cancellation, and aggregate contention tests.
+- `feat/rate-limiter-cancellation` (pending review/merge) adds explicit Event-based token-wait cancellation, tested before admission, after lock entry, and during a real threaded wait. Lock acquisition and in-flight provider calls are not interruptible; agents/asyncio do not automatically propagate cancellation. FIFO fairness and aggregate-contention coverage remain open.
 
 Correction to the original review: receivers use their own backend limiters, not the sender's limiter. Explicitly sharing a limiter already shares that instance's request-rate budget.
 

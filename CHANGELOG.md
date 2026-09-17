@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `RateLimiter.acquire(cancel_event=...)` supports cooperative cancellation of
+  token waits using a threading Event; cancellation raises
+  `RateLimiterCancelledError` (a `concurrent.futures.CancelledError` subclass).
+  Lock waits and provider calls are not interrupted, and callers must pass the
+  event explicitly.
 - Packaging metadata for distribution: project URLs, keywords, and trove
   classifiers in `pyproject.toml`.
 - PEP 561 `py.typed` marker so downstream projects consume Neva's type hints.

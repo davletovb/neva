@@ -299,7 +299,9 @@ scheduler = create_scheduler("my_scheduler")
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
   stripped of control characters, with a small regex denylist (`<script`,
   `DROP TABLE`). `RateLimiter` is a per-instance token bucket (pass the same
-  object to share a provider budget). `CircuitBreaker` fails fast after
+  object to share a provider budget); token waits can be cancelled
+  cooperatively by passing a `threading.Event` to
+  `acquire(cancel_event=...)`. `CircuitBreaker` fails fast after
   consecutive retryable failures (pass the same object to share a provider
   circuit). HTTP retries cover 429/5xx, not authorization failures. Default
   `CostTracker` prices cover gpt-4o-mini, grok-4.5, and the other built-in
