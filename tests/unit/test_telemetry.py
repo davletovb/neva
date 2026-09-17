@@ -129,12 +129,17 @@ def test_record_agent_turn_tracks_metrics_and_traces():
     assert "neva.conversation" in names
     assert "neva.agent.turn" in names
     agent_span = next(span for name, span in tracer.started if name == "neva.agent.turn")
-    assert ("llm.prompt", {"llm.prompt": "Hello there"}) in agent_span.events
+    prompt_event = next(event for event in agent_span.events if event[0] == "llm.prompt")
+    assert "llm.prompt" not in prompt_event[1]
+    assert prompt_event[1]["llm.prompt.chars"] == len("Hello there")
+    assert "llm.prompt.sha256" in prompt_event[1]
     latency_records = meter.histograms["neva.agent.response.latency"].records
     assert pytest.approx(latency_records[0][0]) == 0.42
     log_event, payload = logger.records[-1]
     assert log_event == "agent_turn"
     assert payload["agent.name"] == "agent-alpha"
+    assert "agent.prompt" not in payload
+    assert payload["agent.prompt.chars"] == len("Hello there")
 
 
 def test_record_llm_api_call_emits_metrics():
@@ -188,6 +193,8 @@ def test_record_tool_call_tracks_usage():
     log_event, payload = logger.records[-1]
     assert log_event == "tool_call"
     assert payload["tool.name"] == "search"
+    assert "tool.arguments" not in payload
+    assert payload["tool.arguments.chars"] == len('{"query": "neva"}')
 
 
 def test_configure_telemetry_controls_global_state():
@@ -264,9 +271,35 @@ def test_record_reasoning_step_adds_event_and_log():
     span = tracer.started[0][1]
     assert span.events[-1][0] == "agent.reasoning"
     assert span.events[-1][1]["reasoning.index"] == 3
-    assert span.events[-1][1]["reasoning.content"] == "Thought: evaluate options"
+    assert "reasoning.content" not in span.events[-1][1]
+    assert span.events[-1][1]["reasoning.content.chars"] == len("Thought: evaluate options")
 
     log_event, payload = logger.records[-1]
     assert log_event == "reasoning_step"
     assert payload["agent.name"] == "analyst"
     assert payload["confidence"] == 0.75
+    assert "reasoning.content" not in payload
+
+
+def test_include_content_emits_raw_text():
+    tracer = DummyTracer()
+    meter = DummyMeter()
+    logger = DummyLogger()
+    telemetry = TelemetryManager(
+        tracer=tracer,
+        meter=meter,
+        structured_logger=logger,
+        include_content=True,
+    )
+    telemetry.record_agent_turn(
+        conversation_id="conversation-raw",
+        agent_name="agent-alpha",
+        prompt="Hello there",
+        response="General Kenobi",
+        latency=0.1,
+    )
+    agent_span = next(span for name, span in tracer.started if name == "neva.agent.turn")
+    assert ("llm.prompt", {"llm.prompt": "Hello there"}) in agent_span.events
+    _, payload = logger.records[-1]
+    assert payload["agent.prompt"] == "Hello there"
+    assert payload["agent.response"] == "General Kenobi"

@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CostTracker` default prices cover `gpt-4o-mini`, `grok-4.5`,
   `claude-3-5-sonnet-latest`, and `gemini-1.5-flash` (USD per 1k tokens,
   list prices as of 2026-09). Override `pricing_per_1k_tokens` for billing.
+- Telemetry omits raw prompts, completions, tool payloads, and reasoning
+  text by default (length + SHA-256 fingerprints instead). Pass
+  `include_content=True` to opt in to exporting conversation content.
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a

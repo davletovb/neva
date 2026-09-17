@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import logging
@@ -269,6 +270,31 @@ def _estimate_tokens(text: Optional[str]) -> int:
     return tokens if tokens > 0 else 0
 
 
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _content_fields(key: str, value: Optional[Any], *, include_content: bool) -> Dict[str, Any]:
+    """Return raw content or a length/hash fingerprint.
+
+    Telemetry exporters are not a privacy boundary. Default is fingerprints so
+    prompts, completions, and tool payloads do not leave the process.
+    """
+
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value)
+        except TypeError:
+            text = str(value)
+    if include_content:
+        return {key: text}
+    return {f"{key}.chars": len(text), f"{key}.sha256": _fingerprint(text)}
+
+
 def _normalise_attributes(attributes: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     if not attributes:
@@ -329,6 +355,7 @@ class TelemetryManager:
         tracer: Optional[Tracer] = None,
         meter: Optional[Meter] = None,
         structured_logger: Optional[logging.Logger] = None,
+        include_content: bool = False,
     ) -> None:
         manual_instrumentation = (
             tracer is not None
@@ -341,6 +368,7 @@ class TelemetryManager:
             and log_exporter is None
             and not metric_readers
         )
+        self._include_content = bool(include_content)
 
         modules: Optional[_OpenTelemetryModules]
         if manual_instrumentation:
@@ -615,33 +643,63 @@ class TelemetryManager:
             kind=self._span_kind.INTERNAL,
         ) as span:
             if prompt:
-                span.add_event("llm.prompt", {"llm.prompt": prompt})
+                span.add_event(
+                    "llm.prompt",
+                    _content_fields("llm.prompt", prompt, include_content=self._include_content),
+                )
             if response:
-                span.add_event("llm.completion", {"llm.completion": response})
+                span.add_event(
+                    "llm.completion",
+                    _content_fields(
+                        "llm.completion",
+                        response,
+                        include_content=self._include_content,
+                    ),
+                )
             if reasoning_steps:
                 for idx, step in enumerate(reasoning_steps, start=1):
-                    span.add_event(
-                        "agent.reasoning",
-                        {"reasoning.index": idx, "reasoning.content": step},
+                    reasoning_attrs: Dict[str, Any] = {"reasoning.index": idx}
+                    reasoning_attrs.update(
+                        _content_fields(
+                            "reasoning.content",
+                            step,
+                            include_content=self._include_content,
+                        )
                     )
+                    span.add_event("agent.reasoning", reasoning_attrs)
             if tool_calls:
                 for index, call in enumerate(tool_calls, start=1):
-                    event_attrs = {
+                    tool_attrs: Dict[str, Any] = {
                         "tool.sequence": index,
                         "tool.name": call.get("name"),
-                        "tool.response": call.get("response"),
-                        "tool.error": call.get("error"),
                     }
+                    tool_attrs.update(
+                        _content_fields(
+                            "tool.response",
+                            call.get("response"),
+                            include_content=self._include_content,
+                        )
+                    )
+                    tool_attrs.update(
+                        _content_fields(
+                            "tool.error",
+                            call.get("error"),
+                            include_content=self._include_content,
+                        )
+                    )
                     arguments = call.get("arguments")
                     if arguments is not None:
-                        try:
-                            event_attrs["tool.arguments"] = json.dumps(arguments)
-                        except TypeError:
-                            event_attrs["tool.arguments"] = str(arguments)
+                        tool_attrs.update(
+                            _content_fields(
+                                "tool.arguments",
+                                arguments,
+                                include_content=self._include_content,
+                            )
+                        )
                     duration = call.get("duration")
                     if duration is not None:
-                        event_attrs["tool.duration"] = float(duration)
-                    span.add_event("tool.invocation", _normalise_attributes(event_attrs))
+                        tool_attrs["tool.duration"] = float(duration)
+                    span.add_event("tool.invocation", _normalise_attributes(tool_attrs))
 
         try:
             if latency is not None:
@@ -664,14 +722,18 @@ class TelemetryManager:
         log_payload = {
             **metric_attrs,
             "llm.model": model,
-            "agent.prompt": prompt,
-            "agent.response": response,
             "agent.latency_seconds": latency,
             "agent.prompt_tokens": prompt_tokens,
             "agent.completion_tokens": completion_tokens,
             "agent.total_tokens": total_tokens,
             "agent.context_tokens": context_tokens,
         }
+        log_payload.update(
+            _content_fields("agent.prompt", prompt, include_content=self._include_content)
+        )
+        log_payload.update(
+            _content_fields("agent.response", response, include_content=self._include_content)
+        )
         log_payload.update(_normalise_attributes(metadata))
         self._log_event("agent_turn", log_payload)
 
@@ -724,8 +786,18 @@ class TelemetryManager:
             attributes=span_attrs,
             kind=self._span_kind.CLIENT,
         ) as span:
-            span.add_event("llm.prompt", {"llm.prompt": prompt})
-            span.add_event("llm.completion", {"llm.completion": completion})
+            span.add_event(
+                "llm.prompt",
+                _content_fields("llm.prompt", prompt, include_content=self._include_content),
+            )
+            span.add_event(
+                "llm.completion",
+                _content_fields(
+                    "llm.completion",
+                    completion,
+                    include_content=self._include_content,
+                ),
+            )
 
         try:
             if latency is not None:
@@ -784,15 +856,26 @@ class TelemetryManager:
         ) as span:
             event_attrs: Dict[str, Any] = {
                 "tool.name": tool_name,
-                "tool.error": error,
             }
+            event_attrs.update(
+                _content_fields("tool.error", error, include_content=self._include_content)
+            )
             if arguments is not None:
-                try:
-                    event_attrs["tool.arguments"] = json.dumps(arguments)
-                except TypeError:
-                    event_attrs["tool.arguments"] = str(arguments)
+                event_attrs.update(
+                    _content_fields(
+                        "tool.arguments",
+                        arguments,
+                        include_content=self._include_content,
+                    )
+                )
             if output is not None:
-                event_attrs["tool.response"] = str(output)
+                event_attrs.update(
+                    _content_fields(
+                        "tool.response",
+                        output,
+                        include_content=self._include_content,
+                    )
+                )
             if duration is not None:
                 event_attrs["tool.duration"] = float(duration)
             span.add_event("tool.invocation", _normalise_attributes(event_attrs))
@@ -805,15 +888,22 @@ class TelemetryManager:
             logger.debug("Failed to record telemetry metrics for tool call", exc_info=True)
 
         log_payload: Dict[str, Any] = dict(metric_attrs)
+        log_payload["tool.duration_seconds"] = duration
         log_payload.update(
-            {
-                "tool.duration_seconds": duration,
-                "tool.error": error,
-                "tool.arguments": json.dumps(arguments) if arguments is not None else None,
-            }
+            _content_fields("tool.error", error, include_content=self._include_content)
         )
+        if arguments is not None:
+            log_payload.update(
+                _content_fields(
+                    "tool.arguments",
+                    arguments,
+                    include_content=self._include_content,
+                )
+            )
         if output is not None:
-            log_payload["tool.response"] = str(output)
+            log_payload.update(
+                _content_fields("tool.response", output, include_content=self._include_content)
+            )
         log_payload.update(_normalise_attributes(metadata))
         self._log_event("tool_call", log_payload)
 
@@ -829,8 +919,14 @@ class TelemetryManager:
         payload: Dict[str, Any] = {
             "conversation.id": conversation_id,
             "agent.name": agent_name,
-            "reasoning.content": content,
         }
+        payload.update(
+            _content_fields(
+                "reasoning.content",
+                content,
+                include_content=self._include_content,
+            )
+        )
         if index is not None:
             payload["reasoning.index"] = index
         payload.update(_normalise_attributes(metadata))
@@ -879,7 +975,11 @@ _GLOBAL_LOCK = Lock()
 
 
 def configure_telemetry(**kwargs: Any) -> TelemetryManager:
-    """Initialise and store a global :class:`TelemetryManager` instance."""
+    """Initialise and store a global :class:`TelemetryManager` instance.
+
+    Pass ``include_content=True`` to export raw prompts, completions, and
+    tool payloads. The default emits length and SHA-256 fingerprints only.
+    """
 
     telemetry = TelemetryManager(**kwargs)
     with _GLOBAL_LOCK:
