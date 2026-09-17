@@ -7,7 +7,7 @@ Updated against `main` at `dd08cd0` (PRs #49–#52 merged). The earlier document
 - Merged baseline: 187 tests passed, one skipped (FAISS), 83.93% coverage locally.
 - Local branch `test/multi-agent-http-timeouts`: 190 passed, one skipped, 83.93% coverage. Black, isort, Flake8, MyPy, and Bandit passed.
 - HTTP integration coverage merged in [PR #52](https://github.com/davletovb/neva/pull/52). No live-provider calls were made.
-- Independent scheduler-coverage branch `feat/composite-conditional-coverage`: 22 added cases; 212 passed, one FAISS skip, 85.60% aggregate coverage. Composite coverage increased from 61% to 95%; Conditional from 75% to 100% of measured statements. This does not prove all behaviors correct.
+- Independent scheduler-coverage branch `feat/composite-conditional-coverage`: 22 added cases; 212 passed, one FAISS skip, 85.64% aggregate coverage. Composite coverage increased from 61% to 96%; Conditional from 75% to 100% of measured statements. This does not prove all behaviors correct.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
@@ -106,7 +106,7 @@ Deep-copy isolation may be expensive at scale; no benchmark establishes its limi
 - Focused Composite/Conditional coverage is expanded on `feat/composite-conditional-coverage` (pending merge): validation, group migration/removal, child unavailability, environment propagation, scheduler overrides, predicate errors/updates, pause filtering, and termination hooks. Deeper nested lifecycle and fairness testing remains open.
 - Connect/write timeout and additional malformed-response/SDK integration cases.
 
-The two-agent loopback HTTP and actual read-timeout gap is covered by merged PR #52. TransformerAgent remains at 54%; the scheduler branch measures CompositeScheduler at 95% and ConditionalScheduler at 100% statement coverage. FAISS remains excluded on main while PR #53 is deferred.
+The two-agent loopback HTTP and actual read-timeout gap is covered by merged PR #52. TransformerAgent remains at 54%; the scheduler branch measures CompositeScheduler at 96% and ConditionalScheduler at 100% statement coverage. FAISS remains excluded on main while PR #53 is deferred.
 
 ### 6. Model-driven tool loop — not implemented
 

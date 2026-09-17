@@ -90,12 +90,14 @@ def test_composite_pause_after_removal_keeps_index_in_range():
     scheduler.add(agents[1], group="alpha")
     scheduler.add(agents[2], group="beta")
 
-    # Advance both groups before pruning the first group.
-    for _ in range(2):
-        scheduler.get_next_agent()
+    # One selection leaves the group index at 1 ("beta"); pruning "alpha"
+    # then shrinks the order to length 1, so the final selection only works
+    # if removal normalizes the index instead of raising IndexError.
+    scheduler.get_next_agent()
     scheduler.terminate(agents[0])
     scheduler.terminate(agents[1])
     assert "alpha" not in scheduler._group_order
+    assert scheduler._group_index == 0
     # No IndexError after pruning the current group.
     assert scheduler.get_next_agent() is agents[2]
 
