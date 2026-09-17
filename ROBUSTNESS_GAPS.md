@@ -2,11 +2,13 @@
 
 ## Verified baseline and scope
 
-Updated after checking GitHub and local `main` at `e1a6662` (PRs #49, #50, and #51 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
+Updated against `main` at `dd08cd0` (PRs #49–#52 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
 
 - Merged baseline: 187 tests passed, one skipped (FAISS), 83.93% coverage locally.
 - Local branch `test/multi-agent-http-timeouts`: 190 passed, one skipped, 83.93% coverage. Black, isort, Flake8, MyPy, and Bandit passed.
-- New integration coverage is committed and pushed in [PR #52](https://github.com/davletovb/neva/pull/52), pending merge. No live-provider calls were made.
+- HTTP integration coverage merged in [PR #52](https://github.com/davletovb/neva/pull/52). No live-provider calls were made.
+- Independent scheduler-coverage branch `feat/composite-conditional-coverage`: 22 added cases; 212 passed, one FAISS skip, 85.60% aggregate coverage. Composite coverage increased from 61% to 95%; Conditional from 75% to 100% of measured statements. This does not prove all behaviors correct.
+- FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
 ## Already implemented on merged main
@@ -48,7 +50,7 @@ Character limits remain heuristics: they are not model-specific token/context li
 - Raw content is omitted by default from the covered telemetry fields; `include_content=True` explicitly opts into raw content.
 - This is not a guarantee that all application logs, custom metadata, or caller-provided exporters are free of sensitive data.
 
-## Newly addressed locally: HTTP integration coverage
+## Merged PR #52: HTTP integration coverage
 
 `tests/integration/test_multi_agent_http.py` adds:
 
@@ -101,10 +103,10 @@ Deep-copy isolation may be expensive at scale; no benchmark establishes its limi
 
 - Tests with actual small transformer-model weights.
 - FAISS dependency-enabled CI; its implementation remains excluded from coverage and its local test is skipped.
-- Focused Composite/Conditional scheduler edge-case coverage.
+- Focused Composite/Conditional coverage is expanded on `feat/composite-conditional-coverage` (pending merge): validation, group migration/removal, child unavailability, environment propagation, scheduler overrides, predicate errors/updates, pause filtering, and termination hooks. Deeper nested lifecycle and fairness testing remains open.
 - Connect/write timeout and additional malformed-response/SDK integration cases.
 
-The two-agent loopback HTTP and actual read-timeout gap is now covered on the local branch, pending merge. Review-time module coverage remains approximately TransformerAgent 54%, CompositeScheduler 61%, ConditionalScheduler 75%.
+The two-agent loopback HTTP and actual read-timeout gap is covered by merged PR #52. TransformerAgent remains at 54%; the scheduler branch measures CompositeScheduler at 95% and ConditionalScheduler at 100% statement coverage. FAISS remains excluded on main while PR #53 is deferred.
 
 ### 6. Model-driven tool loop — not implemented
 
@@ -151,6 +153,9 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Correct inconsistent fake-clock setup in the existing limiter test.
 - [x] Pass full local tests and quality checks.
 - [x] Commit/push the tests and refreshed gap document; open PR #52.
-- [ ] Run CI and merge the local work through a PR.
+- [x] Run CI and merge HTTP integration work through PR #52.
+- [x] Expand scheduler edge-case tests on an independent branch; no production changes.
+- [ ] Run CI and merge scheduler coverage after review.
+- [ ] User decision on deferred FAISS PR #53.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
