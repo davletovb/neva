@@ -18,9 +18,19 @@ logger = logging.getLogger(__name__)
 class Environment:
     """Coordinate agents and schedulers while maintaining shared state."""
 
-    def __init__(self, scheduler: Optional[Scheduler] = None) -> None:
+    def __init__(
+        self,
+        scheduler: Optional[Scheduler] = None,
+        *,
+        error_policy: str = "raise",
+        error_value: Optional[str] = None,
+    ) -> None:
+        if error_policy not in {"raise", "return"}:
+            raise ValueError("error_policy must be 'raise' or 'return'")
         self.state: Dict[str, object] = {}
         self.scheduler = scheduler
+        self.error_policy = error_policy
+        self.error_value = error_value
         self.agents: List[AIAgent] = []
         self.conversation_id = f"conversation-{uuid4()}"
         if self.scheduler is not None:
@@ -67,10 +77,14 @@ class Environment:
         started = perf_counter()
         try:
             response = agent.step(self.context())
-        except Exception:
-            self.scheduler.record_metrics(agent, status="failed")
+        except Exception as exc:
+            self.scheduler.record_metrics(agent, status="failed", error=repr(exc))
+            if self.error_policy == "return":
+                return self.error_value
             raise
-        self.scheduler.record_metrics(agent, status="completed", latency=perf_counter() - started)
+        self.scheduler.record_metrics(
+            agent, status="completed", latency=perf_counter() - started, response=response
+        )
         return response
 
     def run(self, steps: int) -> List[Optional[str]]:

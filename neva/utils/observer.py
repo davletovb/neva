@@ -8,6 +8,7 @@ import logging
 from collections import Counter, defaultdict
 from datetime import datetime
 from functools import wraps
+from threading import RLock
 from time import perf_counter
 from types import MethodType
 from typing import (
@@ -72,6 +73,7 @@ class SimulationObserver:
         # stores the collected values.
         self.metrics: Dict[str, Callable[..., Any]] = {}
         self.data: Dict[str, List[Any]] = {}
+        self._lock = RLock()
 
         # Internal state to support built-in metrics.
         self._turn_count = 0
@@ -140,6 +142,8 @@ class SimulationObserver:
         active_agent: Optional[Any] = None,
         status: str = "completed",
         latency: Optional[float] = None,
+        response: Optional[str] = None,
+        error: Optional[str] = None,
     ) -> None:
         """Record a scheduled, completed, or failed turn.
 
@@ -150,24 +154,27 @@ class SimulationObserver:
             raise ValueError(f"Unknown turn status: {status}")
         agent_list: List[Any] = list(agents)
         now = datetime.utcnow()
-        self._latest_latency = latency if status == "completed" else None
-        if active_agent is not None:
-            agent_name = getattr(active_agent, "name", str(active_agent))
-            self._latest_agent_name = agent_name
-            if status == "scheduled":
-                self._scheduled_turn_count += 1
-            elif status == "failed":
-                self._failed_turn_count += 1
+        with self._lock:
+            self._latest_latency = latency if status == "completed" else None
+            if active_agent is not None:
+                agent_name = getattr(active_agent, "name", str(active_agent))
+                self._latest_agent_name = agent_name
+                if status == "scheduled":
+                    self._scheduled_turn_count += 1
+                elif status == "failed":
+                    self._failed_turn_count += 1
+                else:
+                    self._turn_count += 1
+                    self._participation[agent_name] += 1
+                    if latency is not None:
+                        self._latencies.append(latency)
             else:
-                self._turn_count += 1
-                self._participation[agent_name] += 1
-                if latency is not None:
-                    self._latencies.append(latency)
-        else:
-            self._latest_agent_name = None
-        latency = self._latest_latency
+                self._latest_agent_name = None
+            latency = self._latest_latency
 
         context: ContextDict = {
+            "in_flight_response": response,
+            "in_flight_error": error,
             "active_agent": active_agent,
             "active_agent_name": self._latest_agent_name,
             "agents": list(agent_list),
@@ -409,7 +416,10 @@ class SimulationObserver:
             context: Optional[ContextDict] = None,
         ) -> int:
             transcript = self._extract_transcript(environment)
-            return _safe_len(transcript)
+            in_flight = bool(
+                context and context.get("in_flight_response") and self._has_transcript(environment)
+            )
+            return _safe_len(transcript) + (1 if in_flight else 0)
 
         self.add_metric("dialogue_length", dialogue_length_metric)
 
@@ -499,6 +509,14 @@ class SimulationObserver:
             return "statement"
 
         self.add_metric("recent_intent", intent_metric)
+
+    def _has_transcript(self, environment: Optional[Any]) -> bool:
+        if environment is None:
+            return False
+        if hasattr(environment, "transcript"):
+            return True
+        state = getattr(environment, "state", None)
+        return isinstance(state, dict) and "transcript" in state
 
     def _extract_transcript(self, environment: Optional[Any]) -> List[str]:
         if environment is None:

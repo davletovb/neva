@@ -29,6 +29,8 @@ class Scheduler(ABC):
         *,
         status: str = "scheduled",
         latency: Optional[float] = None,
+        response: Optional[str] = None,
+        error: Optional[str] = None,
     ) -> None:
         """Record selection by default; environments report the outcome explicitly."""
         observer = getattr(self, "simulation_observer", None)
@@ -40,6 +42,8 @@ class Scheduler(ABC):
                     active_agent=active_agent,
                     status=status,
                     latency=latency,
+                    response=response,
+                    error=error,
                 )
             except TypeError:
                 # Legacy two-argument observers record at selection time only,

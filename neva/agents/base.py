@@ -449,6 +449,7 @@ class AgentManager:
         self.agents: Dict[str, AIAgent] = {}
         self.groups: Dict[str, List[str]] = {}
         self.parallel_config = parallel_config or ParallelExecutionConfig()
+        self._concurrency_semaphore: Optional[asyncio.Semaphore] = None
 
     @staticmethod
     def profile_population_memory(
@@ -550,11 +551,11 @@ class AgentManager:
             return {}
 
         sender = self.get_agent(sender_id)
-        semaphore = (
-            asyncio.Semaphore(self.parallel_config.max_concurrency)
-            if self.parallel_config.max_concurrency
-            else None
-        )
+        # One semaphore per manager (lazily created) so concurrent batches share
+        # a single concurrency limit instead of each batch getting its own.
+        if self.parallel_config.max_concurrency and self._concurrency_semaphore is None:
+            self._concurrency_semaphore = asyncio.Semaphore(self.parallel_config.max_concurrency)
+        semaphore = self._concurrency_semaphore
 
         async def _communicate(receiver_id: str) -> Tuple[str, str]:
             receiver = self.get_agent(receiver_id)
