@@ -6,8 +6,10 @@ import csv
 import json
 import logging
 from collections import Counter, defaultdict
+from copy import deepcopy
 from datetime import datetime
 from functools import wraps
+from threading import RLock
 from time import perf_counter
 from types import MethodType
 from typing import (
@@ -20,6 +22,7 @@ from typing import (
     MutableMapping,
     Optional,
     Protocol,
+    TypeVar,
     cast,
 )
 
@@ -51,6 +54,20 @@ def _safe_len(sequence: Optional[Iterable[Any]]) -> int:
         return sum(1 for _ in sequence)
 
 
+_Method = TypeVar("_Method", bound=Callable[..., Any])
+
+
+def _synchronized(method: _Method) -> _Method:
+    """Serialize observer API calls, including metric evaluation/publication."""
+
+    @wraps(method)
+    def locked(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return cast(_Method, locked)
+
+
 class SimulationObserver:
     """Collect and store metrics over a simulation run.
 
@@ -72,6 +89,7 @@ class SimulationObserver:
         # stores the collected values.
         self.metrics: Dict[str, Callable[..., Any]] = {}
         self.data: Dict[str, List[Any]] = {}
+        self._lock = RLock()
 
         # Internal state to support built-in metrics.
         self._turn_count = 0
@@ -120,6 +138,7 @@ class SimulationObserver:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    @_synchronized
     def add_metric(self, metric_name: str, metric_function: Callable[..., Any]) -> None:
         """Register ``metric_function`` under ``metric_name``.
 
@@ -132,6 +151,7 @@ class SimulationObserver:
         self.metrics[metric_name] = metric_function
         self.data.setdefault(metric_name, [])
 
+    @_synchronized
     def collect_data(
         self,
         agents: Iterable[Any],
@@ -140,6 +160,8 @@ class SimulationObserver:
         active_agent: Optional[Any] = None,
         status: str = "completed",
         latency: Optional[float] = None,
+        response: Optional[str] = None,
+        error: Optional[str] = None,
     ) -> None:
         """Record a scheduled, completed, or failed turn.
 
@@ -150,24 +172,27 @@ class SimulationObserver:
             raise ValueError(f"Unknown turn status: {status}")
         agent_list: List[Any] = list(agents)
         now = datetime.utcnow()
-        self._latest_latency = latency if status == "completed" else None
-        if active_agent is not None:
-            agent_name = getattr(active_agent, "name", str(active_agent))
-            self._latest_agent_name = agent_name
-            if status == "scheduled":
-                self._scheduled_turn_count += 1
-            elif status == "failed":
-                self._failed_turn_count += 1
+        with self._lock:
+            self._latest_latency = latency if status == "completed" else None
+            if active_agent is not None:
+                agent_name = getattr(active_agent, "name", str(active_agent))
+                self._latest_agent_name = agent_name
+                if status == "scheduled":
+                    self._scheduled_turn_count += 1
+                elif status == "failed":
+                    self._failed_turn_count += 1
+                else:
+                    self._turn_count += 1
+                    self._participation[agent_name] += 1
+                    if latency is not None:
+                        self._latencies.append(latency)
             else:
-                self._turn_count += 1
-                self._participation[agent_name] += 1
-                if latency is not None:
-                    self._latencies.append(latency)
-        else:
-            self._latest_agent_name = None
-        latency = self._latest_latency
+                self._latest_agent_name = None
+            latency = self._latest_latency
 
         context: ContextDict = {
+            "in_flight_response": response,
+            "in_flight_error": error,
             "active_agent": active_agent,
             "active_agent_name": self._latest_agent_name,
             "agents": list(agent_list),
@@ -177,7 +202,7 @@ class SimulationObserver:
             "turn_count": self._turn_count,
             "participation": dict(self._participation),
             "tool_usage": {agent: dict(counter) for agent, counter in self._tool_usage.items()},
-            "tool_usage_events": list(self._tool_usage_events),
+            "tool_usage_events": deepcopy(self._tool_usage_events),
             "timestamp": now,
         }
 
@@ -191,23 +216,28 @@ class SimulationObserver:
     def export_to_csv(self, filename: str) -> None:
         with open(filename, "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
-            for key, value in self.data.items():
+            for key, value in self.to_dict().items():
                 writer.writerow([key] + value)
 
     def export_to_json(self, filename: str) -> None:
         with open(filename, "w") as jsonfile:
-            json.dump(self.data, jsonfile, default=self._json_default)
+            json.dump(self.to_dict(), jsonfile, default=self._json_default)
 
+    @_synchronized
     def to_dict(self) -> Dict[str, List[Any]]:
         """Return the collected metric history as a serialisable dictionary."""
 
         return json.loads(json.dumps(self.data, default=self._json_default))
 
+    @_synchronized
     def latest_snapshot(self) -> Dict[str, Any]:
         """Return the most recent value for each tracked metric."""
 
-        return {name: values[-1] if values else None for name, values in self.data.items()}
+        return deepcopy(
+            {name: values[-1] if values else None for name, values in self.data.items()}
+        )
 
+    @_synchronized
     def checkpoint_state(self) -> Dict[str, Any]:
         """Return JSON-safe observer state for simulation checkpoints."""
 
@@ -219,11 +249,12 @@ class SimulationObserver:
             "latest_latency": self._latest_latency,
             "participation": dict(self._participation),
             "tool_usage": {agent: dict(counter) for agent, counter in self._tool_usage.items()},
-            "tool_usage_events": list(self._tool_usage_events),
+            "tool_usage_events": deepcopy(self._tool_usage_events),
             "latest_agent_name": self._latest_agent_name,
             "data": json.loads(json.dumps(self.data, default=self._json_default)),
         }
 
+    @_synchronized
     def restore_checkpoint_state(self, state: Dict[str, Any]) -> None:
         """Restore observer counters and metric history from a checkpoint."""
 
@@ -238,11 +269,11 @@ class SimulationObserver:
         self._tool_usage = defaultdict(
             Counter, {k: Counter(v) for k, v in state.get("tool_usage", {}).items()}
         )
-        self._tool_usage_events = list(state.get("tool_usage_events", []))
+        self._tool_usage_events = deepcopy(state.get("tool_usage_events", []))
         self._latest_agent_name = state.get("latest_agent_name")
         for metric_name, values in state.get("data", {}).items():
             if metric_name in self.metrics:
-                self.data[metric_name] = list(values)
+                self.data[metric_name] = deepcopy(values)
 
     def log_to_mlflow(
         self,
@@ -279,6 +310,7 @@ class SimulationObserver:
     # ------------------------------------------------------------------
     # Observation helpers used by the schedulers/agents
     # ------------------------------------------------------------------
+    @_synchronized
     def watch_agent(self, agent: Any) -> None:
         """Initialise counters and tool instrumentation for ``agent``."""
 
@@ -288,6 +320,7 @@ class SimulationObserver:
         for tool in getattr(agent, "tools", []):
             self.watch_tool(agent, tool)
 
+    @_synchronized
     def watch_tool(self, agent: Any, tool: ToolLike) -> None:
         """Wrap ``tool.use`` to record usage statistics when available."""
 
@@ -315,6 +348,7 @@ class SimulationObserver:
         tool.use = MethodType(instrumented_use, tool)  # type: ignore[assignment]
         self._wrapped_tools[tool_id] = wrapped_use
 
+    @_synchronized
     def record_tool_usage(
         self, agent: Any, tool: ToolLike, *, duration: Optional[float] = None
     ) -> None:

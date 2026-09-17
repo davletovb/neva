@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from importlib import import_module
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -33,11 +33,9 @@ class TranscriptEnvironment(BasicEnvironment):
             return "No dialogue yet."
         return " | ".join(self.transcript[-limit:])
 
-    def step(self) -> Optional[str]:  # type: ignore[override]
-        message = super().step()
-        if message:
-            self.transcript.append(message)
-        return message
+    def on_turn_complete(self, response: str) -> None:
+        if response:
+            self.transcript.append(response)
 
 
 def install_wikipedia_stub() -> None:

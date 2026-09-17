@@ -40,11 +40,9 @@ class ConversationEnvironment(BasicEnvironment):
             return "Introduce yourself and propose a collaborative goal for this " "simulation."
         return "Conversation so far: " + " | ".join(self.transcript[-3:])
 
-    def step(self) -> str | None:
-        response = super().step()
+    def on_turn_complete(self, response: str) -> None:
         if response:
             self.transcript.append(response)
-        return response
 
 
 def make_reflective_backend(name: str):
