@@ -2,13 +2,9 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `b1bc221` (PRs #49–#52, #54, and #55 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
+Updated against `main` at `00b5132` (PRs #49–#52, #54–#56 merged).
 
-- Merged baseline through PR #55: 222 tests passed, one skipped (FAISS).
-- Checkpoint file-size-limit branch: 240 passed, one skipped, 85.77% coverage; all local quality gates passed. Limits are opt-in positive UTF-8 byte counts; loads read at most limit + 1 bytes before rejecting overflow, and oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
-- Local branch `test/multi-agent-http-timeouts`: 190 passed, one skipped, 83.93% coverage. Black, isort, Flake8, MyPy, and Bandit passed.
-- HTTP integration coverage merged in [PR #52](https://github.com/davletovb/neva/pull/52). No live-provider calls were made.
-- Independent scheduler-coverage branch `feat/composite-conditional-coverage`: 22 added cases; 212 passed, one FAISS skip, 85.64% aggregate coverage. Composite coverage increased from 61% to 96%; Conditional from 75% to 100% of measured statements. This does not prove all behaviors correct.
+- Merged baseline through PR #56: 242 tests passed, one skipped (FAISS). Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
@@ -93,7 +89,7 @@ Regex prompt validation is input hygiene, not protection against prompt injectio
 
 ### 4. Checkpoint and transcript scalability — partial
 
-- This branch adds opt-in checkpoint file-size limits through `save_snapshot(..., max_bytes=N)` and `load_snapshot(..., max_bytes=N)`. Snapshot-creation/RAM ceilings and large-state performance benchmarks remain open.
+- Opt-in checkpoint file-size limits merged in PR #56 (`save_snapshot(..., max_bytes=N)`, `load_snapshot(..., max_bytes=N)`). Snapshot-creation/RAM ceilings and large-state performance benchmarks remain open.
 - Incremental/externalized persistence where justified by measured scale.
 - Support for components currently requiring custom checkpoint hooks.
 - Conversation retention is implemented by merged PR #55: optional `ConversationState(max_turns=N)`, preserved through serialization and restore. This is distinct from request-history trimming and does not limit bytes per turn.
@@ -157,6 +153,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Run CI and merge HTTP integration work through PR #52.
 - [x] Expand scheduler edge-case tests on an independent branch; no production changes.
 - [x] Run CI and merge scheduler coverage after review (PR #54).
+- [x] Add conversation retention limits and checkpoint file-size limits (PRs #55, #56).
 - [ ] User decision on deferred FAISS PR #53.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
