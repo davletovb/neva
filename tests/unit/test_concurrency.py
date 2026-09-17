@@ -52,6 +52,35 @@ def test_sync_batches_can_reuse_manager_across_event_loops():
         assert len(manager.batch_communicate(str(sender.id), ids, "hi")) == 4
 
 
+def test_simultaneous_batches_share_limit_on_one_loop():
+    manager = AgentManager(ParallelExecutionConfig(max_concurrency=1))
+    sender = manager.create_agent("transformer", name="S", llm_backend=lambda p: "s")
+    receivers = [manager.create_agent("transformer", llm_backend=lambda p: "ok") for _ in range(4)]
+    active = 0
+    peak = 0
+
+    async def delayed_receive(message, *, sender=None):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return "ok"
+
+    for receiver in receivers:
+        receiver.areceive = delayed_receive
+
+    async def run():
+        ids = [str(receiver.id) for receiver in receivers]
+        await asyncio.gather(
+            manager.batch_communicate_async(str(sender.id), ids[:2], "hi"),
+            manager.batch_communicate_async(str(sender.id), ids[2:], "hi"),
+        )
+
+    asyncio.run(run())
+    assert peak == 1
+
+
 def test_batch_communicate_async_reuses_one_concurrency_semaphore():
     manager = AgentManager(parallel_config=ParallelExecutionConfig(enabled=True, max_concurrency=2))
     sender = manager.create_agent("transformer", name="S", llm_backend=lambda prompt: "x")

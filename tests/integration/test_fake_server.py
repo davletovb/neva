@@ -18,7 +18,7 @@ def test_real_http_server_roundtrip_and_retry_classification():
             api_base=f"http://127.0.0.1:{server.server_address[1]}/v1",
         )
         # First call fails 503 twice, then succeeds: exercises retry through a
-        # real TCP socket and verifies headers/timeouts reach the wire.
+        # real TCP socket and verifies request headers and model selection.
         assert agent.respond("ping") == "recovered"
         assert len(calls) == 3
         assert calls[0]["Authorization"] == "Bearer test-key"

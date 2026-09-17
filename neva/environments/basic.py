@@ -16,8 +16,11 @@ class BasicEnvironment(Environment):
         name: str,
         description: str,
         scheduler: Optional[Scheduler] = None,
+        *,
+        error_policy: str = "raise",
+        error_value: Optional[str] = None,
     ) -> None:
-        super().__init__(scheduler)
+        super().__init__(scheduler, error_policy=error_policy, error_value=error_value)
         self.name = name
         self.description = description
 

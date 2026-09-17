@@ -57,6 +57,9 @@ class Environment:
 
         return ""
 
+    def on_turn_complete(self, response: str) -> None:
+        """Update transcript/state before metrics; override instead of wrapping step."""
+
     def step(self) -> Optional[str]:
         if self.scheduler is None or not self.agents:
             return None
@@ -77,6 +80,7 @@ class Environment:
         started = perf_counter()
         try:
             response = agent.step(self.context())
+            self.on_turn_complete(response)
         except Exception as exc:
             self.scheduler.record_metrics(agent, status="failed", error=repr(exc))
             if self.error_policy == "return":

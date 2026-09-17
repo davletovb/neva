@@ -1,8 +1,23 @@
 import pytest
 
 from neva.agents import TransformerAgent
-from neva.environments import Environment
+from neva.environments import BasicEnvironment, Environment
 from neva.schedulers import RoundRobinScheduler
+
+
+def test_basic_environment_exposes_error_policy():
+    env = BasicEnvironment(
+        "Lab", "Test", RoundRobinScheduler(), error_policy="return", error_value="unavailable"
+    )
+
+    def fail(prompt):
+        raise RuntimeError("down")
+
+    env.register_agent(TransformerAgent(llm_backend=fail))
+    assert env.step() == "unavailable"
+    assert env.scheduler.simulation_observer.latest_snapshot()["failed_turn_count"] == 1
+    with pytest.raises(ValueError, match="error_policy"):
+        BasicEnvironment("Lab", "Test", error_policy="invalid")
 
 
 def make_environment(error_policy="raise", error_value=None):
@@ -17,15 +32,7 @@ def test_dialogue_length_matches_completed_turns():
     # a real environment appends each completed response to a transcript.
     env = make_environment()
     env.transcript = []
-    original_step = env.step
-
-    def step_with_transcript():
-        message = original_step()
-        if message:
-            env.transcript.append(message)
-        return message
-
-    env.step = step_with_transcript
+    env.on_turn_complete = env.transcript.append
     env.step()
     env.step()
     snapshot = env.scheduler.simulation_observer.latest_snapshot()
