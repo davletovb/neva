@@ -2,9 +2,10 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `dd08cd0` (PRs #49–#52 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
+Updated against `main` at `b1bc221` (PRs #49–#52, #54, and #55 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
 
-- Merged baseline: 187 tests passed, one skipped (FAISS), 83.93% coverage locally.
+- Merged baseline through PR #55: 222 tests passed, one skipped (FAISS).
+- Checkpoint file-size-limit branch: 240 passed, one skipped, 85.77% coverage; all local quality gates passed. Limits are opt-in positive UTF-8 byte counts; loads read at most limit + 1 bytes before rejecting overflow, and oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
 - Local branch `test/multi-agent-http-timeouts`: 190 passed, one skipped, 83.93% coverage. Black, isort, Flake8, MyPy, and Bandit passed.
 - HTTP integration coverage merged in [PR #52](https://github.com/davletovb/neva/pull/52). No live-provider calls were made.
 - Independent scheduler-coverage branch `feat/composite-conditional-coverage`: 22 added cases; 212 passed, one FAISS skip, 85.64% aggregate coverage. Composite coverage increased from 61% to 96%; Conditional from 75% to 100% of measured statements. This does not prove all behaviors correct.
@@ -36,7 +37,7 @@ Custom transcript environments must use the completion hook. Observer synchroniz
 - MathTool exponentiation has operand bounds; this is not a general resource sandbox.
 - README describes input hygiene and thread-safety limits instead of claiming comprehensive safety rails.
 
-Character limits remain heuristics: they are not model-specific token/context limits or an output-token reservation system. ConversationState itself remains unbounded even when transmitted history is windowed.
+Character limits remain heuristics: they are not model-specific token/context limits or an output-token reservation system. ConversationState is unbounded by default; PR #55 adds an opt-in stored-turn retention limit independent of the transmitted history window.
 
 ### PR #50: circuit breaker and default-model pricing
 
@@ -92,10 +93,10 @@ Regex prompt validation is input hygiene, not protection against prompt injectio
 
 ### 4. Checkpoint and transcript scalability — partial
 
-- Checkpoint size/resource ceilings and large-state performance benchmarks.
+- This branch adds opt-in checkpoint file-size limits through `save_snapshot(..., max_bytes=N)` and `load_snapshot(..., max_bytes=N)`. Snapshot-creation/RAM ceilings and large-state performance benchmarks remain open.
 - Incremental/externalized persistence where justified by measured scale.
 - Support for components currently requiring custom checkpoint hooks.
-- Retention limits for stored conversation state, distinct from request-history trimming.
+- Conversation retention is implemented by merged PR #55: optional `ConversationState(max_turns=N)`, preserved through serialization and restore. This is distinct from request-history trimming and does not limit bytes per turn.
 
 Deep-copy isolation may be expensive at scale; no benchmark establishes its limits yet.
 
@@ -103,7 +104,7 @@ Deep-copy isolation may be expensive at scale; no benchmark establishes its limi
 
 - Tests with actual small transformer-model weights.
 - FAISS dependency-enabled CI; its implementation remains excluded from coverage and its local test is skipped.
-- Focused Composite/Conditional coverage is expanded on `feat/composite-conditional-coverage` (pending merge): validation, group migration/removal, child unavailability, environment propagation, scheduler overrides, predicate errors/updates, pause filtering, and termination hooks. Deeper nested lifecycle and fairness testing remains open.
+- Focused Composite/Conditional coverage is merged in PR #54: validation, group migration/removal, child unavailability, environment propagation, scheduler overrides, predicate errors/updates, pause filtering, and termination hooks. Deeper nested lifecycle and fairness testing remains open.
 - Connect/write timeout and additional malformed-response/SDK integration cases.
 
 The two-agent loopback HTTP and actual read-timeout gap is covered by merged PR #52. TransformerAgent remains at 54%; the scheduler branch measures CompositeScheduler at 96% and ConditionalScheduler at 100% statement coverage. FAISS remains excluded on main while PR #53 is deferred.
@@ -155,7 +156,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Commit/push the tests and refreshed gap document; open PR #52.
 - [x] Run CI and merge HTTP integration work through PR #52.
 - [x] Expand scheduler edge-case tests on an independent branch; no production changes.
-- [ ] Run CI and merge scheduler coverage after review.
+- [x] Run CI and merge scheduler coverage after review (PR #54).
 - [ ] User decision on deferred FAISS PR #53.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.

@@ -137,12 +137,52 @@ def create_snapshot(
     )
 
 
-def save_snapshot(snapshot: SimulationSnapshot, path: Path) -> None:
-    path.write_text(snapshot.to_json(), encoding="utf-8")
+def _validate_max_bytes(max_bytes: Optional[int]) -> None:
+    if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
+        raise ValueError("max_bytes must be a positive integer or None")
 
 
-def load_snapshot(path: Path) -> SimulationSnapshot:
-    return SimulationSnapshot.from_json(path.read_text(encoding="utf-8"))
+def save_snapshot(
+    snapshot: SimulationSnapshot, path: Path, *, max_bytes: Optional[int] = None
+) -> None:
+    """Save UTF-8 JSON, optionally rejecting oversized output before opening the file.
+
+    ``max_bytes`` must be a positive integer or None (unlimited). Serialization
+    still happens in memory; this is not a snapshot-creation or RAM limit.
+    """
+    _validate_max_bytes(max_bytes)
+    raw = snapshot.to_json().encode("utf-8")
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise ValueError("Snapshot exceeds max_bytes")
+    path.write_bytes(raw)
+
+
+def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationSnapshot:
+    """Load UTF-8 JSON with an optional positive byte limit (None is unlimited).
+
+    Limited loads read in 64 KiB chunks (at most limit + 1 bytes total) and
+    reject overflow before decoding or parsing, so a generous limit never
+    triggers a proportional preallocation. The limit does not bound the memory
+    used by the decoded object graph.
+    """
+    _validate_max_bytes(max_bytes)
+    raw = b"" if max_bytes is None else None
+    with path.open("rb") as source:
+        if max_bytes is None:
+            raw = source.read()
+        else:
+            chunks = []
+            remaining = max_bytes + 1
+            while remaining > 0:
+                chunk = source.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise ValueError("Snapshot exceeds max_bytes")
+    return SimulationSnapshot.from_json(raw.decode("utf-8"))
 
 
 @runtime_checkable
