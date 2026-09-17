@@ -1,5 +1,3 @@
-import sys
-
 import pytest
 
 from neva.memory import FaissVectorStoreMemory, MemoryConfigurationError
@@ -35,9 +33,6 @@ def test_faiss_memory_recalls_similar_messages():
 
 
 def test_requires_faiss_dependency(monkeypatch):
-    if "faiss" in sys.modules:
-        pytest.skip("faiss installed; cannot test missing dependency")
-
     original_import = __import__
 
     def fake_import(name, *args, **kwargs):
