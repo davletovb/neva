@@ -77,6 +77,7 @@ class ConversationState:
                     state.turns.append(
                         ConversationTurn.from_dict(cast(Dict[str, str], turn_payload))
                     )
+            state._trim()
         return state
 
 

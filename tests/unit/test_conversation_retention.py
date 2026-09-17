@@ -19,6 +19,16 @@ def test_invalid_retention_limit_rejected(limit):
         ConversationState("agent", max_turns=limit)
 
 
+def test_deserialization_trims_oversized_persisted_history():
+    state = ConversationState("agent")
+    for number in range(4):
+        state.record_turn("user", str(number))
+    payload = state.to_dict()
+    payload["max_turns"] = 2
+    restored = ConversationState.from_dict(payload)
+    assert [turn.message for turn in restored.turns] == ["2", "3"]
+
+
 def test_serialization_preserves_limit_and_legacy_payloads():
     state = ConversationState("agent", max_turns=1)
     state.record_turn("user", "hello")
