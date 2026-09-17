@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repository `.gitignore` covering build, coverage, cache, and runtime
   artifacts.
 - Unit tests for `GPTAgent` Chat Completions providers, including Grok/xAI.
+- Optional per-agent failure policies: `Environment.register_agent(agent,
+  error_policy="raise"|"return", error_value=...)` overrides the
+  environment-wide policy for that agent's failed turns (including context and
+  transcript-hook failures). Agents without an override inherit the environment
+  defaults, and scheduler-selection failures keep using the environment policy.
+  Overrides survive version-2 checkpoints and older checkpoints clear them.
 - `CircuitBreaker` fails fast after consecutive retryable provider failures
   (each retryable HTTP attempt counts) and allows a single probe after a
   cooldown. A rejected probe releases the in-flight slot so later calls can
