@@ -36,6 +36,22 @@ def test_observer_is_thread_safe_under_concurrent_collection():
     assert sum(observer._participation.values()) == 8 * 250
 
 
+def test_sync_batches_can_reuse_manager_across_event_loops():
+    import time
+
+    manager = AgentManager(ParallelExecutionConfig(enabled=True, max_concurrency=1, batch_size=2))
+    sender = manager.create_agent("transformer", name="S", llm_backend=lambda p: "s")
+
+    def slow_backend(prompt):
+        time.sleep(0.01)
+        return "ok"
+
+    receivers = [manager.create_agent("transformer", llm_backend=slow_backend) for _ in range(4)]
+    ids = [str(agent.id) for agent in receivers]
+    for _ in range(2):
+        assert len(manager.batch_communicate(str(sender.id), ids, "hi")) == 4
+
+
 def test_batch_communicate_async_reuses_one_concurrency_semaphore():
     manager = AgentManager(parallel_config=ParallelExecutionConfig(enabled=True, max_concurrency=2))
     sender = manager.create_agent("transformer", name="S", llm_backend=lambda prompt: "x")

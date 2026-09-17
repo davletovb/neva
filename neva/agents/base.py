@@ -450,6 +450,7 @@ class AgentManager:
         self.groups: Dict[str, List[str]] = {}
         self.parallel_config = parallel_config or ParallelExecutionConfig()
         self._concurrency_semaphore: Optional[asyncio.Semaphore] = None
+        self._loop_semaphores: Dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 
     @staticmethod
     def profile_population_memory(
@@ -551,11 +552,19 @@ class AgentManager:
             return {}
 
         sender = self.get_agent(sender_id)
-        # One semaphore per manager (lazily created) so concurrent batches share
-        # a single concurrency limit instead of each batch getting its own.
-        if self.parallel_config.max_concurrency and self._concurrency_semaphore is None:
-            self._concurrency_semaphore = asyncio.Semaphore(self.parallel_config.max_concurrency)
-        semaphore = self._concurrency_semaphore
+        # Asyncio primitives belong to a loop. Share the limit between batches
+        # on that loop, but never reuse it in a later asyncio.run() invocation.
+        loop = asyncio.get_running_loop()
+        self._loop_semaphores = {
+            owner: limit for owner, limit in self._loop_semaphores.items() if not owner.is_closed()
+        }
+        semaphore = None
+        if self.parallel_config.max_concurrency:
+            semaphore = self._loop_semaphores.get(loop)
+            if semaphore is None:
+                semaphore = asyncio.Semaphore(self.parallel_config.max_concurrency)
+                self._loop_semaphores[loop] = semaphore
+        self._concurrency_semaphore = semaphore
 
         async def _communicate(receiver_id: str) -> Tuple[str, str]:
             receiver = self.get_agent(receiver_id)
