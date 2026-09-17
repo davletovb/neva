@@ -6,7 +6,7 @@ import importlib
 import json
 import logging
 from time import perf_counter, sleep
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -257,7 +257,7 @@ class GPTAgent(AIAgent):
         headers.update(self._extra_headers)
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self._chat_messages(prompt),
             "max_tokens": self._max_output_tokens,
         }
         response = requests.post(url, headers=headers, json=payload, timeout=self._request_timeout)
@@ -296,7 +296,7 @@ class GPTAgent(AIAgent):
         client = client_cls(**client_kwargs)
         request: Dict[str, object] = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self._chat_messages(prompt),
             "max_tokens": self._max_output_tokens,
         }
         request["timeout"] = self._request_timeout
@@ -328,7 +328,7 @@ class GPTAgent(AIAgent):
         generative_ai.configure(api_key=self.api_key)
         model = generative_ai.GenerativeModel(self.model)
         response = model.generate_content(
-            prompt,
+            self._prompt_with_history(prompt),
             generation_config={"max_output_tokens": self._max_output_tokens},
             request_options={"timeout": self._request_timeout, "retry": None},
         )
@@ -352,14 +352,38 @@ class GPTAgent(AIAgent):
             empty_error="Grok provider returned empty content.",
         )
 
+    def _chat_messages(self, prompt: str) -> List[Dict[str, str]]:
+        """Build Chat Completions messages from recorded turns plus ``prompt``."""
+
+        messages: List[Dict[str, str]] = []
+        for turn in self.conversation_state.turns:
+            if turn.speaker == self.name:
+                messages.append({"role": "assistant", "content": turn.message})
+            elif turn.speaker in {"user", "system"}:
+                messages.append({"role": "user", "content": turn.message})
+            else:
+                messages.append({"role": "user", "content": f"{turn.speaker}: {turn.message}"})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def _prompt_with_history(self, prompt: str) -> str:
+        """Flatten recorded turns in front of ``prompt`` for string-only APIs."""
+
+        if not self.conversation_state.turns:
+            return prompt
+        lines = [f"{turn.speaker}: {turn.message}" for turn in self.conversation_state.turns]
+        return "Conversation so far:\n" + "\n".join(lines) + "\n\n" + prompt
+
     def _scoped_key(self, prompt: str) -> str:
         """Cache key bound to the provider/model configuration in effect."""
 
+        history = [(turn.speaker, turn.message) for turn in self.conversation_state.turns]
         scope = {
             "provider": self.provider,
             "model": self.model,
             "api_base": self.api_base,
             "max_output_tokens": self._max_output_tokens,
+            "history": history,
         }
         return json.dumps({"scope": scope, "prompt": prompt}, sort_keys=True)
 

@@ -58,17 +58,24 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        with self._lock:
-            current = time.monotonic()
-            time_passed = current - self._last_check
-            self._last_check = current
-            self._allowance += time_passed * (self._rate / self._per)
-            if self._allowance > self._rate:
-                self._allowance = float(self._rate)
-            if self._allowance < 1.0:
+        """Block until one token is available.
+
+        Sleep happens outside the lock so callers sharing this limiter are not
+        serialized for the full wait. Limits apply to this instance only; pass
+        the same limiter into multiple agents to share a provider budget.
+        """
+
+        while True:
+            sleep_time = 0.0
+            with self._lock:
+                current = time.monotonic()
+                time_passed = current - self._last_check
+                self._last_check = current
+                self._allowance += time_passed * (self._rate / self._per)
+                if self._allowance > self._rate:
+                    self._allowance = float(self._rate)
+                if self._allowance >= 1.0:
+                    self._allowance -= 1.0
+                    return
                 sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
-                time.sleep(sleep_time)
-                self._allowance = 0.0
-                self._last_check = time.monotonic()
-            else:
-                self._allowance -= 1.0
+            time.sleep(sleep_time)

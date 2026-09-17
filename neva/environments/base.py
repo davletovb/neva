@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
+from neva.utils.exceptions import SchedulingError
 from neva.utils.state_management import ConversationState, SimulationSnapshot, create_snapshot
 from neva.utils.telemetry import get_telemetry
 
@@ -64,7 +65,13 @@ class Environment:
         if self.scheduler is None or not self.agents:
             return None
 
-        agent = self.scheduler.get_next_agent()
+        try:
+            agent = self.scheduler.get_next_agent()
+        except SchedulingError as exc:
+            if self.error_policy == "return":
+                logger.debug("Scheduler failed to select an agent: %s", exc)
+                return self.error_value
+            raise
         if agent is None:
             return None
         telemetry = get_telemetry()

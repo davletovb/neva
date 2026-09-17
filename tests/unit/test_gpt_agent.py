@@ -464,3 +464,71 @@ def test_chat_completions_url_appends_to_custom_bases():
         )
         == "https://proxy.example/openai/chat/completions"
     )
+
+
+def test_chat_messages_without_history_is_single_user_turn():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    assert agent._chat_messages("ping") == [{"role": "user", "content": "ping"}]
+
+
+def test_chat_messages_include_recorded_turns():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    agent.receive("hello", sender="user")
+    messages = agent._chat_messages("next")
+    assert messages[0] == {"role": "user", "content": "hello"}
+    assert messages[1] == {"role": "assistant", "content": "ack"}
+    assert messages[2] == {"role": "user", "content": "next"}
+
+
+def test_chat_messages_prefix_other_speakers():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    agent.receive("knock", sender="Innkeeper")
+    messages = agent._chat_messages("reply")
+    assert messages[0] == {"role": "user", "content": "Innkeeper: knock"}
+    assert messages[1] == {"role": "assistant", "content": "ack"}
+
+
+def test_prompt_with_history_flattens_turns():
+    agent = GPTAgent(llm_backend=lambda prompt: "ack", name="Scout")
+    assert agent._prompt_with_history("now") == "now"
+    agent.receive("hello", sender="user")
+    flattened = agent._prompt_with_history("now")
+    assert flattened.startswith("Conversation so far:")
+    assert "user: hello" in flattened
+    assert "Scout: ack" in flattened
+    assert flattened.endswith("now")
+
+
+def test_provider_payload_includes_conversation_history(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        return _FakeResponse({"choices": [{"message": {"content": f"r{len(calls)}"}}]})
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
+    agent.receive("hello", sender="user")
+    assert len(calls[0]["messages"]) == 1
+    assert calls[0]["messages"][0]["role"] == "user"
+    assert "hello" in calls[0]["messages"][0]["content"]
+
+    agent.receive("follow up", sender="user")
+    messages = calls[1]["messages"]
+    assert messages[0] == {"role": "user", "content": "hello"}
+    assert messages[1] == {"role": "assistant", "content": "r1"}
+    assert messages[2]["role"] == "user"
+    assert "follow up" in messages[2]["content"]
+
+
+def test_cache_key_includes_conversation_history():
+    calls = []
+
+    def backend(prompt: str) -> str:
+        calls.append(prompt)
+        return f"r{len(calls)}"
+
+    agent = GPTAgent(llm_backend=backend, name="Scout")
+    agent.receive("hello", sender="user")
+    agent.receive("hello", sender="user")
+    assert len(calls) == 2

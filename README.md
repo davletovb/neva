@@ -291,14 +291,20 @@ scheduler = create_scheduler("my_scheduler")
 ## Features
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
-  helpers let you persist simulations mid-run and resume them later.
+  helpers let you persist simulations mid-run and resume them later. Live
+  providers receive prior turns as chat messages, not only the current prompt.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
-- **Robust Safety Rails**: Prompt validation, sanitisation, rate limiting, and
-  automatic retry logic keep API usage safe and predictable.
-- **Observability First**: Structured logging, response-time metrics, token and
-  cost tracking, and conversation summaries surface actionable insights out of
-  the box.
+- **Input hygiene, not a security boundary**: Prompts are length-capped and
+  stripped of control characters, with a small regex denylist (`<script`,
+  `DROP TABLE`). `RateLimiter` is a per-instance token bucket (pass the same
+  object to share a provider budget). HTTP retries cover 429/5xx, not
+  authorization failures. This is not protection against prompt injection,
+  unauthorized tool use, or account-wide overspend. Tools run with the
+  process's network identity.
+- **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
+  environment, and memory objects are not generally thread-safe. Default rate
+  limits do not span agents or processes.
 - **Intuitive Interfaces**: Simple interfaces for agent creation and management.
 - **Environment Simulation**: Simulate environments for agent interactions and collaborations.
 
