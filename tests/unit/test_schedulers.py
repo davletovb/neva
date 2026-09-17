@@ -25,6 +25,20 @@ class StubAgent(AIAgent):
         return message
 
 
+def test_selection_is_not_a_completed_turn():
+    scheduler = RoundRobinScheduler()
+    agent = StubAgent("A")
+    scheduler.add(agent)
+
+    scheduler.get_next_agent()
+    snapshot = scheduler.simulation_observer.latest_snapshot()
+    assert snapshot["turn_count"] == 0
+    assert snapshot["scheduled_turn_count"] == 1
+    assert snapshot["completed_turn_count"] == 0
+    assert snapshot["failed_turn_count"] == 0
+    assert snapshot["latest_response_latency_seconds"] is None
+
+
 def test_round_robin_scheduler_cycles_agents_in_order():
     scheduler = RoundRobinScheduler()
     agents = [StubAgent("A"), StubAgent("B"), StubAgent("C")]

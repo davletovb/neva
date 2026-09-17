@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 from typing import Dict, List, Optional
 from uuid import uuid4
 
@@ -63,19 +64,39 @@ class Environment:
                 )
             except Exception:  # pragma: no cover - telemetry failures should not break execution.
                 logger.debug("Failed to emit scheduler telemetry", exc_info=True)
-        return agent.step(self.context())
+        started = perf_counter()
+        try:
+            response = agent.step(self.context())
+        except Exception:
+            self.scheduler.record_metrics(agent, status="failed")
+            raise
+        self.scheduler.record_metrics(agent, status="completed", latency=perf_counter() - started)
+        return response
 
     def run(self, steps: int) -> List[Optional[str]]:
         return [self.step() for _ in range(steps)]
 
     def snapshot(self) -> SimulationSnapshot:
-        return create_snapshot(
-            environment_state=dict(self.state),
+        from neva.utils.checkpoint import capture_runtime
+
+        snapshot = create_snapshot(
+            environment_state=self.state,
             agent_states=(agent.conversation_state for agent in self.agents),
         )
+        snapshot.version = 2
+        snapshot.runtime_state = capture_runtime(self)
+        return snapshot
 
     def restore(self, snapshot: SimulationSnapshot) -> None:
-        self.state = dict(snapshot.environment_state)
+        from copy import deepcopy
+
+        from neva.utils.checkpoint import restore_runtime
+
+        if snapshot.version == 2:
+            restore_runtime(self, snapshot.runtime_state)
+        elif snapshot.version != 1:
+            raise ValueError(f"Unsupported snapshot version: {snapshot.version}")
+        self.state = deepcopy(snapshot.environment_state)
         name_to_state = {
             name: ConversationState.from_dict(state)
             for name, state in snapshot.agent_states.items()

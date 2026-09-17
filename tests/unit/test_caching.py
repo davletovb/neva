@@ -45,6 +45,22 @@ def test_gpt_agent_reuses_cache_for_repeated_prompts() -> None:
     assert call_counter["count"] == 1
 
 
+def test_gpt_cache_changes_with_model() -> None:
+    calls = []
+
+    def backend(prompt):
+        calls.append(prompt)
+        return agent.model
+
+    agent = GPTAgent(llm_backend=backend, model="first")
+    assert agent.respond("Hello") == "first"
+    agent.model = "second"
+    assert agent.respond("Hello") == "second"
+    assert len(calls) == 2
+    assert agent.respond("Hello") == "second"
+    assert len(calls) == 2
+
+
 def test_transformer_agent_reuses_cache_for_repeated_prompts() -> None:
     call_counter = {"count": 0}
 

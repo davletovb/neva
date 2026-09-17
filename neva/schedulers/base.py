@@ -23,12 +23,23 @@ class Scheduler(ABC):
     def set_environment(self, environment: "Environment") -> None:
         self.environment = environment
 
-    def record_metrics(self, active_agent: Optional[AIAgent] = None) -> None:
+    def record_metrics(
+        self,
+        active_agent: Optional[AIAgent] = None,
+        *,
+        status: str = "scheduled",
+        latency: Optional[float] = None,
+    ) -> None:
+        """Record selection by default; environments report the outcome explicitly."""
         observer = getattr(self, "simulation_observer", None)
         if observer is not None:
             try:
                 observer.collect_data(
-                    list(self.agents), self.environment, active_agent=active_agent
+                    list(self.agents),
+                    self.environment,
+                    active_agent=active_agent,
+                    status=status,
+                    latency=latency,
                 )
             except TypeError:
                 observer.collect_data(list(self.agents), self.environment)

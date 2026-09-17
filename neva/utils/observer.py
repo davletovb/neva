@@ -75,7 +75,8 @@ class SimulationObserver:
 
         # Internal state to support built-in metrics.
         self._turn_count = 0
-        self._last_turn_timestamp: Optional[datetime] = None
+        self._scheduled_turn_count = 0
+        self._failed_turn_count = 0
         self._latest_latency: Optional[float] = None
         self._latencies: List[float] = []
         self._participation: Counter[str] = Counter()
@@ -137,26 +138,34 @@ class SimulationObserver:
         environment: Optional[Any] = None,
         *,
         active_agent: Optional[Any] = None,
+        status: str = "completed",
+        latency: Optional[float] = None,
     ) -> None:
-        """Collect the current value for each registered metric."""
+        """Record a scheduled, completed, or failed turn.
 
+        Direct callers retain completed-turn semantics. Latency must be an
+        explicitly measured duration, never an interval between observations.
+        """
+        if status not in {"scheduled", "completed", "failed"}:
+            raise ValueError(f"Unknown turn status: {status}")
         agent_list: List[Any] = list(agents)
         now = datetime.utcnow()
-        latency: Optional[float] = None
-        if self._last_turn_timestamp is not None:
-            latency_delta = now - self._last_turn_timestamp
-            latency = latency_delta.total_seconds()
-            self._latest_latency = latency
-            self._latencies.append(latency)
-        self._last_turn_timestamp = now
-
+        self._latest_latency = latency if status == "completed" else None
         if active_agent is not None:
-            self._turn_count += 1
             agent_name = getattr(active_agent, "name", str(active_agent))
             self._latest_agent_name = agent_name
-            self._participation[agent_name] += 1
+            if status == "scheduled":
+                self._scheduled_turn_count += 1
+            elif status == "failed":
+                self._failed_turn_count += 1
+            else:
+                self._turn_count += 1
+                self._participation[agent_name] += 1
+                if latency is not None:
+                    self._latencies.append(latency)
         else:
             self._latest_agent_name = None
+        latency = self._latest_latency
 
         context: ContextDict = {
             "active_agent": active_agent,
@@ -327,6 +336,9 @@ class SimulationObserver:
             return int(value) if isinstance(value, int) else self._turn_count
 
         self.add_metric("turn_count", turn_count_metric)
+        self.add_metric("completed_turn_count", turn_count_metric)
+        self.add_metric("scheduled_turn_count", lambda _agents, _env: self._scheduled_turn_count)
+        self.add_metric("failed_turn_count", lambda _agents, _env: self._failed_turn_count)
 
         def participation_metric(
             _agents: Iterable[Any],
