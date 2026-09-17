@@ -28,7 +28,6 @@ def test_prompt_validator_sanitises_control_characters() -> None:
 
 
 def test_rate_limiter_honours_rate(monkeypatch) -> None:
-    limiter = safety.RateLimiter(rate=2, per=1)
     timestamps = [0.0]
     sleeps = []
 
@@ -42,10 +41,14 @@ def test_rate_limiter_honours_rate(monkeypatch) -> None:
     monkeypatch.setattr(safety.time, "monotonic", fake_monotonic)
     monkeypatch.setattr(safety.time, "sleep", fake_sleep)
 
+    # Construction must use the same clock as acquire(), not real uptime.
+    limiter = safety.RateLimiter(rate=2, per=1)
     limiter.acquire()
     limiter.acquire()
     limiter.acquire()
 
+    assert sleeps == [0.5]
+    assert timestamps[0] == 0.5
     assert sleeps, "rate limiter should require sleeping once allowance exhausted"
     assert timestamps[0] > 0
 
