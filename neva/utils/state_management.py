@@ -41,19 +41,35 @@ class ConversationState:
 
     agent_name: str
     turns: List[ConversationTurn] = field(default_factory=list)
+    max_turns: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.max_turns is not None and (type(self.max_turns) is not int or self.max_turns <= 0):
+            raise ValueError("max_turns must be a positive integer or None")
+        self.turns = list(self.turns)
+        self._trim()
+
+    def _trim(self) -> None:
+        if self.max_turns is not None:
+            del self.turns[: max(0, len(self.turns) - self.max_turns)]
 
     def record_turn(self, speaker: str, message: str) -> None:
         self.turns.append(ConversationTurn(speaker=speaker, message=message))
+        self._trim()
 
     def to_dict(self) -> Dict[str, object]:
         return {
             "agent_name": self.agent_name,
             "turns": [turn.to_dict() for turn in self.turns],
+            "max_turns": self.max_turns,
         }
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "ConversationState":
-        state = cls(agent_name=str(payload["agent_name"]))
+        state = cls(
+            agent_name=str(payload["agent_name"]),
+            max_turns=cast(Optional[int], payload.get("max_turns")),
+        )
         raw_turns = payload.get("turns", [])
         if isinstance(raw_turns, Iterable):
             for turn_payload in raw_turns:
