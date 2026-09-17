@@ -1,9 +1,16 @@
 import threading
-from concurrent.futures import CancelledError
 
 import pytest
 
+from neva.utils.exceptions import RateLimiterCancelledError
 from neva.utils.safety import RateLimiter
+
+
+def test_cancellation_exception_remains_compatible():
+    from concurrent.futures import CancelledError
+
+    assert issubclass(RateLimiterCancelledError, CancelledError)
+    assert issubclass(RateLimiterCancelledError, Exception)
 
 
 def test_cancellation_checked_after_lock_entry_preserves_token():
@@ -18,7 +25,7 @@ def test_cancellation_checked_after_lock_entry_preserves_token():
             return False
 
     limiter._lock = CancellingLock()
-    with pytest.raises(CancelledError):
+    with pytest.raises(RateLimiterCancelledError):
         limiter.acquire(cancel_event=cancel)
     assert limiter._allowance == 1
 
@@ -39,7 +46,7 @@ def test_real_token_wait_can_be_cancelled():
     def acquire():
         try:
             limiter.acquire(cancel_event=cancel)
-        except CancelledError:
+        except RateLimiterCancelledError:
             outcome.append("cancelled")
 
     worker = threading.Thread(target=acquire, daemon=True)
@@ -74,7 +81,7 @@ def test_cancelled_waiter_leaves_limiter_healthy_for_subsequent_callers(monkeypa
     limiter = RateLimiter(rate=1, per=60)
     limiter.acquire()
     cancel = CancellingEvent()
-    with pytest.raises(CancelledError):
+    with pytest.raises(RateLimiterCancelledError):
         limiter.acquire(cancel_event=cancel)
     assert waits == [60.0]
     assert limiter._allowance == 0
@@ -111,7 +118,7 @@ def test_pre_cancelled_acquire_preserves_available_token():
     limiter = RateLimiter(rate=1, per=60)
     cancel = threading.Event()
     cancel.set()
-    with pytest.raises(CancelledError):
+    with pytest.raises(RateLimiterCancelledError):
         limiter.acquire(cancel_event=cancel)
     # Cancellation must not consume the initial token.
     assert limiter._allowance == 1
@@ -133,6 +140,6 @@ def test_waiting_acquire_is_cancelled_without_consuming_token(monkeypatch):
     limiter.acquire()
     # Bound the old implementation's sleep so RED cannot hang.
     monkeypatch.setattr(safety.time, "sleep", lambda seconds: now.__setitem__(0, 60.0))
-    with pytest.raises(CancelledError, match="cancelled"):
+    with pytest.raises(RateLimiterCancelledError, match="cancelled"):
         limiter.acquire(cancel_event=cancel)
     assert limiter._allowance == 0

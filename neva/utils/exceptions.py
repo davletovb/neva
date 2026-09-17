@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
+
 
 class NevaError(Exception):
     """Base class for all custom exceptions raised by Neva."""
@@ -61,6 +63,16 @@ class PromptValidationError(ValidationError):
 
 class RateLimiterConfigurationError(ConfigurationError):
     """Raised when rate limiter parameters are invalid."""
+
+
+class RateLimiterCancelledError(CancelledError):
+    """Raised when a rate limiter token wait is cancelled.
+
+    Subclasses ``concurrent.futures.CancelledError`` (itself an ``Exception``,
+    distinct from ``asyncio.CancelledError``) so retry handlers that already
+    special-case cancellation keep working; catch this type to distinguish a
+    deliberate cancellation from an unrelated cancellation elsewhere.
+    """
 
 
 class AgentError(NevaError):
