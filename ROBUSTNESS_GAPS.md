@@ -6,7 +6,7 @@ Updated after checking GitHub and local `main` at `e1a6662` (PRs #49, #50, and #
 
 - Merged baseline: 187 tests passed, one skipped (FAISS), 83.93% coverage locally.
 - Local branch `test/multi-agent-http-timeouts`: 190 passed, one skipped, 83.93% coverage. Black, isort, Flake8, MyPy, and Bandit passed.
-- New integration coverage is local work, not yet committed, pushed, or merged. No live-provider calls were made.
+- New integration coverage is committed and pushed in [PR #52](https://github.com/davletovb/neva/pull/52), pending merge. No live-provider calls were made.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
 ## Already implemented on merged main
@@ -150,7 +150,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Add and exercise two-agent HTTP and actual read-timeout coverage.
 - [x] Correct inconsistent fake-clock setup in the existing limiter test.
 - [x] Pass full local tests and quality checks.
-- [ ] Commit/push the local tests and refreshed gap document.
+- [x] Commit/push the tests and refreshed gap document; open PR #52.
 - [ ] Run CI and merge the local work through a PR.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
