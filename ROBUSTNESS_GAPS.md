@@ -2,11 +2,12 @@
 
 ## Verified baseline and scope
 
-Updated after checking GitHub and local `main` at `e1a6662` (PRs #49, #50, and #51 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
+Updated after checking GitHub and local `main` at `dd08cd0` (PRs #49–#52 merged). The earlier document incorrectly treated PR #49 as pending and the circuit breaker as unimplemented; those statuses are superseded below.
 
 - Merged baseline: 187 tests passed, one skipped (FAISS), 83.93% coverage locally.
 - Local branch `test/multi-agent-http-timeouts`: 190 passed, one skipped, 83.93% coverage. Black, isort, Flake8, MyPy, and Bandit passed.
-- New integration coverage is committed and pushed in [PR #52](https://github.com/davletovb/neva/pull/52), pending merge. No live-provider calls were made.
+- HTTP integration coverage merged in [PR #52](https://github.com/davletovb/neva/pull/52). No live-provider calls were made.
+- FAISS follow-up on `test/faiss-integration-ci`: real FAISS 1.15.1 / NumPy 1.26.4 on Python 3.11: 191 passed, zero skipped, inclusive coverage 83.77%. Core-only Python 3.9: 190 passed, one optional skip, inclusive coverage 82.07%. Native Linux CI execution remains pending.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
 ## Already implemented on merged main
@@ -48,7 +49,7 @@ Character limits remain heuristics: they are not model-specific token/context li
 - Raw content is omitted by default from the covered telemetry fields; `include_content=True` explicitly opts into raw content.
 - This is not a guarantee that all application logs, custom metadata, or caller-provided exporters are free of sensitive data.
 
-## Newly addressed locally: HTTP integration coverage
+## Merged PR #52: HTTP integration coverage
 
 `tests/integration/test_multi_agent_http.py` adds:
 
@@ -58,7 +59,7 @@ Character limits remain heuristics: they are not model-specific token/context li
 
 The fixture releases and joins server workers during cleanup. It uses no external providers or real credentials. These tests cover read timeouts, not connect/write timeout behavior or live SDK services.
 
-Full-suite verification exposed an existing clock inconsistency in `test_rate_limiter_honours_rate`: construction used real monotonic time before the test switched to a fake zero-based clock. The local test change constructs the limiter after installing the fake clock and asserts the exact half-second wait. No production behavior was changed.
+Full-suite verification exposed an existing clock inconsistency in `test_rate_limiter_honours_rate`: construction used real monotonic time before the test switched to a fake zero-based clock. The merged test change constructs the limiter after installing the fake clock and asserts the exact half-second wait. No production behavior was changed.
 
 ## Remaining gaps
 
@@ -100,11 +101,11 @@ Deep-copy isolation may be expensive at scale; no benchmark establishes its limi
 ### 5. Integration and coverage blind spots — partial
 
 - Tests with actual small transformer-model weights.
-- FAISS dependency-enabled CI; its implementation remains excluded from coverage and its local test is skipped.
+- FAISS dependency-enabled CI is configured on `test/faiss-integration-ci`, pending merge/remote verification. The new job requires imports and zero skipped FAISS tests, runs the full suite, and uploads inclusive coverage. The global FAISS coverage exclusion is removed. Deeper FAISS edge-case coverage remains open (78% locally with native dependencies).
 - Focused Composite/Conditional scheduler edge-case coverage.
 - Connect/write timeout and additional malformed-response/SDK integration cases.
 
-The two-agent loopback HTTP and actual read-timeout gap is now covered on the local branch, pending merge. Review-time module coverage remains approximately TransformerAgent 54%, CompositeScheduler 61%, ConditionalScheduler 75%.
+The two-agent loopback HTTP and actual read-timeout gap is covered by merged PR #52. Review-time module coverage remains approximately TransformerAgent 54%, CompositeScheduler 61%, ConditionalScheduler 75%.
 
 ### 6. Model-driven tool loop — not implemented
 
@@ -151,6 +152,9 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Correct inconsistent fake-clock setup in the existing limiter test.
 - [x] Pass full local tests and quality checks.
 - [x] Commit/push the tests and refreshed gap document; open PR #52.
-- [ ] Run CI and merge the local work through a PR.
+- [x] Run CI and merge HTTP integration work through PR #52.
+- [x] Add FAISS dependency-enabled CI configuration and remove its coverage exclusion.
+- [x] Run the real-FAISS targeted tests (zero skips) and both full-suite configurations locally.
+- [ ] Verify the new FAISS job on GitHub and merge the follow-up.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.

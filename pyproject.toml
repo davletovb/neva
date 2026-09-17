@@ -122,8 +122,3 @@ files = ["neva"]
 
 [tool.bandit]
 skips = ["B101"]
-
-[tool.coverage.run]
-omit = [
-    "neva/memory/faiss_vector_store.py",
-]
