@@ -119,6 +119,10 @@ class ToolGuardConfigurationError(ConfigurationError):
     """Raised when tool guard or limit parameters are invalid."""
 
 
+class ToolSchemaConfigurationError(ConfigurationError):
+    """Raised when a tool argument schema or spec is invalid."""
+
+
 class ToolExecutionError(ToolError):
     """Raised when a tool invocation fails."""
 

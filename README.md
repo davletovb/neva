@@ -327,7 +327,14 @@ scheduler = create_scheduler("my_scheduler")
   responses without running the tool, timeouts surface as `ToolTimeoutError`
   and leave their daemon worker thread running (it is never forcibly stopped
   or re-joined at exit), and oversized outputs are truncated with a marker.
-  Guardrails apply to `call_tool`; direct `Tool.use` calls bypass them.
+  Tools may also declare validated argument schemas
+  (`argument_schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=2_000)})`;
+  invalid schema configuration raises `ToolSchemaConfigurationError` at
+  construction). `call_tool` validates mapping arguments — a raw string counts
+  as `{"input": ...}`, and `ToolCall.from_text` metadata keys require
+  `allow_extra=True` — and returns a failed response without executing the
+  tool when validation fails. Both guardrails and schema validation apply to
+  `call_tool`; direct `Tool.use` calls bypass them.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Default rate
   limits do not span agents or processes.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -35,6 +36,7 @@ from neva.utils.exceptions import (
     AgentNotFoundError,
     ToolExecutionError,
     ToolNotFoundError,
+    ToolSchemaConfigurationError,
 )
 from neva.utils.metrics import ResponseTimeTracker, batch_prompt_summary, profile_memory_usage
 from neva.utils.safety import PromptValidator, sanitize_input
@@ -110,10 +112,31 @@ class Tool(ABC):
         description: str,
         *,
         capabilities: Optional[Sequence[str]] = None,
+        argument_schema: Optional[Any] = None,
     ) -> None:
         self.name = name
         self.description = description
         self.capabilities: Sequence[str] = tuple(capabilities or ())
+        if argument_schema is not None:
+            validator = getattr(argument_schema, "validate", None)
+            if not callable(validator):
+                raise ToolSchemaConfigurationError(
+                    "argument_schema must provide a validate(arguments) method"
+                )
+            if inspect.iscoroutinefunction(validator):
+                raise ToolSchemaConfigurationError("argument_schema.validate must be synchronous")
+            try:
+                signature = inspect.signature(validator)
+            except (TypeError, ValueError):
+                signature = None
+            if signature is not None:
+                try:
+                    signature.bind({})
+                except TypeError as exc:
+                    raise ToolSchemaConfigurationError(
+                        "argument_schema.validate must accept a single " "arguments mapping"
+                    ) from exc
+        self.argument_schema = argument_schema
 
     @abstractmethod
     def use(self, task: str) -> str:
@@ -263,6 +286,37 @@ class AIAgent(ABC):
                     arguments=arguments,
                     output="",
                     error=reason,
+                )
+        schema = getattr(tool, "argument_schema", None)
+        if schema is not None:
+            validation_arguments = (
+                arguments if isinstance(arguments, dict) else {"input": arguments}
+            )
+            try:
+                schema_reason = schema.validate(validation_arguments)
+            except Exception:
+                logger.exception("Tool schema validation failed for tool '%s'", call.name)
+                schema_reason = f"tool schema validation for '{call.name}' failed"
+            if schema_reason is not None:
+                if inspect.isawaitable(schema_reason):
+                    close = getattr(schema_reason, "close", None)
+                    if callable(close):
+                        close()
+                    schema_reason = "custom schema returned an awaitable"
+                elif not isinstance(schema_reason, str):
+                    logger.warning("Schema for tool '%s' returned %r", call.name, schema_reason)
+                    schema_reason = "custom schema reported a violation"
+                logger.warning(
+                    "Tool '%s' rejected for agent '%s': invalid arguments: %s",
+                    call.name,
+                    self.name,
+                    schema_reason,
+                )
+                return ToolResponse(
+                    name=tool.name,
+                    arguments=arguments,
+                    output="",
+                    error=f"invalid arguments for tool '{call.name}': {schema_reason}",
                 )
         try:
             output = guard.invoke(tool, payload) if guard is not None else tool.use(payload)
