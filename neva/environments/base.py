@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from time import perf_counter
+from time import perf_counter, time
 from typing import Dict, List, Optional
 from uuid import uuid4
 
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import SchedulingError
+from neva.utils.failures import FailureLog, FailureRecord
 from neva.utils.state_management import ConversationState, SimulationSnapshot, create_snapshot
 from neva.utils.telemetry import get_telemetry
 
@@ -25,13 +26,17 @@ class Environment:
         *,
         error_policy: str = "raise",
         error_value: Optional[str] = None,
+        failure_log: Optional[FailureLog] = None,
     ) -> None:
         if error_policy not in {"raise", "return"}:
             raise ValueError("error_policy must be 'raise' or 'return'")
+        if failure_log is not None and not isinstance(failure_log, FailureLog):
+            raise ValueError("failure_log must be a FailureLog instance")
         self.state: Dict[str, object] = {}
         self.scheduler = scheduler
         self.error_policy = error_policy
         self.error_value = error_value
+        self.failure_log = failure_log
         self._agent_error_policies: Dict[str, Dict[str, Optional[str]]] = {}
         self.agents: List[AIAgent] = []
 
@@ -97,6 +102,7 @@ class Environment:
         try:
             agent = self.scheduler.get_next_agent()
         except SchedulingError as exc:
+            self._record_failure(agent_name=None, exc=exc, context=None, policy=self.error_policy)
             if self.error_policy == "return":
                 logger.debug("Scheduler failed to select an agent: %s", exc)
                 return self.error_value
@@ -113,24 +119,101 @@ class Environment:
                 )
             except Exception:  # pragma: no cover - telemetry failures should not break execution.
                 logger.debug("Failed to emit scheduler telemetry", exc_info=True)
+        return self._execute_turn(agent)
+
+    def _execute_turn(self, agent: AIAgent, *, context: Optional[str] = None) -> Optional[str]:
+        """Run one turn for ``agent`` with the standard failure dispatch."""
+
+        scheduler = self.scheduler
+        if scheduler is None:  # pragma: no cover - step()/replay_failure() guard this.
+            return None
         started = perf_counter()
         try:
-            response = agent.step(self.context())
+            if context is None:
+                context = self.context()
+            response = agent.step(context)
             self.on_turn_complete(response)
         except Exception as exc:
-            self.scheduler.record_metrics(agent, status="failed", error=repr(exc))
+            scheduler.record_metrics(agent, status="failed", error=repr(exc))
+            policy = self._effective_error_policy(agent)
+            self._record_failure(agent_name=agent.name, exc=exc, context=context, policy=policy)
             overrides = getattr(self, "_agent_error_policies", {})
-            policy = overrides.get(str(agent.id))
-            if policy is not None:
-                if policy.get("policy") == "return":
-                    return policy.get("value")
+            override = overrides.get(str(agent.id))
+            if override is not None:
+                if override.get("policy") == "return":
+                    return override.get("value")
             elif self.error_policy == "return":
                 return self.error_value
             raise
-        self.scheduler.record_metrics(
+        scheduler.record_metrics(
             agent, status="completed", latency=perf_counter() - started, response=response
         )
         return response
+
+    def _effective_error_policy(self, agent: AIAgent) -> str:
+        overrides = getattr(self, "_agent_error_policies", {})
+        override = overrides.get(str(agent.id))
+        if override is not None and override.get("policy") is not None:
+            return str(override["policy"])
+        return self.error_policy
+
+    def _record_failure(
+        self,
+        *,
+        agent_name: Optional[str],
+        exc: BaseException,
+        context: Optional[str],
+        policy: str,
+    ) -> None:
+        """Append a durable failure record; logging problems never break a run."""
+
+        failure_log = getattr(self, "failure_log", None)
+        if failure_log is None:
+            return
+        try:
+            failure_log.append(
+                FailureRecord(
+                    timestamp=time(),
+                    conversation_id=getattr(self, "conversation_id", None),
+                    environment=self.__class__.__name__,
+                    agent_name=agent_name,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    policy=policy,
+                    context=context,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to record turn failure", exc_info=True)
+
+    def replay_failure(
+        self, record: FailureRecord, *, agent: Optional[AIAgent] = None
+    ) -> Optional[str]:
+        """Re-dispatch a recorded failed turn through the normal turn path.
+
+        Resolves the agent from ``record.agent_name`` (the first registered
+        match) unless one is passed explicitly, in which case it must be
+        registered with this environment. The recorded context is used when
+        captured, otherwise the current environment context. The agent's
+        error policy still applies, so a repeated failure is recorded again.
+        """
+
+        if not isinstance(record, FailureRecord):
+            raise TypeError("record must be a FailureRecord")
+        if agent is None and record.agent_name is None:
+            raise ValueError("record has no agent_name; pass agent explicitly")
+        if self.scheduler is None or not self.agents:
+            return None
+        if agent is None:
+            matches = [
+                candidate for candidate in self.agents if candidate.name == record.agent_name
+            ]
+            if not matches:
+                raise ValueError(f"no registered agent named {record.agent_name!r}")
+            agent = matches[0]
+        elif agent not in self.agents:
+            raise ValueError("agent is not registered with this environment")
+        return self._execute_turn(agent, context=record.context)
 
     def run(self, steps: int) -> List[Optional[str]]:
         return [self.step() for _ in range(steps)]

@@ -4,6 +4,7 @@ from importlib import import_module as _import_module
 
 caching = _import_module(".caching", __name__)
 exceptions = _import_module(".exceptions", __name__)
+failures = _import_module(".failures", __name__)
 logging_utils = _import_module(".logging_utils", __name__)
 metrics = _import_module(".metrics", __name__)
 observer = _import_module(".observer", __name__)
@@ -14,6 +15,7 @@ telemetry = _import_module(".telemetry", __name__)
 __all__ = [
     "caching",
     "exceptions",
+    "failures",
     "logging_utils",
     "metrics",
     "observer",
