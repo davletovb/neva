@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ceiling raises `SpendBudgetExceededError`. Share one instance across agents
   for a common budget — amounts are estimates, not live billing, and there is
   no account- or process-wide coordination.
+- Tool-call guardrails: `AIAgent(tool_guard=ToolGuard(...))` (forwarded by
+  `GPTAgent` and `TransformerAgent`) enforces code-level policy independent of
+  prompt content — an allowlist, an approval hook called with each `ToolCall`,
+  and execution limits (`ToolLimits(timeout=..., max_output_chars=...)`,
+  where `timeout` may not exceed `threading.TIMEOUT_MAX`). The
+  call proceeds only when the approval hook returns `True`; `False`, a truthy
+  non-bool, an awaitable, or a raised exception denies, and denial reasons
+  exclude hook exception details (logged at debug). Denied calls return a
+  failed `ToolResponse` without running the tool. Timeouts run the tool on a
+  daemon worker thread that is not forcibly stopped (a tool that never
+  returns leaks that one thread, and nothing is re-joined at interpreter
+  exit) and raise `ToolTimeoutError` (a `ToolExecutionError`); outputs longer
+  than `max_output_chars` keep that many characters plus a truncation marker.
+  Guardrails apply to `call_tool`; direct `Tool.use` calls bypass them.
 - Durable failure records: `Environment(failure_log=FailureLog(path))` appends
   one JSON line per handled turn failure (both `raise` and `return` policies,
   including scheduler-selection failures), flushed and fsynced by default.

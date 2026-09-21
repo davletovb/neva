@@ -7,7 +7,7 @@ import json
 import logging
 import math
 from time import perf_counter, sleep
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import requests
 
@@ -23,6 +23,9 @@ from neva.utils.exceptions import (
 from neva.utils.metrics import CostTracker, ResponseTimeTracker, SpendBudget, TokenUsageTracker
 from neva.utils.safety import CircuitBreaker, RateLimiter
 from neva.utils.telemetry import get_telemetry
+
+if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
+    from neva.tools.guard import ToolGuard
 
 _DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
@@ -159,6 +162,7 @@ class GPTAgent(AIAgent):
         request_timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         max_context_chars: int = _DEFAULT_MAX_CONTEXT_CHARS,
+        tool_guard: Optional["ToolGuard"] = None,
     ) -> None:
         resolved_cache = cache or LLMCache(max_size=256)
         super().__init__(
@@ -167,6 +171,7 @@ class GPTAgent(AIAgent):
             memory=memory,
             cache=resolved_cache,
             response_time_tracker=response_time_tracker,
+            tool_guard=tool_guard,
         )
         if max_context_chars <= 0:
             raise ConfigurationError("max_context_chars must be positive")
