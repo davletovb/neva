@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `e2444bd` (PRs #49–#52, #54–#60 merged).
+Updated against `main` at `9c32850` (PRs #49–#52, #54–#61 merged).
 
 - Merged baseline through PR #60: 327 tests passed, one skipped (FAISS). Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -81,7 +81,7 @@ The circuit breaker itself is no longer an unimplemented gap. Nor should the old
 
 ### 3. Tool schemas, permissions, and execution limits — partial
 
-- Tool-call guardrails: PR #61 (pending review/merge) adds `ToolGuard`/`ToolLimits` consulted by `AIAgent.call_tool` — allowlist, approval hook called with each `ToolCall` (only an identity `True` permits; non-bool, awaitable, or raised-exception approvals deny), execution timeout, and output truncation — all independent of model instructions. Direct `Tool.use` calls (as in the shipped examples) bypass the guard entirely. Remaining: general validated argument schemas; per-tool resource quotas beyond time and returned-string size (a timed-out tool keeps its daemon thread until it returns, and truncation does not bound peak output memory); guardrails for direct `Tool.use` calls.
+- Tool-call guardrails: PR #61 (merged) adds `ToolGuard`/`ToolLimits` consulted by `AIAgent.call_tool` — allowlist, approval hook called with each `ToolCall` (only an identity `True` permits; non-bool, awaitable, or raised-exception approvals deny), execution timeout, and output truncation — all independent of model instructions. Direct `Tool.use` calls (as in the shipped examples) bypass the guard entirely. Remaining: general validated argument schemas; per-tool resource quotas beyond time and returned-string size (a timed-out tool keeps its daemon thread until it returns, and truncation does not bound peak output memory); guardrails for direct `Tool.use` calls.
 - General validated argument schemas.
 - Appropriate time, output, and resource limits for side-effecting tools beyond the call_tool path.
 
@@ -156,7 +156,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Add conversation retention limits and checkpoint file-size limits (PRs #55, #56).
 - [x] Add per-agent failure policies (PR #57), rate-limiter cancellation (PR #58), and spend budgets (PR #59).
 - [x] Add durable failure records and replay control (PR #60).
-- [ ] Tool-call guardrails (PR #61, pending review/merge).
+- [x] Tool-call guardrails (PR #61).
 - [ ] User decision on deferred FAISS PR #53.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
