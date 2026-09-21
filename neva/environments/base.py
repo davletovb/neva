@@ -134,9 +134,11 @@ class Environment:
             response = agent.step(context)
             self.on_turn_complete(response)
         except Exception as exc:
-            scheduler.record_metrics(agent, status="failed", error=repr(exc))
+            # Record before observer metrics: a raising observer must not
+            # prevent the durable record from being written.
             policy = self._effective_error_policy(agent)
             self._record_failure(agent_name=agent.name, exc=exc, context=context, policy=policy)
+            scheduler.record_metrics(agent, status="failed", error=repr(exc))
             overrides = getattr(self, "_agent_error_policies", {})
             override = overrides.get(str(agent.id))
             if override is not None:
@@ -196,14 +198,21 @@ class Environment:
         registered with this environment. The recorded context is used when
         captured, otherwise the current environment context. The agent's
         error policy still applies, so a repeated failure is recorded again.
+
+        Raises ``ValueError`` when the scheduler is unavailable, no agents
+        are registered, or the record's agent cannot be resolved: unlike
+        ``step()``, a replay that cannot run must not silently look like a
+        return-policy result.
         """
 
         if not isinstance(record, FailureRecord):
             raise TypeError("record must be a FailureRecord")
         if agent is None and record.agent_name is None:
             raise ValueError("record has no agent_name; pass agent explicitly")
-        if self.scheduler is None or not self.agents:
-            return None
+        if self.scheduler is None:
+            raise ValueError("cannot replay a failure without a scheduler")
+        if not self.agents:
+            raise ValueError("no registered agents to replay against")
         if agent is None:
             matches = [
                 candidate for candidate in self.agents if candidate.name == record.agent_name

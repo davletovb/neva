@@ -339,6 +339,32 @@ def test_replay_failure_records_repeated_failure(tmp_path):
     assert records[1].agent_name == "alice"
 
 
+def test_failure_recorded_even_if_observer_raises(tmp_path):
+    log = FailureLog(tmp_path / "failures.jsonl")
+    env = Environment(RoundRobinScheduler(), failure_log=log)
+    env.register_agent(TransformerAgent(name="alice", llm_backend=fail))
+
+    class ExplodingObserver:
+        def collect_data(self, *args, **kwargs):
+            if kwargs.get("status") == "failed":
+                raise RuntimeError("observer bug")
+
+    env.scheduler.simulation_observer = ExplodingObserver()
+    with pytest.raises(RuntimeError, match="observer bug"):
+        env.step()
+    # The durable record must exist even though failed-turn metrics blew up.
+    assert [record.agent_name for record in log.load()] == ["alice"]
+
+
+def test_replay_raises_when_nothing_can_be_resolved():
+    empty = Environment(RoundRobinScheduler())  # no agents registered
+    with pytest.raises(ValueError, match="no registered agents"):
+        empty.replay_failure(make_record())
+    bare = Environment()  # no scheduler at all
+    with pytest.raises(ValueError, match="scheduler"):
+        bare.replay_failure(make_record())
+
+
 def test_snapshot_round_trip_preserves_failure_log(tmp_path):
     log = FailureLog(tmp_path / "failures.jsonl")
     env = Environment(RoundRobinScheduler(), failure_log=log)
