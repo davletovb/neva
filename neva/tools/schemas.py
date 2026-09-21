@@ -157,10 +157,7 @@ class ArgumentSpec:
                     "min_value/max_value validation"
                 )
             if isinstance(value, float) and not math.isfinite(value):
-                return (
-                    f"argument '{name}' must be a finite number, "
-                    f"got {_format_value(value)}"
-                )
+                return f"argument '{name}' must be a finite number, " f"got {_format_value(value)}"
             if self.min_value is not None and value < self.min_value:
                 return (
                     f"argument '{name}' must be >= {self.min_value:g}, "
