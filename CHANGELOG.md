@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `SpendBudget` enforces a thread-safe hard ceiling on estimated spend.
+  `GPTAgent(spend_budget=...)` refuses models without a pricing entry before
+  contacting the provider, consumes each call's estimated cost after token
+  accounting (clamping recorded spend to the ceiling), and rejects non-finite
+  pricing or costs instead of silently disabling the guard; exceeding the
+  ceiling raises `SpendBudgetExceededError`. Share one instance across agents
+  for a common budget — amounts are estimates, not live billing, and there is
+  no account- or process-wide coordination.
 - `RateLimiter.acquire(cancel_event=...)` supports cooperative cancellation of
   token waits using a threading Event; cancellation raises
   `RateLimiterCancelledError` (a `concurrent.futures.CancelledError` subclass).
