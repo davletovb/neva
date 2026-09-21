@@ -64,7 +64,7 @@ Full-suite verification exposed an existing clock inconsistency in `test_rate_li
 ### 1. Shared rate, concurrency, and spend budgets — partial
 
 - Automatic provider/account-wide coordination across agents and processes.
-- Token/spend budgets: `feat/spend-budget` (pending review/merge) adds a thread-safe `SpendBudget` ceiling, `GPTAgent(spend_budget=...)` pre-call refusal, pre-call `ConfigurationError` for unpriced models, non-finite pricing/cost rejection, and post-call estimated-cost consumption with ceiling clamping. Remaining: account-/process-wide coordination, reconciling estimates with live billing, and budget-aware token reservations.
+- Token/spend budgets: PR #59 (merged) adds a thread-safe `SpendBudget` ceiling, `GPTAgent(spend_budget=...)` pre-call refusal, pre-call `ConfigurationError` for unpriced models, non-finite pricing/cost rejection, and post-call estimated-cost consumption with ceiling clamping. Remaining: account-/process-wide coordination, reconciling estimates with live billing, and budget-aware token reservations.
 - Global cross-thread/cross-loop concurrency limits, if required.
 - PR #58 (merged) adds explicit Event-based token-wait cancellation via `RateLimiter.acquire(cancel_event=...)` and a dedicated `RateLimiterCancelledError`, tested before admission, after lock entry, and during a real threaded wait. Lock acquisition and in-flight provider calls are not interruptible; agents/asyncio do not automatically propagate cancellation. FIFO fairness and aggregate-contention coverage remain open.
 
