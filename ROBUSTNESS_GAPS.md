@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `9c32850` (PRs #49–#52, #54–#61 merged).
+Updated against `main` at `f8e24bf` (PRs #49–#52, #54–#62 merged).
 
 - Merged baseline through PR #60: 327 tests passed, one skipped (FAISS). Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -82,7 +82,7 @@ The circuit breaker itself is no longer an unimplemented gap. Nor should the old
 ### 3. Tool schemas, permissions, and execution limits — mostly addressed
 
 - Tool-call guardrails (PR #61): `ToolGuard`/`ToolLimits` consulted by `AIAgent.call_tool` — allowlist, approval hook called with each `ToolCall` (only an identity `True` permits; non-bool, awaitable, or raised-exception approvals deny), execution timeout, and output truncation — all independent of model instructions.
-- Validated argument schemas (PR #62, pending review/merge): tools declare `ArgumentSchema`/`ArgumentSpec` rules (type, required, min/max length, min/max value, choices; unknown keys rejected unless `allow_extra=True`); `call_tool` validates mapping arguments (a raw string counts as `{"input": ...}`) and fails closed before execution. The mechanism is opt-in — the shipped built-in tools do not declare schemas yet.
+- Validated argument schemas (PR #62, merged): tools declare `ArgumentSchema`/`ArgumentSpec` rules (type, required, min/max length, min/max value, choices; unknown keys rejected unless `allow_extra=True`); `call_tool` validates mapping arguments (a raw string counts as `{"input": ...}`) and fails closed before execution. The mechanism is opt-in — the shipped built-in tools do not declare schemas yet.
 - Remaining: per-tool resource quotas beyond time and returned-string size (a timed-out tool keeps its daemon thread until it returns, and truncation does not bound peak output memory); direct `Tool.use` calls (as in the shipped examples) bypass both guardrails and schema validation; retrofit the built-in tools with schemas where sensible.
 
 Regex prompt validation is input hygiene, not protection against prompt injection or unauthorized execution. Narrow math bounds and corrected README wording do not close this gap.
@@ -157,7 +157,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Add per-agent failure policies (PR #57), rate-limiter cancellation (PR #58), and spend budgets (PR #59).
 - [x] Add durable failure records and replay control (PR #60).
 - [x] Tool-call guardrails (PR #61).
-- [ ] Validated tool argument schemas (PR #62, pending review/merge).
+- [x] Validated tool argument schemas (PR #62).
 - [ ] User decision on deferred FAISS PR #53.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
