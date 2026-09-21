@@ -2,9 +2,9 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `00b5132` (PRs #49–#52, #54–#56 merged).
+Updated against `main` at `2d12825` (PRs #49–#52, #54–#59 merged).
 
-- Merged baseline through PR #56: 242 tests passed, one skipped (FAISS). Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
+- Merged baseline through PR #59: 294 tests passed, one skipped (FAISS). Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. Save serialization still occurs in memory; these limits do not bound snapshot creation or decoded-object memory.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
@@ -73,7 +73,7 @@ Correction to the original review: receivers use their own backend limiters, not
 ### 2. Durable failure recovery — partial
 
 - Per-agent policies merged in PR #57: optional `register_agent(agent, error_policy="raise"|"return", error_value=...)` overrides for selected-turn failures. Omitted policies inherit the environment default. Version-2 checkpoints preserve overrides; older checkpoints clear them. This is not durable recovery or replay.
-- Durable failure records/dead-letter storage and replay controls.
+- Durable failure records: `feat/failure-records` (pending review/merge) adds `FailureLog`, an append-only JSONL store flushed/fsynced per record, wired through `Environment(failure_log=...)` for agent and scheduler-selection failures under both policies, with tolerant `load()` and `Environment.replay_failure(record)` re-dispatch. Remaining: automated retry loops, escalation policies, richer recovery-state observability, and log rotation/size bounds for long-running runs.
 - Escalation policies and richer recovery-state observability.
 - Broader concurrent and interruption-path testing of the existing circuit breaker.
 
@@ -154,6 +154,8 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Expand scheduler edge-case tests on an independent branch; no production changes.
 - [x] Run CI and merge scheduler coverage after review (PR #54).
 - [x] Add conversation retention limits and checkpoint file-size limits (PRs #55, #56).
+- [x] Add per-agent failure policies (PR #57), rate-limiter cancellation (PR #58), and spend budgets (PR #59).
+- [x] Add durable failure records and replay control (PR #60, pending review/merge).
 - [ ] User decision on deferred FAISS PR #53.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.

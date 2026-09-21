@@ -310,7 +310,12 @@ scheduler = create_scheduler("my_scheduler")
   `GPTAgent(spend_budget=...)` refuses calls once exhausted or when the model
   has no pricing entry, rejects non-finite pricing, and clamps recorded spend
   to the ceiling. Estimates are not live billing and the budget is
-  per-instance, not account-wide. Telemetry omits raw prompts and
+  per-instance, not account-wide. Failed turns can be persisted durably with
+  `Environment(failure_log=FailureLog(path))` (`neva.utils.failures`): handled
+  failures (both policies, plus scheduler-selection failures) are appended as
+  JSON lines, and
+  `replay_failure(record)` re-dispatches a recorded turn; raw context is stored
+  only with `include_context=True`. Telemetry omits raw prompts and
   completions unless `include_content=True`. This is not protection against
   prompt injection, unauthorized tool use, or account-wide overspend. Tools
   run with the process's network identity.

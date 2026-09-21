@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ceiling raises `SpendBudgetExceededError`. Share one instance across agents
   for a common budget — amounts are estimates, not live billing, and there is
   no account- or process-wide coordination.
+- Durable failure records: `Environment(failure_log=FailureLog(path))` appends
+  one JSON line per handled turn failure (both `raise` and `return` policies,
+  including scheduler-selection failures), flushed and fsynced by default.
+  `FailureLog.load()` tolerates truncated, undecodable, or malformed lines
+  (skipped with a warning) and a torn tail is newline-separated so later
+  records cannot merge into it, and
+  `Environment.replay_failure(record)` re-dispatches a recorded turn through
+  the normal turn path. Raw context is stored only when the log opts in with
+  `include_context=True`. The log is external storage: it is preserved across
+  checkpoint restore rather than serialized into snapshots.
 - `RateLimiter.acquire(cancel_event=...)` supports cooperative cancellation of
   token waits using a threading Event; cancellation raises
   `RateLimiterCancelledError` (a `concurrent.futures.CancelledError` subclass).
