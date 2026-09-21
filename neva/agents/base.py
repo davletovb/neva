@@ -43,6 +43,7 @@ from neva.utils.telemetry import get_telemetry
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.environments.base import Environment
+    from neva.tools.guard import ToolGuard
     from neva.utils.observer import SimulationObserver
 
 
@@ -137,11 +138,13 @@ class AIAgent(ABC):
         prompt_validator: Optional[PromptValidator] = None,
         conversation_state: Optional[ConversationState] = None,
         response_time_tracker: Optional[ResponseTimeTracker] = None,
+        tool_guard: Optional["ToolGuard"] = None,
     ) -> None:
         self.id = uuid4()
         self.name = name or f"agent-{str(self.id)[:8]}"
         self.environment: Optional["Environment"] = None
         self.tools: List[Tool] = []
+        self.tool_guard: Optional["ToolGuard"] = tool_guard
         self.attributes: Dict[str, str] = {}
         self._llm_backend = llm_backend
         self._memory: Optional[MemoryModule] = None
@@ -233,7 +236,12 @@ class AIAgent(ABC):
         return json.dumps(arguments, sort_keys=True)
 
     def call_tool(self, call: ToolCall) -> ToolResponse:
-        """Invoke a registered tool using a standardised interface."""
+        """Invoke a registered tool using a standardised interface.
+
+        When the agent has a :class:`~neva.tools.guard.ToolGuard`, denied
+        calls return a failed response without executing the tool, and
+        execution runs under the guard's limits.
+        """
 
         tool = self.get_tool(call.name)
         if isinstance(call.arguments, str):
@@ -241,8 +249,23 @@ class AIAgent(ABC):
         else:
             arguments = dict(call.arguments)
         payload = self._normalise_tool_input(arguments)
+        guard = self.tool_guard
+        if guard is not None:
+            try:
+                reason = guard.evaluate(call)
+            except Exception:
+                logger.exception("Tool guard evaluation failed for tool '%s'", call.name)
+                reason = f"tool guard evaluation for '{call.name}' failed"
+            if reason is not None:
+                logger.warning("Tool '%s' denied for agent '%s': %s", call.name, self.name, reason)
+                return ToolResponse(
+                    name=tool.name,
+                    arguments=arguments,
+                    output="",
+                    error=reason,
+                )
         try:
-            output = tool.use(payload)
+            output = guard.invoke(tool, payload) if guard is not None else tool.use(payload)
         except ToolExecutionError as exc:
             logger.warning("Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc)
             return ToolResponse(

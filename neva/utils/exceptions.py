@@ -115,8 +115,16 @@ class ToolError(NevaError):
     """Base class for tool related failures."""
 
 
+class ToolGuardConfigurationError(ConfigurationError):
+    """Raised when tool guard or limit parameters are invalid."""
+
+
 class ToolExecutionError(ToolError):
     """Raised when a tool invocation fails."""
+
+
+class ToolTimeoutError(ToolExecutionError):
+    """Raised when a tool exceeds its configured execution time limit."""
 
 
 class ToolNotFoundError(ToolError):

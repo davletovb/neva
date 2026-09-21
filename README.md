@@ -319,6 +319,15 @@ scheduler = create_scheduler("my_scheduler")
   completions unless `include_content=True`. This is not protection against
   prompt injection, unauthorized tool use, or account-wide overspend. Tools
   run with the process's network identity.
+- **Tool guardrails**: `ToolGuard` (pass `tool_guard=` when constructing an
+  agent) enforces code-level tool policy independent of prompt content: an
+  allowlist, an approval hook receiving each `ToolCall` (the call proceeds
+  only when it returns `True`; anything else denies), and execution limits via
+  `ToolLimits(timeout=..., max_output_chars=...)`. Denied calls return failed
+  responses without running the tool, timeouts surface as `ToolTimeoutError`
+  and leave their daemon worker thread running (it is never forcibly stopped
+  or re-joined at exit), and oversized outputs are truncated with a marker.
+  Guardrails apply to `call_tool`; direct `Tool.use` calls bypass them.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Default rate
   limits do not span agents or processes.

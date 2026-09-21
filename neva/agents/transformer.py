@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from neva.agents.base import AIAgent, LLMBackend
 from neva.memory import MemoryModule
 from neva.utils.caching import LLMCache
 from neva.utils.exceptions import BackendUnavailableError
 from neva.utils.safety import PromptValidator
+
+if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
+    from neva.tools.guard import ToolGuard
 
 try:  # pragma: no cover - optional dependency
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
@@ -31,6 +34,7 @@ class TransformerAgent(AIAgent):
         model_loader: Optional[Callable[[str], object]] = None,
         tokenizer_loader: Optional[Callable[[str], object]] = None,
         prompt_validator: Optional[PromptValidator] = None,
+        tool_guard: Optional["ToolGuard"] = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -38,6 +42,7 @@ class TransformerAgent(AIAgent):
             memory=memory,
             cache=cache,
             prompt_validator=prompt_validator,
+            tool_guard=tool_guard,
         )
         self.model_name = model_name
         self._model_loader = model_loader
