@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import math
 import statistics
+import threading
 import tracemalloc
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple
+
+from neva.utils.exceptions import SpendBudgetConfigurationError, SpendBudgetExceededError
 
 
 def _estimate_token_count(text: str) -> int:
@@ -169,3 +173,74 @@ def batch_prompt_summary(prompts: Iterable[str]) -> Dict[str, int]:
         "avg_length": int(statistics.mean(lengths)),
         "avg_tokens": int(statistics.mean(token_estimates)),
     }
+
+
+class SpendBudget:
+    """Thread-safe hard ceiling on estimated monetary spend.
+
+    Pass the same instance to multiple agents to share one budget (per
+    instance only; no account- or process-wide coordination). Amounts come
+    from :class:`CostTracker` estimates, so this bounds *estimated* spend:
+    unpriced models yield ``None`` costs that cannot be accounted for, and
+    estimates may differ from live billing. This is a guardrail against
+    runaway runs, not a billing system.
+    """
+
+    def __init__(self, max_cost: float) -> None:
+        if (
+            isinstance(max_cost, bool)
+            or not isinstance(max_cost, (int, float))
+            or not math.isfinite(max_cost)
+            or max_cost <= 0
+        ):
+            raise SpendBudgetConfigurationError("max_cost must be a finite positive number")
+        self._max_cost = float(max_cost)
+        self._spent = 0.0
+        self._lock = threading.Lock()
+
+    @property
+    def spent(self) -> float:
+        with self._lock:
+            return self._spent
+
+    @property
+    def remaining(self) -> float:
+        with self._lock:
+            return max(0.0, self._max_cost - self._spent)
+
+    def check(self) -> None:
+        """Raise :class:`SpendBudgetExceededError` when the budget is used up."""
+
+        if self.spent >= self._max_cost:
+            raise SpendBudgetExceededError(
+                f"spend budget exhausted ({self.spent:.6f} >= {self._max_cost:.6f})"
+            )
+
+    def consume(self, cost: float) -> None:
+        """Record ``cost`` of spend, refusing amounts that exceed the budget.
+
+        ``cost`` must be a finite, non-negative number (bools excluded);
+        anything else raises :class:`SpendBudgetConfigurationError` rather
+        than corrupting the budget. ``check()`` before a call is
+        best-effort: concurrent consumers can each pass the pre-check, so
+        ``consume`` itself caps the total at ``max_cost`` (within a 1e-9
+        floating-point tolerance). When ``cost`` would overflow the budget,
+        spend is clamped to the ceiling and :class:`SpendBudgetExceededError`
+        is raised: the call that produced this cost already happened, so it
+        counts as fully spent and every later ``check()`` refuses.
+        """
+
+        if (
+            isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(cost)
+            or cost < 0
+        ):
+            raise SpendBudgetConfigurationError("cost must be a finite, non-negative number")
+        with self._lock:
+            if self._spent + cost > self._max_cost + 1e-9:
+                self._spent = self._max_cost
+                raise SpendBudgetExceededError(
+                    f"spend of {cost:.6f} exceeds the remaining budget; " "budget marked exhausted"
+                )
+            self._spent += cost

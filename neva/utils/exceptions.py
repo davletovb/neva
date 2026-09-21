@@ -65,6 +65,14 @@ class RateLimiterConfigurationError(ConfigurationError):
     """Raised when rate limiter parameters are invalid."""
 
 
+class SpendBudgetConfigurationError(ConfigurationError):
+    """Raised when a spend budget is configured with invalid parameters."""
+
+
+class SpendBudgetExceededError(NevaError):
+    """Raised when a spend budget has been exhausted or would be exceeded."""
+
+
 class RateLimiterCancelledError(CancelledError):
     """Raised when a rate limiter token wait is cancelled.
 

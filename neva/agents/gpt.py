@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import math
 from time import perf_counter, sleep
 from typing import Any, Dict, List, Optional
 
@@ -13,8 +14,13 @@ import requests
 from neva.agents.base import AIAgent, LLMBackend
 from neva.memory import MemoryModule
 from neva.utils.caching import LLMCache
-from neva.utils.exceptions import BackendError, CircuitOpenError, ConfigurationError
-from neva.utils.metrics import CostTracker, ResponseTimeTracker, TokenUsageTracker
+from neva.utils.exceptions import (
+    BackendError,
+    CircuitOpenError,
+    ConfigurationError,
+    SpendBudgetExceededError,
+)
+from neva.utils.metrics import CostTracker, ResponseTimeTracker, SpendBudget, TokenUsageTracker
 from neva.utils.safety import CircuitBreaker, RateLimiter
 from neva.utils.telemetry import get_telemetry
 
@@ -144,6 +150,7 @@ class GPTAgent(AIAgent):
         cache: Optional[LLMCache] = None,
         token_tracker: Optional[TokenUsageTracker] = None,
         cost_tracker: Optional[CostTracker] = None,
+        spend_budget: Optional[SpendBudget] = None,
         max_retries: int = 3,
         retry_backoff: float = 1.5,
         response_time_tracker: Optional[ResponseTimeTracker] = None,
@@ -163,6 +170,14 @@ class GPTAgent(AIAgent):
         )
         if max_context_chars <= 0:
             raise ConfigurationError("max_context_chars must be positive")
+        if spend_budget is not None:
+            if llm_backend is not None:
+                raise ConfigurationError(
+                    "spend_budget requires the built-in provider backend; "
+                    "remove llm_backend or the spend budget"
+                )
+            if not isinstance(spend_budget, SpendBudget):
+                raise ConfigurationError("spend_budget must be a SpendBudget instance")
         self.api_key = api_key
         self.provider = provider.lower()
         self.model = model or _DEFAULT_MODELS.get(self.provider, "gpt-4o-mini")
@@ -172,6 +187,7 @@ class GPTAgent(AIAgent):
         self._cache = resolved_cache
         self._token_tracker = token_tracker or TokenUsageTracker()
         self._cost_tracker = cost_tracker or CostTracker()
+        self._spend_budget = spend_budget
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -180,6 +196,29 @@ class GPTAgent(AIAgent):
         self._extra_headers = dict(extra_headers or {})
         self._max_context_chars = max_context_chars
         self._last_provider_usage: Optional[Dict[str, Any]] = None
+
+    def _spend_preflight(self) -> None:
+        """Refuse a call the spend budget cannot afford before contacting the provider.
+
+        Runs after ``CircuitBreaker.allow()`` may have admitted a half-open
+        recovery probe: a refusal must release that probe, otherwise the
+        circuit can never probe again. Models without a pricing entry are
+        refused here, so the provider is never called for them.
+        """
+
+        if self._spend_budget is None:
+            return
+        try:
+            self._spend_budget.check()
+            if self.model not in self._cost_tracker.pricing_per_1k_tokens:
+                raise ConfigurationError(
+                    f"Spend budget is enabled but model '{self.model}' has no "
+                    "pricing entry; add pricing or remove the spend budget."
+                )
+        except (SpendBudgetExceededError, ConfigurationError):
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_rejected()
+            raise
 
     def _default_backend(self) -> LLMBackend:
         if not self.api_key:
@@ -198,8 +237,12 @@ class GPTAgent(AIAgent):
                 attempt += 1
                 if self._circuit_breaker is not None:
                     self._circuit_breaker.allow()
+                self._spend_preflight()
                 if self._rate_limiter is not None:
                     self._rate_limiter.acquire()
+                # Re-check after any limiter wait so a budget exhausted while
+                # waiting is honoured before the provider call.
+                self._spend_preflight()
                 start = perf_counter()
                 try:
                     with self._response_time_tracker.track():
@@ -221,6 +264,25 @@ class GPTAgent(AIAgent):
                             prompt_tokens=prompt_tokens,
                             response_tokens=response_tokens,
                         )
+                    if self._spend_budget is not None and total_tokens:
+                        # Price this call's tokens in isolation so a tracker
+                        # mutated by other threads cannot skew the delta.
+                        call_tracker = CostTracker(
+                            pricing_per_1k_tokens=self._cost_tracker.pricing_per_1k_tokens
+                        )
+                        call_tracker.add_usage(
+                            self.model,
+                            total_tokens,
+                            prompt_tokens=prompt_tokens,
+                            response_tokens=response_tokens,
+                        )
+                        call_cost = call_tracker.total_cost()
+                        if call_cost is None or not math.isfinite(call_cost):
+                            raise ConfigurationError(
+                                "Spend budget is enabled but the call's estimated cost "
+                                "is unknown or non-finite; check the pricing overrides."
+                            )
+                        self._spend_budget.consume(call_cost)
                     self._cache_store(prompt, content)
                     self._logger.debug(
                         "llm_call",
@@ -260,7 +322,13 @@ class GPTAgent(AIAgent):
                     return content
                 except Exception as exc:  # pragma: no cover - network error path.
                     last_error = exc
-                    if isinstance(exc, CircuitOpenError):
+                    if isinstance(exc, (CircuitOpenError, SpendBudgetExceededError)):
+                        if (
+                            isinstance(exc, SpendBudgetExceededError)
+                            and self._circuit_breaker is not None
+                        ):
+                            # The provider call itself succeeded; complete the probe.
+                            self._circuit_breaker.record_success()
                         raise
                     if isinstance(exc, ConfigurationError):
                         if self._circuit_breaker is not None:
