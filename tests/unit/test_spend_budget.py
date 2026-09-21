@@ -248,3 +248,65 @@ def test_spend_budget_rejects_injected_backend_and_bad_types():
         )
     with pytest.raises(ConfigurationError, match="SpendBudget instance"):
         GPTAgent(api_key="x", spend_budget=object())
+
+
+# ---------------------------------------------------------------------------
+# Circuit-breaker probe lifecycle on budget exits
+# ---------------------------------------------------------------------------
+
+
+def _half_open_breaker():
+    from neva.utils.safety import CircuitBreaker
+
+    breaker = CircuitBreaker(failure_threshold=1, cooldown=0.0)
+    breaker.record_failure()  # opens the circuit; next allow() admits a probe
+    return breaker
+
+
+def test_budget_refusal_releases_half_open_probe(monkeypatch):
+    from neva.agents.gpt import GPTAgent
+
+    breaker = _half_open_breaker()
+    budget = SpendBudget(max_cost=1.0)
+    budget.consume(1.0)  # exhausted
+    agent = GPTAgent(
+        api_key="x",
+        provider="openai",
+        max_retries=0,
+        circuit_breaker=breaker,
+        spend_budget=budget,
+    )
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+    # The refused probe must be released: the next attempt is admitted and
+    # refused for budget again, not stuck as "probe already in flight".
+    calls = []
+    _patch_provider(monkeypatch, usage={"prompt_tokens": 1, "completion_tokens": 1}, calls=calls)
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+    assert calls == []
+
+
+def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
+    from neva.agents.gpt import GPTAgent
+
+    _patch_provider(monkeypatch, usage={"prompt_tokens": 1000, "completion_tokens": 1000})
+    breaker = _half_open_breaker()
+    budget = SpendBudget(max_cost=0.0001)  # smaller than one turn's cost
+    agent = GPTAgent(
+        api_key="x",
+        provider="openai",
+        max_retries=0,
+        circuit_breaker=breaker,
+        spend_budget=budget,
+    )
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+    # The provider call succeeded, so the probe must be completed: the next
+    # attempt is admitted (and refused for budget) instead of finding the
+    # probe permanently in flight.
+    calls = []
+    _patch_provider(monkeypatch, usage={"prompt_tokens": 1, "completion_tokens": 1}, calls=calls)
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+    assert calls == []
