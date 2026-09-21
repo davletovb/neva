@@ -141,17 +141,34 @@ def test_invalid_path_rejected(tmp_path):
         FailureLog("")
 
 
+@pytest.mark.parametrize(
+    "timestamp",
+    [float("nan"), float("inf"), -float("inf"), -1.0, True, "soon", None],
+)
+def test_from_dict_rejects_invalid_timestamps(timestamp):
+    payload = make_record().to_dict()
+    payload["timestamp"] = timestamp
+    with pytest.raises(ValueError, match="timestamp"):
+        FailureRecord.from_dict(payload)
+
+
 def test_load_skips_invalid_policy_and_timestamp(tmp_path):
     path = tmp_path / "failures.jsonl"
     bad_policy = make_record().to_dict()
     bad_policy["policy"] = "ignore"
     bad_timestamp = make_record().to_dict()
     bad_timestamp["timestamp"] = "soon"
+    bad_nan = make_record().to_dict()
+    bad_nan["timestamp"] = float("nan")
+    bad_inf = make_record().to_dict()
+    bad_inf["timestamp"] = float("inf")
     path.write_text(
         "\n".join(
             [
                 json.dumps(bad_policy),
                 json.dumps(bad_timestamp),
+                json.dumps(bad_nan),
+                json.dumps(bad_inf),
                 json.dumps(make_record().to_dict()),
             ]
         ),

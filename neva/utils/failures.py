@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 from dataclasses import asdict, dataclass, replace
@@ -49,8 +50,13 @@ class FailureRecord:
         if policy not in {"raise", "return"}:
             raise ValueError("failure record policy must be 'raise' or 'return'")
         timestamp = payload["timestamp"]
-        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
-            raise ValueError("failure record timestamp must be a number")
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or not math.isfinite(timestamp)
+            or timestamp < 0
+        ):
+            raise ValueError("failure record timestamp must be a finite non-negative number")
         return cls(
             timestamp=float(timestamp),
             environment=payload["environment"],
