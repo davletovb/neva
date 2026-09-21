@@ -27,6 +27,7 @@ def _type_names(expected: _TypeSpec) -> str:
 
 
 _UNSIZED_TYPES = (int, float, complex, bool)
+_NUMERIC_TYPES = (int, float, complex)
 
 
 def _format_value(value: Any) -> str:
@@ -49,20 +50,19 @@ def _positive_int(value: Any, label: str) -> Optional[int]:
     return value
 
 
-def _finite_number(value: Any, label: str) -> Optional[float]:
+def _finite_number(value: Any, label: str) -> Optional[Union[int, float]]:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ToolSchemaConfigurationError(f"{label} must be a finite number")
-    try:
-        finite = math.isfinite(value)
-    except OverflowError:
-        finite = False
-    if not finite:
+    if isinstance(value, int):
+        # Integer bounds stay integers so precision above 2**53 is preserved.
+        return value
+    if not math.isfinite(value):
         raise ToolSchemaConfigurationError(
             f"{label} must be a finite number within the float range"
         )
-    return float(value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -74,8 +74,11 @@ class ArgumentSpec:
     then ``choices``. Bounds that do not apply to the value's type disqualify
     the call rather than being skipped, and non-finite numbers (NaN, inf) are
     rejected whenever value bounds are configured — a comparison bound does
-    not constrain NaN. ``type=float`` matches floats only; use
-    ``(int, float)`` to accept integral numbers from parsed payloads.
+    not constrain NaN. Integer bounds are preserved exactly (no float
+    coercion above 2**53). ``type=float`` matches floats only; use
+    ``(int, float)`` to accept integral numbers from parsed payloads, and
+    note that booleans never satisfy ``int``/``float``/``complex``
+    declarations implicitly.
     """
 
     type: _TypeSpec = str
@@ -160,12 +163,12 @@ class ArgumentSpec:
                 return f"argument '{name}' must be a finite number, " f"got {_format_value(value)}"
             if self.min_value is not None and value < self.min_value:
                 return (
-                    f"argument '{name}' must be >= {self.min_value:g}, "
+                    f"argument '{name}' must be >= {_format_value(self.min_value)}, "
                     f"got {_format_value(value)}"
                 )
             if self.max_value is not None and value > self.max_value:
                 return (
-                    f"argument '{name}' must be <= {self.max_value:g}, "
+                    f"argument '{name}' must be <= {_format_value(self.max_value)}, "
                     f"got {_format_value(value)}"
                 )
         if self.choices is not None and value not in self.choices:
@@ -178,7 +181,17 @@ class ArgumentSpec:
     def _type_matches(self, value: Any) -> bool:
         if isinstance(value, bool):
             candidates = self.type if isinstance(self.type, tuple) else (self.type,)
-            return bool in candidates
+            for candidate in candidates:
+                if candidate is bool:
+                    return True
+                if isinstance(candidate, type) and issubclass(candidate, _NUMERIC_TYPES):
+                    # bools inherit from int; numeric declarations require an
+                    # explicit bool entry, but other supertypes (e.g. object)
+                    # accept booleans through normal isinstance semantics.
+                    continue
+                if isinstance(value, candidate):
+                    return True
+            return False
         return isinstance(value, self.type)
 
 

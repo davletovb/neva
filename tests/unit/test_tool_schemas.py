@@ -314,6 +314,56 @@ def test_non_string_schema_reason_normalized():
     assert tool.calls == []
 
 
+def test_integer_bounds_preserved_exactly():
+    spec = ArgumentSpec(type=int, min_value=2**53 + 1)
+    assert spec.min_value == 2**53 + 1  # not coerced to float
+    reason = spec.validate("v", 2**53)
+    assert reason is not None
+    assert ">=" in reason
+    assert spec.validate("v", 2**53 + 1) is None
+    # float bounds stay floats
+    assert ArgumentSpec(type=float, min_value=0.5).min_value == 0.5
+
+
+def test_huge_integer_bound_allowed_and_rendered_safely():
+    spec = ArgumentSpec(type=int, min_value=10**400)
+    reason = spec.validate("v", 0)
+    assert reason is not None
+    assert ">=" in reason
+    assert len(reason) < 400  # bound rendering is truncated
+
+
+def test_boolean_accepted_for_nonnumeric_supertypes():
+    assert ArgumentSchema({"v": ArgumentSpec(type=object)}).validate({"v": True}) is None
+    assert ArgumentSchema({"v": ArgumentSpec(type=(int, object))}).validate({"v": True}) is None
+    assert ArgumentSchema({"v": ArgumentSpec(type=bool)}).validate({"v": True}) is None
+    # numeric declarations still require an explicit bool
+    reason = ArgumentSchema({"v": ArgumentSpec(type=int)}).validate({"v": True})
+    assert reason is not None
+    reason_tuple = ArgumentSchema({"v": ArgumentSpec(type=(int, str))}).validate({"v": True})
+    assert reason_tuple is not None
+
+
+def test_non_serializable_arguments_fail_closed():
+    tool = SchemaTool(schema=None)
+    agent = make_agent()
+    agent.register_tool(tool)
+    response = agent.call_tool(ToolCall(name="echo", arguments={"blob": {1, 2}, "raw": b"x"}))
+    assert not response.succeeded()
+    assert "normalis" in response.error
+    assert tool.calls == []
+
+
+def test_schema_validation_runs_before_payload_normalization():
+    tool = SchemaTool(schema=ArgumentSchema({"input": ArgumentSpec(type=str)}))
+    agent = make_agent()
+    agent.register_tool(tool)
+    response = agent.call_tool(ToolCall(name="echo", arguments={"blob": {1, 2}}))
+    assert not response.succeeded()
+    assert "invalid arguments" in response.error  # schema rejects, no TypeError escape
+    assert tool.calls == []
+
+
 def test_non_mapping_arguments_rejected():
     schema = ArgumentSchema({"input": ArgumentSpec(type=str)})
     reason = schema.validate(["input"])

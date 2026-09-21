@@ -271,7 +271,6 @@ class AIAgent(ABC):
             arguments: ToolArguments = call.arguments
         else:
             arguments = dict(call.arguments)
-        payload = self._normalise_tool_input(arguments)
         guard = self.tool_guard
         if guard is not None:
             try:
@@ -318,6 +317,16 @@ class AIAgent(ABC):
                     output="",
                     error=f"invalid arguments for tool '{call.name}': {schema_reason}",
                 )
+        try:
+            payload = self._normalise_tool_input(arguments)
+        except Exception:
+            logger.exception("Tool payload normalisation failed for tool '%s'", call.name)
+            return ToolResponse(
+                name=tool.name,
+                arguments=arguments,
+                output="",
+                error=f"could not normalise arguments for tool '{call.name}'",
+            )
         try:
             output = guard.invoke(tool, payload) if guard is not None else tool.use(payload)
         except ToolExecutionError as exc:
