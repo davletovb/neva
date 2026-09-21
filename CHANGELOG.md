@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit) and raise `ToolTimeoutError` (a `ToolExecutionError`); outputs longer
   than `max_output_chars` keep that many characters plus a truncation marker.
   Guardrails apply to `call_tool`; direct `Tool.use` calls bypass them.
+- Validated tool argument schemas: tools may declare
+  `argument_schema=ArgumentSchema({...})` with per-field `ArgumentSpec` rules
+  (type, required, min/max length, min/max value, choices; unknown keys are
+  rejected unless `allow_extra=True`). `call_tool` validates mapping
+  arguments — a raw-string payload is validated as `{"input": payload}` —
+  before executing the tool; violations and schema failures return a failed
+  `ToolResponse` carrying a reason and never reach the tool body. Invalid
+  schema configuration raises `ToolSchemaConfigurationError` at construction;
+  non-finite numbers are rejected whenever value bounds are configured. Tools
+  without a schema behave as before.
 - Durable failure records: `Environment(failure_log=FailureLog(path))` appends
   one JSON line per handled turn failure (both `raise` and `return` policies,
   including scheduler-selection failures), flushed and fsynced by default.
