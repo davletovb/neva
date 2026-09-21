@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool-call guardrails: `AIAgent(tool_guard=ToolGuard(...))` (forwarded by
   `GPTAgent` and `TransformerAgent`) enforces code-level policy independent of
   prompt content — an allowlist, an approval hook called with each `ToolCall`,
-  and execution limits (`ToolLimits(timeout=..., max_output_chars=...)`). The
+  and execution limits (`ToolLimits(timeout=..., max_output_chars=...)`,
+  where `timeout` may not exceed `threading.TIMEOUT_MAX`). The
   call proceeds only when the approval hook returns `True`; `False`, a truthy
   non-bool, an awaitable, or a raised exception denies, and denial reasons
   exclude hook exception details (logged at debug). Denied calls return a

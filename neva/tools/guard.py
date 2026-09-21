@@ -27,7 +27,9 @@ _TRUNCATION_MARKER = "...[tool output truncated]"
 class ToolLimits:
     """Execution limits applied around ``Tool.use``.
 
-    ``timeout`` bounds how long the caller waits for a tool. When the limit
+    ``timeout`` bounds how long the caller waits for a tool and may not
+    exceed ``threading.TIMEOUT_MAX`` (``Thread.join`` rejects larger values).
+    When the limit
     elapses the call raises :class:`ToolTimeoutError` and the tool keeps
     running on a daemon worker thread that is not forcibly stopped and not
     re-joined at interpreter exit; a timed-out tool that never returns leaks
@@ -46,12 +48,17 @@ class ToolLimits:
             invalid = isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float))
             if not invalid:
                 try:
-                    invalid = not math.isfinite(self.timeout) or self.timeout <= 0
+                    invalid = (
+                        not math.isfinite(self.timeout)
+                        or self.timeout <= 0
+                        or self.timeout > threading.TIMEOUT_MAX
+                    )
                 except OverflowError:
                     invalid = True
             if invalid:
                 raise ToolGuardConfigurationError(
-                    "timeout must be a finite positive number of seconds"
+                    "timeout must be a finite positive number of seconds no "
+                    "greater than threading.TIMEOUT_MAX"
                 )
             object.__setattr__(self, "timeout", float(self.timeout))
         if self.max_output_chars is not None:

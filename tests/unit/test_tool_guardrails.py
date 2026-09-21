@@ -52,6 +52,17 @@ def test_overflowing_timeout_rejected():
         ToolLimits(timeout=10**400)
 
 
+def test_timeout_above_platform_maximum_rejected():
+    with pytest.raises(ToolGuardConfigurationError, match="timeout"):
+        ToolLimits(timeout=threading.TIMEOUT_MAX + 1)
+    with pytest.raises(ToolGuardConfigurationError, match="timeout"):
+        ToolLimits(timeout=1e100)
+
+
+def test_timeout_at_platform_maximum_accepted():
+    assert ToolLimits(timeout=threading.TIMEOUT_MAX).timeout == threading.TIMEOUT_MAX
+
+
 @pytest.mark.parametrize("limit", [0, -5, True, 1.5, "100"])
 def test_invalid_output_limit_rejected(limit):
     with pytest.raises(ToolGuardConfigurationError, match="max_output_chars"):
