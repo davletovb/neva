@@ -207,9 +207,7 @@ def test_serialization_failure_preserves_existing_file(tmp_path):
     assert path.read_text(encoding="utf-8") == "existing checkpoint"
 
 
-def test_staging_write_failure_preserves_existing_file_and_cleans_temp(
-    tmp_path, monkeypatch
-):
+def test_staging_write_failure_preserves_existing_file_and_cleans_temp(tmp_path, monkeypatch):
     real_factory = state_management.tempfile.NamedTemporaryFile
     writes = 0
 
@@ -277,9 +275,7 @@ def test_serialization_error_precedes_size_error(tmp_path):
     class Unsupported:
         pass
 
-    snapshot = create_snapshot(
-        environment_state={"large": "x" * 10_000, "bad": Unsupported()}
-    )
+    snapshot = create_snapshot(environment_state={"large": "x" * 10_000, "bad": Unsupported()})
 
     with pytest.raises(TypeError, match="not JSON serialisable"):
         save_snapshot(snapshot, tmp_path / "snapshot.json", max_bytes=10)
