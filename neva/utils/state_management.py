@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
@@ -91,15 +93,17 @@ class SimulationSnapshot:
     version: int = 1
     runtime_state: Optional[Dict[str, Any]] = None
 
-    def to_json(self) -> str:
-        serialisable = {
+    def _serialisable(self) -> Dict[str, Any]:
+        return {
             "created_at": self.created_at.isoformat(),
             "environment_state": self.environment_state,
             "agent_states": self.agent_states,
             "version": self.version,
             "runtime_state": self.runtime_state,
         }
-        return json.dumps(serialisable, default=_json_default, indent=2)
+
+    def to_json(self) -> str:
+        return json.dumps(self._serialisable(), default=_json_default, indent=2)
 
     @classmethod
     def from_json(cls, raw: str) -> "SimulationSnapshot":
@@ -145,16 +149,29 @@ def _validate_max_bytes(max_bytes: Optional[int]) -> None:
 def save_snapshot(
     snapshot: SimulationSnapshot, path: Path, *, max_bytes: Optional[int] = None
 ) -> None:
-    """Save UTF-8 JSON, optionally rejecting oversized output before opening the file.
+    """Save UTF-8 JSON without materialising the complete serialized snapshot.
 
-    ``max_bytes`` must be a positive integer or None (unlimited). Serialization
-    still happens in memory; this is not a snapshot-creation or RAM limit.
+    ``max_bytes`` must be a positive integer or None (unlimited). JSON is
+    encoded incrementally into a 64 KiB spooled temporary file; only after
+    serialization succeeds and the optional byte limit is satisfied is the
+    destination opened. This bounds serialization-buffer memory, but it does
+    not bound the snapshot object graph, deep-copy creation, decoded loads, or
+    the size of an individual JSON scalar.
     """
     _validate_max_bytes(max_bytes)
-    raw = snapshot.to_json().encode("utf-8")
-    if max_bytes is not None and len(raw) > max_bytes:
-        raise ValueError("Snapshot exceeds max_bytes")
-    path.write_bytes(raw)
+    encoder = json.JSONEncoder(default=_json_default, indent=2)
+    with tempfile.SpooledTemporaryFile(max_size=65536, mode="w+b") as staged:
+        total_bytes = 0
+        for piece in encoder.iterencode(snapshot._serialisable()):
+            chunk = piece.encode("utf-8")
+            total_bytes += len(chunk)
+            if max_bytes is not None and total_bytes > max_bytes:
+                raise ValueError("Snapshot exceeds max_bytes")
+            staged.write(chunk)
+
+        staged.seek(0)
+        with path.open("wb") as destination:
+            shutil.copyfileobj(staged, destination, length=65536)
 
 
 def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationSnapshot:
