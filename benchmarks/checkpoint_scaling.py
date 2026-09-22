@@ -134,13 +134,16 @@ def run_case(
         raise ValueError("repeat must be positive")
 
     environment_state, states = _fixture(case)
-    owned_tempdir = None
-    if workdir is None:
-        owned_tempdir = tempfile.TemporaryDirectory(prefix="neva-checkpoint-benchmark-")
-        benchmark_dir = Path(owned_tempdir.name)
-    else:
-        benchmark_dir = Path(workdir)
-        benchmark_dir.mkdir(parents=True, exist_ok=True)
+    benchmark_root: Optional[Path] = None
+    if workdir is not None:
+        benchmark_root = Path(workdir)
+        benchmark_root.mkdir(parents=True, exist_ok=True)
+
+    tempdir = tempfile.TemporaryDirectory(
+        prefix=f"neva-checkpoint-{case.name}-",
+        dir=str(benchmark_root) if benchmark_root is not None else None,
+    )
+    benchmark_dir = Path(tempdir.name)
 
     samples: List[Dict[str, Any]] = []
     try:
@@ -167,8 +170,7 @@ def run_case(
             )
             checkpoint_path.unlink()
     finally:
-        if owned_tempdir is not None:
-            owned_tempdir.cleanup()
+        tempdir.cleanup()
 
     stage_names = ("create_snapshot", "save_snapshot", "load_snapshot")
     summary = {
