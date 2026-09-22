@@ -21,7 +21,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
-from neva.utils.state_management import ConversationState, create_snapshot, load_snapshot, save_snapshot
+from neva.utils.state_management import (
+    ConversationState,
+    create_snapshot,
+    load_snapshot,
+    save_snapshot,
+)
 
 T = TypeVar("T")
 
