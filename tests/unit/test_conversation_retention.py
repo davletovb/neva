@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from neva.utils.state_management import ConversationState, ConversationTurn
@@ -177,3 +179,22 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
     assert agent.conversation_state.max_turns == 4
     assert agent.conversation_state.max_turn_bytes == 24
     assert all(len(turn.message.encode("utf-8")) <= 24 for turn in agent.conversation_state.turns)
+
+
+
+def test_bounded_agent_history_normalizes_unpaired_surrogates_without_failing():
+    from neva.agents import TransformerAgent
+
+    surrogate = json.loads('"\\ud800"')
+    full_response = surrogate + ("r" * 40)
+    state = ConversationState("agent", max_turn_bytes=24)
+    agent = TransformerAgent(name="agent", llm_backend=lambda _: full_response)
+    agent.set_conversation_state(state)
+
+    response = agent.receive("hello", sender="user")
+    stored = state.turns[-1].message
+
+    assert response == full_response
+    assert surrogate not in stored
+    assert stored.endswith("...[truncated]")
+    assert len(stored.encode("utf-8")) <= 24
