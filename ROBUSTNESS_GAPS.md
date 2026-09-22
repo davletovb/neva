@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `53411e41` (PRs #49–#52, #54–#64 merged).
+Updated against `main` at `ebabb0af` (PRs #49–#52, #54–#65 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -93,9 +93,9 @@ Regex prompt validation is input hygiene, not protection against prompt injectio
 - Opt-in checkpoint file-size limits merged in PR #56 (`save_snapshot(..., max_bytes=N)`, `load_snapshot(..., max_bytes=N)`). PR #64 streams save serialization with incremental byte-limit enforcement into a sibling temporary file, then fsyncs and atomically installs it with `os.replace`, preserving the destination on overflow, serialization failure, staging-write failure, or replacement failure. The tradeoff is temporary disk usage on the destination filesystem roughly equal to the new checkpoint (while the old checkpoint may still exist). Remaining memory risks include the snapshot object graph, `create_snapshot()` deep copies, decoded loads, and temporary expansion of an individual JSON scalar. PR #65 adds a reproducible small/medium/large checkpoint benchmark for create/save/load wall time, peak Python allocations, and checkpoint bytes; hardware-specific benchmark runs still need to inform any persistence redesign.
 - Incremental/externalized persistence where justified by measured scale.
 - Support for components currently requiring custom checkpoint hooks.
-- Conversation retention is implemented by merged PR #55: optional `ConversationState(max_turns=N)`, preserved through serialization and restore. This is distinct from request-history trimming and does not limit bytes per turn.
+- Conversation retention is implemented by merged PR #55 with optional `ConversationState(max_turns=N)`, preserved through serialization and restore. PR #66 adds an independent opt-in UTF-8 per-turn storage ceiling via `max_turn_bytes=N`; oversized stored messages are truncated with an explicit marker while the agent still returns the full live response. Both limits remain disabled by default and are distinct from request-history trimming.
 
-Deep-copy isolation may be expensive at scale; no benchmark establishes its limits yet.
+Deep-copy isolation may be expensive at scale. PR #65 now provides a benchmark harness for create/save/load scaling, but hardware-specific results still need to inform any redesign.
 
 ### 5. Integration and coverage blind spots — partial
 
