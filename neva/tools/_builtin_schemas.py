@@ -23,7 +23,8 @@ class _BuiltInTextArgumentSchema:
             {
                 key: ArgumentSpec(type=object, required=False)
                 for key in _TEXT_ARGUMENT_KEYS
-            }
+            },
+            allow_extra=True,
         )
 
     def validate(self, arguments: Mapping[str, Any]) -> Optional[str]:
@@ -35,8 +36,14 @@ class _BuiltInTextArgumentSchema:
             if isinstance(arguments.get(key), str):
                 return None
 
+        if len(arguments) == 1 and isinstance(next(iter(arguments.values())), str):
+            return None
+
         aliases = ", ".join(repr(key) for key in _TEXT_ARGUMENT_KEYS)
-        return f"one of {aliases} must contain a string"
+        return (
+            f"one of {aliases} must contain a string, or a single mapping "
+            "value must be a string"
+        )
 
 
 BUILTIN_TEXT_ARGUMENT_SCHEMA = _BuiltInTextArgumentSchema()
