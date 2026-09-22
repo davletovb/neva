@@ -79,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   try again. Pass the same instance to share a provider circuit across agents.
 
 ### Changed
+- Snapshot saves now serialize JSON incrementally into a sibling temporary file instead of materialising the complete JSON string and UTF-8 byte string in memory. Optional `max_bytes` limits are enforced while encoding; the staged file is flushed/fsynced and installed with atomic `os.replace`, so overflow, serialization errors, staging-write failures, and replacement failures preserve an existing checkpoint. Large saves therefore require temporary disk space on the destination filesystem roughly equal to the new checkpoint.
 - OpenAI-compatible providers (OpenAI and Grok/xAI) now call `/v1/chat/completions`
   over `requests` instead of the legacy `openai==0.28.1` SDK.
 - Default models follow the selected provider (`gpt-4o-mini`, `grok-4.5`, …).

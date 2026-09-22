@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
@@ -91,15 +93,22 @@ class SimulationSnapshot:
     version: int = 1
     runtime_state: Optional[Dict[str, Any]] = None
 
-    def to_json(self) -> str:
-        serialisable = {
+    def _serialisable(self) -> Dict[str, Any]:
+        """Return the canonical mapping persisted by both JSON save paths.
+
+        Subclasses that intentionally customize checkpoint representation
+        should override this method rather than only overriding ``to_json()``.
+        """
+        return {
             "created_at": self.created_at.isoformat(),
             "environment_state": self.environment_state,
             "agent_states": self.agent_states,
             "version": self.version,
             "runtime_state": self.runtime_state,
         }
-        return json.dumps(serialisable, default=_json_default, indent=2)
+
+    def to_json(self) -> str:
+        return json.dumps(self._serialisable(), default=_json_default, indent=2)
 
     @classmethod
     def from_json(cls, raw: str) -> "SimulationSnapshot":
@@ -145,16 +154,58 @@ def _validate_max_bytes(max_bytes: Optional[int]) -> None:
 def save_snapshot(
     snapshot: SimulationSnapshot, path: Path, *, max_bytes: Optional[int] = None
 ) -> None:
-    """Save UTF-8 JSON, optionally rejecting oversized output before opening the file.
+    """Atomically save UTF-8 JSON without materialising the complete snapshot.
 
-    ``max_bytes`` must be a positive integer or None (unlimited). Serialization
-    still happens in memory; this is not a snapshot-creation or RAM limit.
+    ``max_bytes`` must be a positive integer or None (unlimited). JSON is
+    encoded incrementally into a temporary file beside the destination and
+    atomically installed with :func:`os.replace` only after serialization,
+    size validation, flush, and fsync succeed. Existing checkpoints therefore
+    survive serialization, staging-write, and replacement failures.
+
+    This bounds serialization-buffer memory, but it requires temporary disk
+    space on the destination filesystem roughly equal to the new checkpoint
+    and does not bound the snapshot object graph, deep-copy creation, decoded
+    loads, or the size of an individual JSON scalar. ``_serialisable()`` is
+    the shared representation point for both this function and ``to_json()``.
     """
     _validate_max_bytes(max_bytes)
-    raw = snapshot.to_json().encode("utf-8")
-    if max_bytes is not None and len(raw) > max_bytes:
-        raise ValueError("Snapshot exceeds max_bytes")
-    path.write_bytes(raw)
+    encoder = json.JSONEncoder(default=_json_default, indent=2)
+    temp_path: Optional[Path] = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w+b",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+            delete=False,
+        ) as staged:
+            temp_path = Path(staged.name)
+            total_bytes = 0
+            exceeds_limit = False
+
+            for piece in encoder.iterencode(snapshot._serialisable()):
+                chunk = piece.encode("utf-8")
+                total_bytes += len(chunk)
+                if max_bytes is not None and total_bytes > max_bytes:
+                    exceeds_limit = True
+                    continue
+                staged.write(chunk)
+
+            if exceeds_limit:
+                raise ValueError("Snapshot exceeds max_bytes")
+
+            staged.flush()
+            os.fsync(staged.fileno())
+
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationSnapshot:
