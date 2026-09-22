@@ -167,9 +167,7 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
 
     env = Environment(RoundRobinScheduler())
     agent = TransformerAgent(name="agent", llm_backend=lambda _: "r" * 100)
-    agent.set_conversation_state(
-        ConversationState(agent.name, max_turns=4, max_turn_bytes=24)
-    )
+    agent.set_conversation_state(ConversationState(agent.name, max_turns=4, max_turn_bytes=24))
     env.register_agent(agent)
 
     env.run(2)
@@ -179,7 +177,4 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
 
     assert agent.conversation_state.max_turns == 4
     assert agent.conversation_state.max_turn_bytes == 24
-    assert all(
-        len(turn.message.encode("utf-8")) <= 24
-        for turn in agent.conversation_state.turns
-    )
+    assert all(len(turn.message.encode("utf-8")) <= 24 for turn in agent.conversation_state.turns)
