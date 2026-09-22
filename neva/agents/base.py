@@ -65,6 +65,7 @@ LLMBackend = Callable[[str], str]
 
 
 ToolArguments = Union[str, Mapping[str, Any]]
+TOOL_TEXT_ARGUMENT_KEYS = ("input", "task", "query", "text")
 
 
 @dataclass(frozen=True)
@@ -245,8 +246,7 @@ class AIAgent(ABC):
         if isinstance(arguments, str):
             return arguments
 
-        candidate_keys = ("input", "task", "query", "text")
-        for key in candidate_keys:
+        for key in TOOL_TEXT_ARGUMENT_KEYS:
             value = arguments.get(key)
             if isinstance(value, str):
                 return value
