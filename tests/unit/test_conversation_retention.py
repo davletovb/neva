@@ -181,7 +181,6 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
     assert all(len(turn.message.encode("utf-8")) <= 24 for turn in agent.conversation_state.turns)
 
 
-
 def test_bounded_agent_history_normalizes_unpaired_surrogates_without_failing():
     from neva.agents import TransformerAgent
 
