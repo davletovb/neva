@@ -20,9 +20,7 @@ class _BuiltInTextArgumentSchema:
 
     def __init__(self) -> None:
         self._shape = ArgumentSchema(
-            {
-                key: ArgumentSpec(type=object, required=False) for key in _TEXT_ARGUMENT_KEYS
-            },
+            {key: ArgumentSpec(type=object, required=False) for key in _TEXT_ARGUMENT_KEYS},
             allow_extra=True,
         )
 
@@ -40,8 +38,7 @@ class _BuiltInTextArgumentSchema:
 
         aliases = ", ".join(repr(key) for key in _TEXT_ARGUMENT_KEYS)
         return (
-            f"one of {aliases} must contain a string, or a single mapping "
-            "value must be a string"
+            f"one of {aliases} must contain a string, or a single mapping " "value must be a string"
         )
 
 
