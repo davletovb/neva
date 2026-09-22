@@ -138,37 +138,59 @@ def test_save_streams_without_calling_to_json(tmp_path, monkeypatch):
     assert loaded.environment_state == snapshot.environment_state
 
 
-def test_save_uses_bounded_spooled_buffer(tmp_path, monkeypatch):
+def test_save_streams_to_sibling_temp_file_and_cleans_it(tmp_path, monkeypatch):
     calls = []
     writes = []
+    real_factory = state_management.tempfile.NamedTemporaryFile
 
-    class RecordingSpool(io.BytesIO):
+    class RecordingFile:
+        def __init__(self, inner):
+            self._inner = inner
+            self.name = inner.name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._inner.__exit__(exc_type, exc, tb)
+
         def write(self, data):
             writes.append(len(data))
-            return super().write(data)
+            return self._inner.write(data)
 
-    def recording_spool(*, max_size, mode):
-        calls.append((max_size, mode))
-        return RecordingSpool()
+        def flush(self):
+            return self._inner.flush()
+
+        def fileno(self):
+            return self._inner.fileno()
+
+    def recording_temp_file(**kwargs):
+        calls.append(kwargs)
+        return RecordingFile(real_factory(**kwargs))
 
     monkeypatch.setattr(
         state_management.tempfile,
-        "SpooledTemporaryFile",
-        recording_spool,
+        "NamedTemporaryFile",
+        recording_temp_file,
     )
 
     snapshot = create_snapshot(
-        environment_state={"items": [{"value": index} for index in range(500)]}
+        environment_state={"items": [{"value": index} for index in range(5000)]}
     )
     path = tmp_path / "snapshot.json"
     expected = snapshot.to_json().encode("utf-8")
 
     save_snapshot(snapshot, path)
 
-    assert calls == [(65536, "w+b")]
+    assert len(calls) == 1
+    assert calls[0]["dir"] == str(tmp_path)
+    assert calls[0]["delete"] is False
+    assert calls[0]["prefix"] == ".snapshot.json."
+    assert calls[0]["suffix"] == ".tmp"
     assert len(writes) > 1
     assert max(writes) < len(expected)
     assert path.read_bytes() == expected
+    assert list(tmp_path.glob(".snapshot.json.*.tmp")) == []
 
 
 def test_serialization_failure_preserves_existing_file(tmp_path):
@@ -183,3 +205,81 @@ def test_serialization_failure_preserves_existing_file(tmp_path):
         save_snapshot(snapshot, path)
 
     assert path.read_text(encoding="utf-8") == "existing checkpoint"
+
+
+def test_staging_write_failure_preserves_existing_file_and_cleans_temp(
+    tmp_path, monkeypatch
+):
+    real_factory = state_management.tempfile.NamedTemporaryFile
+    writes = 0
+
+    class FailingFile:
+        def __init__(self, inner):
+            self._inner = inner
+            self.name = inner.name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._inner.__exit__(exc_type, exc, tb)
+
+        def write(self, data):
+            nonlocal writes
+            writes += 1
+            if writes > 2:
+                raise OSError("simulated disk failure")
+            return self._inner.write(data)
+
+        def flush(self):
+            return self._inner.flush()
+
+        def fileno(self):
+            return self._inner.fileno()
+
+    monkeypatch.setattr(
+        state_management.tempfile,
+        "NamedTemporaryFile",
+        lambda **kwargs: FailingFile(real_factory(**kwargs)),
+    )
+
+    path = tmp_path / "snapshot.json"
+    path.write_text("precious checkpoint", encoding="utf-8")
+    snapshot = create_snapshot(environment_state={"message": "x" * 10_000})
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        save_snapshot(snapshot, path)
+
+    assert path.read_text(encoding="utf-8") == "precious checkpoint"
+    assert list(tmp_path.glob(".snapshot.json.*.tmp")) == []
+
+
+def test_replace_failure_preserves_existing_file_and_cleans_temp(tmp_path, monkeypatch):
+    path = tmp_path / "snapshot.json"
+    path.write_text("precious checkpoint", encoding="utf-8")
+    snapshot = create_snapshot(environment_state={"message": "replacement"})
+
+    def fail_replace(source, destination):
+        assert Path(source).parent == tmp_path
+        assert Path(destination) == path
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(state_management.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        save_snapshot(snapshot, path)
+
+    assert path.read_text(encoding="utf-8") == "precious checkpoint"
+    assert list(tmp_path.glob(".snapshot.json.*.tmp")) == []
+
+
+def test_serialization_error_precedes_size_error(tmp_path):
+    class Unsupported:
+        pass
+
+    snapshot = create_snapshot(
+        environment_state={"large": "x" * 10_000, "bad": Unsupported()}
+    )
+
+    with pytest.raises(TypeError, match="not JSON serialisable"):
+        save_snapshot(snapshot, tmp_path / "snapshot.json", max_bytes=10)
