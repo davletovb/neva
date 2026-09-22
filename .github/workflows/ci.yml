@@ -36,10 +36,10 @@ jobs:
         run: flake8
 
       - name: MyPy
-        run: mypy neva
+        run: mypy neva benchmarks
 
       - name: Bandit
-        run: bandit -r neva
+        run: bandit -r neva benchmarks
 
       - name: Pre-commit
         run: pre-commit run --all-files --show-diff-on-failure

@@ -148,8 +148,8 @@ pytest
 black --check .
 isort --check-only .
 flake8
-mypy neva
-bandit -r neva
+mypy neva benchmarks
+bandit -r neva benchmarks
 
 # Run the equivalent pre-commit hooks
 pre-commit run --all-files
@@ -159,6 +159,29 @@ sphinx-build -b html docs docs/_build/html
 ```
 
 Generated coverage reports appear in `coverage.xml` and the `htmlcov/` directory. The coverage badge above reflects the guaranteed baseline enforced by CI.
+
+
+### Checkpoint scaling benchmark
+
+Use the repository-local benchmark to measure checkpoint creation, streamed save,
+and load behavior on the machine where Neva will run:
+
+```bash
+python -m benchmarks.checkpoint_scaling --profile standard --repeat 3 \
+  --workdir /path/to/checkpoint-storage --git-sha "$(git rev-parse HEAD)" \
+  --output checkpoint-benchmark.json
+```
+
+The standard profile runs three increasing deterministic conversation sizes. Use
+`--profile quick --repeat 1` for a smoke run. Results include checkpoint bytes,
+wall-clock milliseconds from an untraced pass and peak Python allocations from
+a separate `tracemalloc` pass for `create_snapshot`, `save_snapshot`, and
+`load_snapshot`. Each stage therefore executes twice per sample. The benchmark
+has no performance pass/fail threshold: compare runs on equivalent hardware and
+use `--workdir` to measure the filesystem that will hold real checkpoints.
+`--git-sha` records a local revision explicitly (otherwise `GITHUB_SHA` is
+used when available). `tracemalloc` does not include OS page cache or
+temporary/destination file space.
 
 ### Developer Setup
 
