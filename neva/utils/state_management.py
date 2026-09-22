@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, is_dataclass
@@ -94,6 +94,11 @@ class SimulationSnapshot:
     runtime_state: Optional[Dict[str, Any]] = None
 
     def _serialisable(self) -> Dict[str, Any]:
+        """Return the canonical mapping persisted by both JSON save paths.
+
+        Subclasses that intentionally customize checkpoint representation
+        should override this method rather than only overriding ``to_json()``.
+        """
         return {
             "created_at": self.created_at.isoformat(),
             "environment_state": self.environment_state,
@@ -149,29 +154,58 @@ def _validate_max_bytes(max_bytes: Optional[int]) -> None:
 def save_snapshot(
     snapshot: SimulationSnapshot, path: Path, *, max_bytes: Optional[int] = None
 ) -> None:
-    """Save UTF-8 JSON without materialising the complete serialized snapshot.
+    """Atomically save UTF-8 JSON without materialising the complete snapshot.
 
     ``max_bytes`` must be a positive integer or None (unlimited). JSON is
-    encoded incrementally into a 64 KiB spooled temporary file; only after
-    serialization succeeds and the optional byte limit is satisfied is the
-    destination opened. This bounds serialization-buffer memory, but it does
-    not bound the snapshot object graph, deep-copy creation, decoded loads, or
-    the size of an individual JSON scalar.
+    encoded incrementally into a temporary file beside the destination and
+    atomically installed with :func:`os.replace` only after serialization,
+    size validation, flush, and fsync succeed. Existing checkpoints therefore
+    survive serialization, staging-write, and replacement failures.
+
+    This bounds serialization-buffer memory, but it requires temporary disk
+    space on the destination filesystem roughly equal to the new checkpoint
+    and does not bound the snapshot object graph, deep-copy creation, decoded
+    loads, or the size of an individual JSON scalar. ``_serialisable()`` is
+    the shared representation point for both this function and ``to_json()``.
     """
     _validate_max_bytes(max_bytes)
     encoder = json.JSONEncoder(default=_json_default, indent=2)
-    with tempfile.SpooledTemporaryFile(max_size=65536, mode="w+b") as staged:
-        total_bytes = 0
-        for piece in encoder.iterencode(snapshot._serialisable()):
-            chunk = piece.encode("utf-8")
-            total_bytes += len(chunk)
-            if max_bytes is not None and total_bytes > max_bytes:
-                raise ValueError("Snapshot exceeds max_bytes")
-            staged.write(chunk)
+    temp_path: Optional[Path] = None
 
-        staged.seek(0)
-        with path.open("wb") as destination:
-            shutil.copyfileobj(staged, destination, length=65536)
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w+b",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+            delete=False,
+        ) as staged:
+            temp_path = Path(staged.name)
+            total_bytes = 0
+            exceeds_limit = False
+
+            for piece in encoder.iterencode(snapshot._serialisable()):
+                chunk = piece.encode("utf-8")
+                total_bytes += len(chunk)
+                if max_bytes is not None and total_bytes > max_bytes:
+                    exceeds_limit = True
+                    continue
+                staged.write(chunk)
+
+            if exceeds_limit:
+                raise ValueError("Snapshot exceeds max_bytes")
+
+            staged.flush()
+            os.fsync(staged.fileno())
+
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationSnapshot:
