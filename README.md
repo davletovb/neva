@@ -314,9 +314,12 @@ scheduler = create_scheduler("my_scheduler")
 ## Features
 - **Flexible & Adaptable**: Adapt to various types of LLMs, tasks, and tools.
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
-  helpers let you persist simulations mid-run and resume them later. Live
-  providers receive a recent-turn window as chat messages, not the full
-  unbounded transcript.
+  helpers let you persist simulations mid-run and resume them later. Stored
+  history is unlimited by default, or can be bounded explicitly with
+  `ConversationState(max_turns=..., max_turn_bytes=...)`; oversized stored
+  messages are UTF-8-safe truncated with a `...[truncated]` marker while the
+  live response returned by the agent remains unchanged. Live providers receive
+  a recent-turn window as chat messages, not the full stored transcript.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
