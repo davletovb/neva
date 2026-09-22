@@ -45,9 +45,26 @@ def test_builtin_schema_preserves_supported_text_aliases(tool, alias):
         TranslatorTool(translator_factory=lambda: (lambda text: "translated")),
     ],
 )
-def test_builtin_schema_rejects_unknown_or_non_text_payloads(tool):
-    assert tool.argument_schema.validate({"payload": "value"}) is not None
+def test_builtin_schema_rejects_payloads_that_cannot_normalise_to_text(tool):
     assert tool.argument_schema.validate({"input": 123}) is not None
+    assert tool.argument_schema.validate({"left": "a", "right": "b"}) is not None
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        MathTool(),
+        WikipediaTool(summary_sentences=1),
+        SummarizerTool(summarizer_factory=lambda: (lambda text: "summary")),
+        TranslatorTool(translator_factory=lambda: (lambda text: "translated")),
+    ],
+)
+def test_builtin_schema_preserves_single_string_mapping_and_metadata(tool):
+    assert tool.argument_schema.validate({"payload": "value"}) is None
+    assert (
+        tool.argument_schema.validate({"input": "value", "source": "unit-test"})
+        is None
+    )
 
 
 def test_builtin_schema_rejects_invalid_call_before_tool_execution():
@@ -62,7 +79,10 @@ def test_builtin_schema_rejects_invalid_call_before_tool_execution():
     agent.register_tool(tool)
 
     response = agent.call_tool(
-        ToolCall(name="summarizer", arguments={"payload": "should not execute"})
+        ToolCall(
+            name="summarizer",
+            arguments={"left": "ambiguous", "right": "should not execute"},
+        )
     )
 
     assert not response.succeeded()
