@@ -112,9 +112,7 @@ class ConversationState:
         if isinstance(raw_turns, Iterable):
             for turn_payload in raw_turns:
                 if isinstance(turn_payload, dict):
-                    turns.append(
-                        ConversationTurn.from_dict(cast(Dict[str, str], turn_payload))
-                    )
+                    turns.append(ConversationTurn.from_dict(cast(Dict[str, str], turn_payload)))
         return cls(
             agent_name=str(payload["agent_name"]),
             turns=turns,
