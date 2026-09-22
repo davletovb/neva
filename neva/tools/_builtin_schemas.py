@@ -21,8 +21,7 @@ class _BuiltInTextArgumentSchema:
     def __init__(self) -> None:
         self._shape = ArgumentSchema(
             {
-                key: ArgumentSpec(type=object, required=False)
-                for key in _TEXT_ARGUMENT_KEYS
+                key: ArgumentSpec(type=object, required=False) for key in _TEXT_ARGUMENT_KEYS
             },
             allow_extra=True,
         )
