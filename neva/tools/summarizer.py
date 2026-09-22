@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from neva.agents.base import Tool
 from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
 
+from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
 from .utils import missing_dependency_message
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class SummarizerTool(Tool):
             "summarizer",
             "creates short summaries of longer documents",
             capabilities=["summarisation"],
+            argument_schema=BUILTIN_TEXT_ARGUMENT_SCHEMA,
         )
         self._summarizer_factory = summarizer_factory
 
