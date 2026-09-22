@@ -32,10 +32,7 @@ class _BuiltInTextArgumentSchema:
             return reason
 
         for key in _TEXT_ARGUMENT_KEYS:
-            value = arguments.get(key)
-            if isinstance(value, str):
-                if not value:
-                    return f"argument '{key}' must not be empty"
+            if isinstance(arguments.get(key), str):
                 return None
 
         aliases = ", ".join(repr(key) for key in _TEXT_ARGUMENT_KEYS)
