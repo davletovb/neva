@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- A repository-local checkpoint scaling benchmark (`python -m benchmarks.checkpoint_scaling`) measures deterministic small/medium/large workloads across snapshot creation, streamed save, and load. It reports checkpoint bytes, wall-clock time, and peak Python allocations with raw samples and medians; no hardware-dependent pass/fail threshold is imposed.
 - `SpendBudget` enforces a thread-safe hard ceiling on estimated spend.
   `GPTAgent(spend_budget=...)` refuses models without a pricing entry before
   contacting the provider, consumes each call's estimated cost after token
