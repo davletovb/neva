@@ -160,6 +160,26 @@ sphinx-build -b html docs docs/_build/html
 
 Generated coverage reports appear in `coverage.xml` and the `htmlcov/` directory. The coverage badge above reflects the guaranteed baseline enforced by CI.
 
+
+### Checkpoint scaling benchmark
+
+Use the repository-local benchmark to measure checkpoint creation, streamed save,
+and load behavior on the machine where Neva will run:
+
+```bash
+python -m benchmarks.checkpoint_scaling --profile standard --repeat 3 \
+  --output checkpoint-benchmark.json
+```
+
+The standard profile runs three increasing deterministic conversation sizes. Use
+`--profile quick --repeat 1` for a smoke run. Results include checkpoint bytes,
+wall-clock milliseconds, and peak Python allocations from `tracemalloc` for
+`create_snapshot`, `save_snapshot`, and `load_snapshot`. The benchmark has
+no performance pass/fail threshold: compare runs on equivalent hardware before
+using the measurements to justify externalized or incremental persistence.
+`tracemalloc` does not include OS page cache or temporary/destination file
+space.
+
 ### Developer Setup
 
 To contribute or run the full suite of examples you may need a few additional
