@@ -10,6 +10,8 @@ from typing import Callable, Dict
 from neva.agents.base import Tool
 from neva.utils.exceptions import ToolExecutionError
 
+from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +37,7 @@ class MathTool(Tool):
             "calculator",
             "performs arithmetic expressions",
             capabilities=["math", "calculation"],
+            argument_schema=BUILTIN_TEXT_ARGUMENT_SCHEMA,
         )
 
     def _eval_node(self, node: ast.AST) -> float:

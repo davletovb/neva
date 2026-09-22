@@ -8,6 +8,7 @@ from typing import Callable, Optional, Protocol, cast
 from neva.agents.base import Tool
 from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
 
+from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
 from .utils import missing_dependency_message
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class TranslatorTool(Tool):
             "translator",
             "translates text to different languages",
             capabilities=["translation"],
+            argument_schema=BUILTIN_TEXT_ARGUMENT_SCHEMA,
         )
         self._translator_factory = translator_factory
         self.target_language = target_language

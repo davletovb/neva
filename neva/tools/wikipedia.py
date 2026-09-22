@@ -7,6 +7,7 @@ import logging
 from neva.agents.base import Tool
 from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
 
+from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
 from .utils import missing_dependency_message
 
 try:  # pragma: no cover - exercised when wikipedia is available.
@@ -26,6 +27,7 @@ class WikipediaTool(Tool):
             "wikipedia",
             "looks up concise encyclopedia summaries",
             capabilities=["search", "encyclopedia"],
+            argument_schema=BUILTIN_TEXT_ARGUMENT_SCHEMA,
         )
         self.summary_sentences = summary_sentences
 
