@@ -45,9 +45,15 @@ def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
 
     if max_bytes is None:
         return message
-    raw = message.encode("utf-8")
+
+    # Python strings can contain isolated surrogate code points (for example
+    # after JSON decoding). Normalise those explicitly so enabling a storage
+    # ceiling cannot turn an otherwise successful agent response into an
+    # encoding failure.
+    normalized = message.encode("utf-8", errors="replace").decode("utf-8")
+    raw = normalized.encode("utf-8")
     if len(raw) <= max_bytes:
-        return message
+        return normalized
 
     marker = _TRUNCATION_MARKER.encode("ascii")
     if max_bytes <= len(marker):
