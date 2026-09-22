@@ -2,43 +2,36 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any, Optional
 
-from .schemas import ArgumentSchema, ArgumentSpec
-
-_TEXT_ARGUMENT_KEYS = ("input", "task", "query", "text")
+from neva.agents.base import TOOL_TEXT_ARGUMENT_KEYS
 
 
 class _BuiltInTextArgumentSchema:
-    """Validate the mapping shapes accepted by AIAgent.call_tool.
+    """Validate mapping shapes that resolve to one text payload.
 
-    call_tool normalises mapping arguments by selecting the first string
-    value under input, task, query, or text. The built-in text tools share
-    that contract, so their schema mirrors the existing normalisation
-    semantics instead of narrowing callers to one alias.
+    The alias set comes from the same constant used by
+    AIAgent._normalise_tool_input so the schema cannot silently drift from
+    the normalizer. Mapping shapes that would fall through to JSON serialization
+    are rejected before a built-in tool executes.
     """
 
-    def __init__(self) -> None:
-        self._shape = ArgumentSchema(
-            {key: ArgumentSpec(type=object, required=False) for key in _TEXT_ARGUMENT_KEYS},
-            allow_extra=True,
-        )
-
     def validate(self, arguments: Mapping[str, Any]) -> Optional[str]:
-        reason = self._shape.validate(arguments)
-        if reason is not None:
-            return reason
+        if not isinstance(arguments, Mapping):
+            return "arguments must be a mapping of argument names to values"
 
-        for key in _TEXT_ARGUMENT_KEYS:
+        for key in TOOL_TEXT_ARGUMENT_KEYS:
             if isinstance(arguments.get(key), str):
                 return None
 
         if len(arguments) == 1 and isinstance(next(iter(arguments.values())), str):
             return None
 
-        aliases = ", ".join(repr(key) for key in _TEXT_ARGUMENT_KEYS)
+        aliases = ", ".join(repr(key) for key in TOOL_TEXT_ARGUMENT_KEYS)
         return (
-            f"one of {aliases} must contain a string, or a single mapping " "value must be a string"
+            f"one of {aliases} must contain a string, or a single mapping value "
+            + "must be a string"
         )
 
 
