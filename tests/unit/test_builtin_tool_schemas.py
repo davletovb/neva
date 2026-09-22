@@ -113,9 +113,7 @@ def test_builtin_call_tool_accepts_supported_payloads(monkeypatch):
     monkeypatch.setattr(
         wikipedia_module,
         "wikipedia",
-        SimpleNamespace(
-            summary=lambda task, sentences: f"wiki:{task}:{sentences}"
-        ),
+        SimpleNamespace(summary=lambda task, sentences: f"wiki:{task}:{sentences}"),
     )
 
     cases = [
@@ -126,16 +124,12 @@ def test_builtin_call_tool_accepts_supported_payloads(monkeypatch):
             "wiki:Mars:1",
         ),
         (
-            SummarizerTool(
-                summarizer_factory=lambda: lambda text: f"summary:{text}"
-            ),
+            SummarizerTool(summarizer_factory=lambda: lambda text: f"summary:{text}"),
             ToolCall(name="summarizer", arguments={"text": "long text"}),
             "summary:long text",
         ),
         (
-            TranslatorTool(
-                translator_factory=lambda: lambda text: f"translated:{text}"
-            ),
+            TranslatorTool(translator_factory=lambda: lambda text: f"translated:{text}"),
             ToolCall(
                 name="translator",
                 arguments={"input": "hello", "source": "unit-test"},
