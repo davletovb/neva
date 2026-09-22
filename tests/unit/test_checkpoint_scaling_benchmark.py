@@ -68,10 +68,34 @@ def test_quick_cli_writes_json_output(tmp_path, capsys):
     "case",
     [
         {"name": "", "agents": 1, "turns_per_agent": 0, "message_chars": 0, "environment_bytes": 0},
-        {"name": "bad", "agents": 0, "turns_per_agent": 0, "message_chars": 0, "environment_bytes": 0},
-        {"name": "bad", "agents": 1, "turns_per_agent": -1, "message_chars": 0, "environment_bytes": 0},
-        {"name": "bad", "agents": 1, "turns_per_agent": 0, "message_chars": -1, "environment_bytes": 0},
-        {"name": "bad", "agents": 1, "turns_per_agent": 0, "message_chars": 0, "environment_bytes": -1},
+        {
+            "name": "bad",
+            "agents": 0,
+            "turns_per_agent": 0,
+            "message_chars": 0,
+            "environment_bytes": 0,
+        },
+        {
+            "name": "bad",
+            "agents": 1,
+            "turns_per_agent": -1,
+            "message_chars": 0,
+            "environment_bytes": 0,
+        },
+        {
+            "name": "bad",
+            "agents": 1,
+            "turns_per_agent": 0,
+            "message_chars": -1,
+            "environment_bytes": 0,
+        },
+        {
+            "name": "bad",
+            "agents": 1,
+            "turns_per_agent": 0,
+            "message_chars": 0,
+            "environment_bytes": -1,
+        },
     ],
 )
 def test_invalid_benchmark_cases_are_rejected(case):
