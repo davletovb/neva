@@ -148,11 +148,8 @@ def test_agent_returns_full_response_while_storing_bounded_history():
 
     full_response = "r" * 100
     state = ConversationState("agent", max_turn_bytes=24)
-    agent = TransformerAgent(
-        name="agent",
-        llm_backend=lambda _: full_response,
-        conversation_state=state,
-    )
+    agent = TransformerAgent(name="agent", llm_backend=lambda _: full_response)
+    agent.set_conversation_state(state)
 
     response = agent.receive("hello", sender="user")
 
