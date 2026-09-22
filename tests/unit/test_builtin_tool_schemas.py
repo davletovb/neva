@@ -61,10 +61,7 @@ def test_builtin_schema_rejects_payloads_that_cannot_normalise_to_text(tool):
 )
 def test_builtin_schema_preserves_single_string_mapping_and_metadata(tool):
     assert tool.argument_schema.validate({"payload": "value"}) is None
-    assert (
-        tool.argument_schema.validate({"input": "value", "source": "unit-test"})
-        is None
-    )
+    assert tool.argument_schema.validate({"input": "value", "source": "unit-test"}) is None
 
 
 def test_builtin_schema_rejects_invalid_call_before_tool_execution():
