@@ -39,8 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema configuration raises `ToolSchemaConfigurationError` at construction;
   non-finite numbers are rejected whenever value bounds are configured. The
   built-in calculator, Wikipedia, summarizer, and translator tools now declare
-  schemas that preserve the existing `input`/`task`/`query`/`text` aliases
-  while rejecting unknown or non-text-only mapping payloads before execution.
+  schemas that mirror the existing payload normalizer, including
+  `input`/`task`/`query`/`text`, metadata-bearing calls, and single-string
+  mappings, while rejecting shapes that cannot resolve to one text payload.
   Tools without a schema behave as before.
 - Durable failure records: `Environment(failure_log=FailureLog(path))` appends
   one JSON line per handled turn failure (both `raise` and `return` policies,
