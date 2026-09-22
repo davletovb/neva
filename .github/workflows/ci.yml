@@ -27,7 +27,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Black
-        run: black --check .
+        run: black --diff --check .
 
       - name: isort
         run: isort --check-only .
