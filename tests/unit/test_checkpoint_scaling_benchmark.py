@@ -113,3 +113,20 @@ def test_invalid_repeat_is_rejected():
     )
     with pytest.raises(ValueError, match="repeat must be positive"):
         run_case(case, repeat=0)
+
+
+def test_run_case_preserves_existing_files_in_workdir(tmp_path):
+    existing = tmp_path / "unit-0.json"
+    existing.write_text("keep me", encoding="utf-8")
+    case = BenchmarkCase(
+        name="unit",
+        agents=1,
+        turns_per_agent=1,
+        message_chars=8,
+        environment_bytes=8,
+    )
+
+    run_case(case, repeat=1, workdir=tmp_path)
+
+    assert existing.read_text(encoding="utf-8") == "keep me"
+    assert list(tmp_path.iterdir()) == [existing]
