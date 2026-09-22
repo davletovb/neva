@@ -72,7 +72,6 @@ def test_constructor_trims_a_copy_of_supplied_history():
     assert len(original) == 4
 
 
-
 @pytest.mark.parametrize("limit", [0, -1, True, 1.5, "32"])
 def test_invalid_turn_byte_limit_rejected(limit):
     with pytest.raises(ValueError, match="max_turn_bytes"):
