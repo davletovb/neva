@@ -14,8 +14,8 @@ def make_agent():
     [
         MathTool(),
         WikipediaTool(summary_sentences=1),
-        SummarizerTool(summarizer_factory=lambda: (lambda text: "summary")),
-        TranslatorTool(translator_factory=lambda: (lambda text: "translated")),
+        SummarizerTool(summarizer_factory=lambda: lambda text: "summary"),
+        TranslatorTool(translator_factory=lambda: lambda text: "translated"),
     ],
 )
 def test_builtins_declare_argument_schema(tool):
@@ -27,8 +27,8 @@ def test_builtins_declare_argument_schema(tool):
     [
         MathTool(),
         WikipediaTool(summary_sentences=1),
-        SummarizerTool(summarizer_factory=lambda: (lambda text: "summary")),
-        TranslatorTool(translator_factory=lambda: (lambda text: "translated")),
+        SummarizerTool(summarizer_factory=lambda: lambda text: "summary"),
+        TranslatorTool(translator_factory=lambda: lambda text: "translated"),
     ],
 )
 @pytest.mark.parametrize("alias", ["input", "task", "query", "text"])
@@ -41,8 +41,8 @@ def test_builtin_schema_preserves_supported_text_aliases(tool, alias):
     [
         MathTool(),
         WikipediaTool(summary_sentences=1),
-        SummarizerTool(summarizer_factory=lambda: (lambda text: "summary")),
-        TranslatorTool(translator_factory=lambda: (lambda text: "translated")),
+        SummarizerTool(summarizer_factory=lambda: lambda text: "summary"),
+        TranslatorTool(translator_factory=lambda: lambda text: "translated"),
     ],
 )
 def test_builtin_schema_rejects_payloads_that_cannot_normalise_to_text(tool):
@@ -55,8 +55,8 @@ def test_builtin_schema_rejects_payloads_that_cannot_normalise_to_text(tool):
     [
         MathTool(),
         WikipediaTool(summary_sentences=1),
-        SummarizerTool(summarizer_factory=lambda: (lambda text: "summary")),
-        TranslatorTool(translator_factory=lambda: (lambda text: "translated")),
+        SummarizerTool(summarizer_factory=lambda: lambda text: "summary"),
+        TranslatorTool(translator_factory=lambda: lambda text: "translated"),
     ],
 )
 def test_builtin_schema_preserves_single_string_mapping_and_metadata(tool):
