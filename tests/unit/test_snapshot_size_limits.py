@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import neva.utils.state_management as state_management
 from neva.utils.state_management import create_snapshot, load_snapshot, save_snapshot
 
 
@@ -120,3 +121,65 @@ def test_oversized_load_rejected_before_decode_or_parse(tmp_path):
     path.write_bytes(b"\xff" * 100)
     with pytest.raises(ValueError, match="exceeds max_bytes"):
         load_snapshot(path, max_bytes=10)
+
+
+def test_save_streams_without_calling_to_json(tmp_path, monkeypatch):
+    snapshot = create_snapshot(environment_state={"items": list(range(1000))})
+    path = tmp_path / "snapshot.json"
+
+    def fail_to_json():
+        raise AssertionError("save_snapshot should not materialise to_json()")
+
+    monkeypatch.setattr(snapshot, "to_json", fail_to_json)
+
+    save_snapshot(snapshot, path)
+
+    loaded = load_snapshot(path)
+    assert loaded.environment_state == snapshot.environment_state
+
+
+def test_save_uses_bounded_spooled_buffer(tmp_path, monkeypatch):
+    calls = []
+    writes = []
+
+    class RecordingSpool(io.BytesIO):
+        def write(self, data):
+            writes.append(len(data))
+            return super().write(data)
+
+    def recording_spool(*, max_size, mode):
+        calls.append((max_size, mode))
+        return RecordingSpool()
+
+    monkeypatch.setattr(
+        state_management.tempfile,
+        "SpooledTemporaryFile",
+        recording_spool,
+    )
+
+    snapshot = create_snapshot(
+        environment_state={"items": [{"value": index} for index in range(500)]}
+    )
+    path = tmp_path / "snapshot.json"
+    expected = snapshot.to_json().encode("utf-8")
+
+    save_snapshot(snapshot, path)
+
+    assert calls == [(65536, "w+b")]
+    assert len(writes) > 1
+    assert max(writes) < len(expected)
+    assert path.read_bytes() == expected
+
+
+def test_serialization_failure_preserves_existing_file(tmp_path):
+    class Unsupported:
+        pass
+
+    path = tmp_path / "snapshot.json"
+    path.write_text("existing checkpoint", encoding="utf-8")
+    snapshot = create_snapshot(environment_state={"bad": Unsupported()})
+
+    with pytest.raises(TypeError, match="not JSON serialisable"):
+        save_snapshot(snapshot, path)
+
+    assert path.read_text(encoding="utf-8") == "existing checkpoint"
