@@ -37,8 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before executing the tool; violations and schema failures return a failed
   `ToolResponse` carrying a reason and never reach the tool body. Invalid
   schema configuration raises `ToolSchemaConfigurationError` at construction;
-  non-finite numbers are rejected whenever value bounds are configured. Tools
-  without a schema behave as before.
+  non-finite numbers are rejected whenever value bounds are configured. The
+  built-in calculator, Wikipedia, summarizer, and translator tools now declare
+  schemas that preserve the existing `input`/`task`/`query`/`text` aliases
+  while rejecting unknown or non-text-only mapping payloads before execution.
+  Tools without a schema behave as before.
 - Durable failure records: `Environment(failure_log=FailureLog(path))` appends
   one JSON line per handled turn failure (both `raise` and `return` policies,
   including scheduler-selection failures), flushed and fsynced by default.
