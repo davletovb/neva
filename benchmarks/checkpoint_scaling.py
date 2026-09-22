@@ -88,15 +88,21 @@ STANDARD_CASES: Tuple[BenchmarkCase, ...] = (
 
 
 def _measure(operation: Callable[[], T]) -> Tuple[T, Dict[str, float]]:
+    """Measure wall time and Python allocations in separate passes."""
+
+    gc.collect()
+    started = time.perf_counter()
+    result = operation()
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
     gc.collect()
     tracemalloc.start()
-    started = time.perf_counter()
     try:
-        result = operation()
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        operation()
         _, peak_bytes = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
+
     return result, {
         "elapsed_ms": elapsed_ms,
         "peak_python_bytes": float(peak_bytes),
@@ -159,6 +165,8 @@ def run_case(
             loaded, load_metrics = _measure(lambda: load_snapshot(checkpoint_path))
             if loaded.environment_state != snapshot.environment_state:
                 raise RuntimeError("checkpoint roundtrip changed environment_state")
+            if loaded.agent_states != snapshot.agent_states:
+                raise RuntimeError("checkpoint roundtrip changed agent_states")
 
             samples.append(
                 {
@@ -199,6 +207,7 @@ def run_benchmark(
     *,
     repeat: int = 3,
     workdir: Optional[Path] = None,
+    git_sha: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a sequence of checkpoint workloads with machine metadata."""
 
@@ -206,17 +215,27 @@ def run_benchmark(
         "schema_version": 1,
         "python_version": platform.python_version(),
         "platform": platform.platform(),
-        "git_sha": os.environ.get("GITHUB_SHA"),
+        "git_sha": git_sha if git_sha is not None else os.environ.get("GITHUB_SHA"),
         "measurement_notes": {
-            "elapsed": "wall-clock milliseconds from time.perf_counter",
+            "elapsed": (
+                "wall-clock milliseconds from an untraced time.perf_counter pass; "
+                "each stage is executed again separately for memory measurement"
+            ),
             "memory": (
-                "peak Python allocations from tracemalloc during each stage; "
+                "peak Python allocations from a separate tracemalloc pass; "
                 "excludes OS page cache and temporary/destination file space"
             ),
             "thresholds": "none; compare results on equivalent hardware",
         },
         "cases": [run_case(case, repeat=repeat, workdir=workdir) for case in cases],
     }
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
@@ -229,9 +248,18 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--repeat",
-        type=int,
+        type=_positive_int,
         default=3,
         help="samples per case; medians are reported",
+    )
+    parser.add_argument(
+        "--workdir",
+        type=Path,
+        help="filesystem on which temporary checkpoint files should be measured",
+    )
+    parser.add_argument(
+        "--git-sha",
+        help="optional revision identifier; defaults to the GITHUB_SHA environment variable",
     )
     parser.add_argument(
         "--output",
@@ -244,7 +272,12 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_args(argv)
     cases = QUICK_CASES if args.profile == "quick" else STANDARD_CASES
-    result = run_benchmark(cases, repeat=args.repeat)
+    result = run_benchmark(
+        cases,
+        repeat=args.repeat,
+        workdir=args.workdir,
+        git_sha=args.git_sha,
+    )
     rendered = json.dumps(result, indent=2, sort_keys=True)
     print(rendered)
     if args.output is not None:
