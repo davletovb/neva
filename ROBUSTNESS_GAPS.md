@@ -4,7 +4,7 @@
 
 Updated against `main` at `7f038ecc` (PRs #49–#52, #54–#63 merged).
 
-- Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization through a fixed 64 KiB spool instead of materialising the complete JSON string and byte string.
+- Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
@@ -90,7 +90,7 @@ Regex prompt validation is input hygiene, not protection against prompt injectio
 
 ### 4. Checkpoint and transcript scalability — partial
 
-- Opt-in checkpoint file-size limits merged in PR #56 (`save_snapshot(..., max_bytes=N)`, `load_snapshot(..., max_bytes=N)`). PR #64 streams save serialization with incremental byte-limit enforcement through a 64 KiB spool, preserving the destination on overflow or serialization failure. Remaining memory risks include the snapshot object graph, `create_snapshot()` deep copies, decoded loads, and temporary expansion of an individual JSON scalar; large-state performance benchmarks remain open.
+- Opt-in checkpoint file-size limits merged in PR #56 (`save_snapshot(..., max_bytes=N)`, `load_snapshot(..., max_bytes=N)`). PR #64 streams save serialization with incremental byte-limit enforcement into a sibling temporary file, then fsyncs and atomically installs it with `os.replace`, preserving the destination on overflow, serialization failure, staging-write failure, or replacement failure. The tradeoff is temporary disk usage on the destination filesystem roughly equal to the new checkpoint (while the old checkpoint may still exist). Remaining memory risks include the snapshot object graph, `create_snapshot()` deep copies, decoded loads, and temporary expansion of an individual JSON scalar; large-state performance benchmarks remain open.
 - Incremental/externalized persistence where justified by measured scale.
 - Support for components currently requiring custom checkpoint hooks.
 - Conversation retention is implemented by merged PR #55: optional `ConversationState(max_turns=N)`, preserved through serialization and restore. This is distinct from request-history trimming and does not limit bytes per turn.
