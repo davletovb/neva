@@ -231,3 +231,54 @@ def test_legacy_explicit_rate_limiter_disables_shared_rate_but_keeps_concurrency
     assert agent._rate_limiter is limiter
     assert agent._provider_resources.rate is None
     assert agent._provider_resources.max_concurrency == 3
+
+
+
+def test_async_cancel_during_inflight_call_settles_once_and_caches(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(url)
+        entered.set()
+        assert release.wait(timeout=3)
+        return _FakeResponse(
+            text="paid reply",
+            usage={"prompt_tokens": 1000, "completion_tokens": 1000},
+        )
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    agent = GPTAgent(
+        api_key="cancel-inflight",
+        provider="openai",
+        provider_rate=None,
+        provider_spend_limit=1.0,
+        max_retries=0,
+    )
+
+    async def scenario():
+        task = asyncio.create_task(agent.arespond("inflight"))
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        release.set()
+        for _ in range(200):
+            resources = agent._provider_resources
+            if resources.spent > 0 and resources.reserved == 0:
+                break
+            await asyncio.sleep(0.01)
+
+        assert agent._provider_resources.spent == pytest.approx(0.00075)
+        assert agent._provider_resources.reserved == 0.0
+
+    asyncio.run(scenario())
+
+    before = len(calls)
+    assert agent.respond("inflight") == "paid reply"
+    assert len(calls) == before
+    assert agent._provider_resources.spent == pytest.approx(0.00075)
