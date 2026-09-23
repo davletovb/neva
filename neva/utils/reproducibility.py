@@ -264,14 +264,16 @@ def _scheduler_config(scheduler: Optional["Scheduler"]) -> Optional[Dict[str, An
     if hasattr(scheduler, "_group_index"):
         config["group_index"] = int(getattr(scheduler, "_group_index"))
 
-    if hasattr(scheduler, "_queue"):
+    for attribute, key in (("_queue", "queue"), ("_event_queue", "event_queue")):
+        if not hasattr(scheduler, attribute):
+            continue
         rendered = []
-        for item in list(getattr(scheduler, "_queue")):
+        for item in list(getattr(scheduler, attribute)):
             if isinstance(item, tuple) and len(item) == 2:
                 rendered.append([_json_native(item[0]), getattr(item[1], "name", str(item[1]))])
             else:
                 rendered.append(getattr(item, "name", _json_native(item)))
-        config["queue"] = rendered
+        config[key] = rendered
 
     entries = getattr(scheduler, "_entries", None)
     if isinstance(entries, list):
@@ -346,6 +348,32 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
         generation.setdefault("max_length", 200)
 
     backend = agent.llm_backend
+    state = agent.conversation_state
+    conversation = {
+        "max_turns": state.max_turns,
+        "max_turn_bytes": state.max_turn_bytes,
+        "max_history_bytes": state.max_history_bytes,
+        "turns": [
+            {"speaker": turn.speaker, "message": turn.message}
+            for turn in state.turns
+        ],
+    }
+    tools = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "capabilities": list(tool.capabilities),
+        }
+        for tool in sorted(agent.tools, key=lambda item: item.name)
+    ]
+    memory = agent.memory
+    memory_config: Dict[str, Any] = {
+        "type": _type_name(memory) if memory is not None else None,
+    }
+    memory_hook = getattr(memory, "reproducibility_config", None)
+    if callable(memory_hook):
+        memory_config["custom"] = _json_native(memory_hook())
+
     return {
         "name": agent.name,
         "type": _type_name(agent),
@@ -357,8 +385,41 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
         },
         "cache": _cache_policy(agent),
         "backend": _callable_name(backend) if backend is not None else None,
-        "tools": sorted(tool.name for tool in agent.tools),
+        "attributes": _json_native(dict(sorted(agent.attributes.items()))),
+        "conversation": conversation,
+        "memory": memory_config,
+        "tools": tools,
     }
+
+
+def _environment_config(environment: "Environment") -> Dict[str, Any]:
+    excluded = {
+        "agents",
+        "scheduler",
+        "conversation_id",
+        "failure_log",
+        "recovery_policy",
+        "state",
+        "error_policy",
+        "error_value",
+    }
+    public_config = {
+        name: _json_native(value)
+        for name, value in sorted(vars(environment).items())
+        if not name.startswith("_") and name not in excluded
+    }
+    config: Dict[str, Any] = {
+        "type": _type_name(environment),
+        "error_policy": environment.error_policy,
+        "error_value": environment.error_value,
+        "recovery_policy": _json_native(vars(environment.recovery_policy)),
+        "state": _json_native(environment.state),
+        "public_config": public_config,
+    }
+    hook = getattr(environment, "reproducibility_config", None)
+    if callable(hook):
+        config["custom"] = _json_native(hook())
+    return config
 
 
 def _normalize_prompts(
@@ -520,11 +581,7 @@ def create_run_manifest(
         created_at=datetime.now(timezone.utc).isoformat(),
         seed=seed,
         prompts=_normalize_prompts(prompts),
-        environment={
-            "type": _type_name(environment),
-            "error_policy": environment.error_policy,
-            "recovery_policy": _json_native(vars(environment.recovery_policy)),
-        },
+        environment=_environment_config(environment),
         scheduler=_scheduler_config(environment.scheduler),
         agents=agents,
         dependencies=_dependency_versions(dependency_names),
@@ -683,13 +740,13 @@ class ReplayTape:
         return _record
 
     def attach_recording(self, agents: Iterable["AIAgent"]) -> None:
-        """Install recording wrappers after every agent boundary validates."""
+        """Install recording wrapper factories after every agent validates."""
 
         agent_list = list(agents)
-        backends = [agent.replayable_backend() for agent in agent_list]
-        wrappers = [self.recording_backend(backend) for backend in backends]
-        for agent, wrapper in zip(agent_list, wrappers):
-            agent.set_llm_backend(wrapper)
+        for agent in agent_list:
+            agent.replayable_backend()
+        for agent in agent_list:
+            agent.set_model_backend_wrapper(self.recording_backend)
 
     def attach_replay(
         self,
@@ -701,6 +758,7 @@ class ReplayTape:
 
         backend = self.replay_backend(manifest=manifest)
         for agent in agents:
+            agent.set_model_backend_wrapper(None)
             agent.set_llm_backend(backend)
         return backend
 
