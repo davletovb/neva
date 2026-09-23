@@ -369,9 +369,7 @@ class ConversationState:
 
     def _effective_turn_byte_limit(self) -> Optional[int]:
         limits = [
-            limit
-            for limit in (self.max_turn_bytes, self.max_history_bytes)
-            if limit is not None
+            limit for limit in (self.max_turn_bytes, self.max_history_bytes) if limit is not None
         ]
         return min(limits) if limits else None
 
@@ -386,7 +384,10 @@ class ConversationState:
         if self.max_turns is not None:
             self._drop_prefix(max(0, len(self.turns) - self.max_turns))
 
-        if self.max_history_bytes is not None and self._stored_message_bytes > self.max_history_bytes:
+        if (
+            self.max_history_bytes is not None
+            and self._stored_message_bytes > self.max_history_bytes
+        ):
             drop_count = 0
             remaining_bytes = self._stored_message_bytes
             while drop_count < len(self.turns) and remaining_bytes > self.max_history_bytes:
