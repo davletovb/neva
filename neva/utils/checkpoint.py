@@ -23,6 +23,7 @@ from neva.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
 from neva.utils.state_management import (
     CheckpointLimits,
     _CheckpointLimitExceeded,
+    _json_key_text,
     _validate_checkpoint_value,
 )
 
@@ -31,25 +32,19 @@ def _type_name(value: Any) -> str:
     return f"{type(value).__module__}.{type(value).__qualname__}"
 
 
-def _json_key_text(key: object) -> str:
-    if isinstance(key, str):
-        return key
-    if key is True:
-        return "true"
-    if key is False:
-        return "false"
-    if key is None:
-        return "null"
-    if type(key) in (int, float):
-        return str(key)
-    raise TypeError("Checkpoint runtime mapping keys are not JSON serializable")
-
-
 def _clone_json_native(value: Any) -> Any:
     """Clone native JSON data while matching a dumps/loads roundtrip shape."""
 
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
     if isinstance(value, dict):
         return {_json_key_text(key): _clone_json_native(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -69,9 +64,14 @@ def _records(records: Any) -> Any:
 def _load_records(records: Any) -> Any:
     from datetime import datetime
 
-    return [
-        MemoryRecord(**dict(r, timestamp=datetime.fromisoformat(r["timestamp"]))) for r in records
-    ]
+    restored = []
+    for record in records:
+        payload = dict(record)
+        payload["timestamp"] = datetime.fromisoformat(record["timestamp"])
+        if "metadata" in payload:
+            payload["metadata"] = deepcopy(payload["metadata"])
+        restored.append(MemoryRecord(**payload))
+    return restored
 
 
 def _record(record: MemoryRecord) -> Dict[str, Any]:
@@ -340,11 +340,13 @@ def restore_runtime(
     runtime: Optional[Dict[str, Any]],
     *,
     limits: Optional[CheckpointLimits] = None,
+    validate_limits: bool = True,
 ) -> None:
     if runtime is None:
         raise ValueError("Missing checkpoint runtime state")
 
-    _validate_checkpoint_value(runtime, limits, native_only=True)
+    if validate_limits:
+        _validate_checkpoint_value(runtime, limits, native_only=True)
     agents = {agent.name: agent for agent in environment.agents}
     if len(agents) != len(environment.agents) or set(agents) != set(runtime["agents"]):
         raise ValueError("Checkpoint agent population does not match")
