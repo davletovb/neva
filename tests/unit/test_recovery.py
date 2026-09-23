@@ -1,3 +1,4 @@
+import errno
 import json
 import multiprocessing
 import threading
@@ -210,6 +211,43 @@ def test_deliberate_cancellation_is_never_retried():
     assert state["escalations"] == 1
 
 
+
+def test_default_policy_does_not_count_retry_exhaustion():
+    calls = []
+
+    def backend(prompt):
+        calls.append(prompt)
+        raise RuntimeError("down")
+
+    env = Environment(
+        RoundRobinScheduler(),
+        error_policy="return",
+        error_value="offline",
+    )
+    env.register_agent(TransformerAgent(name="alice", llm_backend=backend))
+
+    assert env.step() == "offline"
+    assert len(calls) == 1
+    state = env.recovery_state()
+    assert state["retries_attempted"] == 0
+    assert state["retries_exhausted"] == 0
+    assert state["escalations"] == 1
+
+
+def test_none_agent_response_remains_a_normal_completion():
+    class NoneAgent(TransformerAgent):
+        def step(self, observation=None):
+            return None
+
+    env = Environment(RoundRobinScheduler())
+    env.register_agent(NoneAgent(name="alice", llm_backend=lambda prompt: "unused"))
+
+    assert env.step() is None
+    state = env.recovery_state()
+    assert state["failures_seen"] == 0
+    assert state["escalations"] == 0
+
+
 def test_failure_log_writes_physical_jsonl_newlines(tmp_path):
     path = tmp_path / "failures.jsonl"
     log = FailureLog(path, fsync=False)
@@ -223,6 +261,23 @@ def test_failure_log_writes_physical_jsonl_newlines(tmp_path):
         "alice",
         "bob",
     ]
+
+
+
+def test_failure_log_load_falls_back_when_process_lock_is_read_only(tmp_path, monkeypatch):
+    path = tmp_path / "failures.jsonl"
+    writer = FailureLog(path, fsync=False)
+    writer.append(_record("alice"))
+
+    reader = FailureLog(path, fsync=False)
+
+    def read_only_lock():
+        raise PermissionError(errno.EACCES, "read-only")
+
+    monkeypatch.setattr(reader, "_process_lock", read_only_lock)
+    loaded = reader.load()
+
+    assert [record.agent_name for record in loaded] == ["alice"]
 
 
 def test_failure_log_enforces_utf8_record_ceiling(tmp_path):
