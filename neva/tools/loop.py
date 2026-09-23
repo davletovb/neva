@@ -390,7 +390,9 @@ def run_tool_loop(
 
         if not isinstance(raw, str):
             reason = "model callable must return a string"
-            rendered = _clip(repr(raw), active_config.max_model_output_chars)
+            # Do not call repr(raw): arbitrary model wrappers can return huge
+            # containers or objects with expensive/raising __repr__ methods.
+            rendered = _clip(f"<{type(raw).__name__}>", active_config.max_model_output_chars)
             steps.append(
                 ToolLoopStep(
                     index=index,
