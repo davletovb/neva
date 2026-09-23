@@ -343,3 +343,86 @@ def test_circuit_breaker_allows_only_one_concurrent_half_open_probe():
 def test_recovery_policy_rejects_invalid_configuration(kwargs):
     with pytest.raises(ValueError):
         RecoveryPolicy(**kwargs)
+
+
+
+def test_context_failure_stays_inside_recovery_dispatch(tmp_path):
+    class FlakyContextEnvironment(Environment):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.context_calls = 0
+
+        def context(self):
+            self.context_calls += 1
+            if self.context_calls == 1:
+                raise RuntimeError("context unavailable")
+            return "stable context"
+
+    prompts = []
+    log = FailureLog(tmp_path / "failures.jsonl", include_context=True)
+    env = FlakyContextEnvironment(
+        RoundRobinScheduler(),
+        error_policy="return",
+        error_value="offline",
+        failure_log=log,
+        recovery_policy=RecoveryPolicy(max_retries=1),
+    )
+    env.register_agent(
+        TransformerAgent(name="alice", llm_backend=lambda prompt: prompts.append(prompt) or "ok")
+    )
+
+    assert env.step() == "ok"
+    assert env.context_calls == 2
+    assert len(prompts) == 1
+    record = log.load()[0]
+    assert record.action == "retry"
+    assert record.context is None
+
+
+def test_completion_hook_failure_does_not_rerun_agent(tmp_path):
+    class ExplodingHookEnvironment(Environment):
+        def on_turn_complete(self, response):
+            raise RuntimeError("hook failed")
+
+    calls = []
+    log = FailureLog(tmp_path / "failures.jsonl")
+    env = ExplodingHookEnvironment(
+        RoundRobinScheduler(),
+        error_policy="return",
+        error_value="offline",
+        failure_log=log,
+        recovery_policy=RecoveryPolicy(max_retries=4),
+    )
+    env.register_agent(
+        TransformerAgent(name="alice", llm_backend=lambda prompt: calls.append(prompt) or "done")
+    )
+
+    assert env.step() == "offline"
+    assert len(calls) == 1
+    records = log.load()
+    assert len(records) == 1
+    assert records[0].error_message == "hook failed"
+    assert records[0].action == "return"
+    assert env.recovery_state()["retries_attempted"] == 0
+
+
+def test_checkpoint_excludes_recovery_runtime_objects(tmp_path):
+    policy = RecoveryPolicy(max_retries=2, backoff=0.1)
+    env = Environment(RoundRobinScheduler(), recovery_policy=policy)
+    env.register_agent(TransformerAgent(name="alice", llm_backend=lambda prompt: "ok"))
+
+    snapshot = env.snapshot()
+    raw = snapshot.to_json()
+    assert "RecoveryPolicy" not in raw
+    assert "_recovery_lock" not in raw
+
+    restored = Environment(
+        RoundRobinScheduler(),
+        recovery_policy=policy,
+        failure_log=FailureLog(tmp_path / "restored.jsonl"),
+    )
+    restored.register_agent(TransformerAgent(name="alice", llm_backend=lambda prompt: "ok"))
+    restored.restore(snapshot)
+
+    assert restored.recovery_policy is policy
+    assert restored.recovery_state()["failures_seen"] == 0
