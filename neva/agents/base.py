@@ -11,8 +11,8 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import wraps
 from datetime import datetime
+from functools import wraps
 from time import perf_counter
 from typing import (
     TYPE_CHECKING,
