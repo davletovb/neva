@@ -369,7 +369,12 @@ class AIAgent(ABC):
         try:
             schema_reason = tool._schema_reason(arguments)
         except ToolExecutionError as exc:
-            logger.warning("Tool '%s' schema failed for agent '%s': %s", call.name, self.name, exc)
+            logger.warning(
+                "Tool '%s' schema failed for agent '%s': %s",
+                call.name,
+                self.name,
+                exc,
+            )
             return ToolResponse(
                 name=tool.name,
                 arguments=arguments,
