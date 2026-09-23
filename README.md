@@ -380,22 +380,23 @@ scheduler = create_scheduler("my_scheduler")
   completions unless `include_content=True`. This is not protection against
   prompt injection, unauthorized tool use, or account-wide overspend. Tools
   run with the process's network identity.
-- **Tool guardrails**: `ToolGuard` (pass `tool_guard=` when constructing an
-  agent) enforces code-level tool policy independent of prompt content: an
-  allowlist, an approval hook receiving each `ToolCall` (the call proceeds
-  only when it returns `True`; anything else denies), and execution limits via
-  `ToolLimits(timeout=..., max_output_chars=...)`. Denied calls return failed
-  responses without running the tool, timeouts surface as `ToolTimeoutError`
-  and leave their daemon worker thread running (it is never forcibly stopped
-  or re-joined at exit), and oversized outputs are truncated with a marker.
-  Tools may also declare validated argument schemas
-  (`argument_schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=2_000)})`;
-  invalid schema configuration raises `ToolSchemaConfigurationError` at
-  construction). `call_tool` validates mapping arguments — a raw string counts
-  as `{"input": ...}`, and `ToolCall.from_text` metadata keys require
-  `allow_extra=True` — and returns a failed response without executing the
-  tool when validation fails. Both guardrails and schema validation apply to
-  `call_tool`; direct `Tool.use` calls bypass them.
+- **Tool guardrails**: `ToolGuard` enforces code-level tool policy independent
+  of prompt content: allowlists, approval hooks, argument schemas, per-tool
+  concurrency quotas, and execution ceilings. Agent-level guards are passed
+  with `tool_guard=`; a tool can also carry a guard through
+  `tool.set_tool_guard(...)`, which applies even to direct `Tool.use()`
+  calls. Direct calls now enforce declared argument schemas as well, so they no
+  longer bypass the validation/guard path. `AIAgent.call_tool()` composes the
+  agent and tool guards and uses the stricter timeout/output/memory ceilings.
+  `ToolLimits(max_concurrency=N)` bounds simultaneous calls to one tool
+  object. The default `timeout=` mode remains thread-based for compatibility
+  and cannot forcibly stop arbitrary synchronous code; opt into
+  `isolate_process=True` for a hard process timeout. In isolated mode output
+  truncation occurs before IPC, and `max_memory_bytes=` can enforce
+  `resource.RLIMIT_AS` where supported. Process isolation is not a complete
+  sandbox: spawn-only platforms require picklable tools, RLIMIT support is
+  platform-dependent, and child tools retain the application's filesystem and
+  network credentials unless a stronger external sandbox is provided.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Built-in
   provider calls share account-scoped rate/concurrency admission in-process;
