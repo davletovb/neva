@@ -134,11 +134,7 @@ class FailureLog:
             if not candidate.name.startswith(prefix):
                 continue
             suffix = candidate.name[len(prefix) :]
-            if (
-                suffix.isascii()
-                and suffix.isdigit()
-                and int(suffix) > self.backup_count
-            ):
+            if suffix.isascii() and suffix.isdigit() and int(suffix) > self.backup_count:
                 try:
                     candidate.unlink()
                 except FileNotFoundError:
