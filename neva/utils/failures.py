@@ -169,7 +169,7 @@ class FailureLog:
 
                 handle.seek(0, os.SEEK_END)
                 if handle.tell() == 0:
-                    handle.write(b"\\0")
+                    handle.write(b"\0")
                     handle.flush()
                 handle.seek(0)
                 while True:
@@ -194,7 +194,7 @@ class FailureLog:
 
     @staticmethod
     def _encode_record(failure: FailureRecord) -> bytes:
-        return (json.dumps(failure.to_dict(), sort_keys=True) + "\\n").encode("utf-8")
+        return (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
 
     def _bounded_record(self, failure: FailureRecord) -> tuple[FailureRecord, bytes]:
         encoded = self._encode_record(failure)
@@ -287,8 +287,8 @@ class FailureLog:
                 if current_size > 0:
                     with self.path.open("rb") as existing:
                         existing.seek(-1, os.SEEK_END)
-                        if existing.read(1) != b"\\n":
-                            separator = b"\\n"
+                        if existing.read(1) != b"\n":
+                            separator = b"\n"
 
                 if (
                     self.rotate_bytes is not None
