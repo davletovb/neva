@@ -13,7 +13,12 @@ from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import SchedulingError
 from neva.utils.failures import FailureLog, FailureRecord
 from neva.utils.recovery import RecoveryPolicy, RecoveryState
-from neva.utils.state_management import ConversationState, SimulationSnapshot, create_snapshot
+from neva.utils.state_management import (
+    CheckpointLimits,
+    ConversationState,
+    SimulationSnapshot,
+    create_snapshot,
+)
 from neva.utils.telemetry import get_telemetry
 
 logger = logging.getLogger(__name__)
@@ -385,26 +390,41 @@ class Environment:
     def run(self, steps: int) -> List[Optional[str]]:
         return [self.step() for _ in range(steps)]
 
-    def snapshot(self) -> SimulationSnapshot:
+    def snapshot(
+        self,
+        *,
+        limits: Optional[CheckpointLimits] = None,
+    ) -> SimulationSnapshot:
         from neva.utils.checkpoint import capture_runtime
 
         snapshot = create_snapshot(
             environment_state=self.state,
             agent_states=(agent.conversation_state for agent in self.agents),
+            limits=limits,
         )
         snapshot.version = 2
-        snapshot.runtime_state = capture_runtime(self)
+        snapshot.runtime_state = capture_runtime(self, limits=limits)
+        snapshot.validate_limits(limits)
         return snapshot
 
-    def restore(self, snapshot: SimulationSnapshot) -> None:
+    def restore(
+        self,
+        snapshot: SimulationSnapshot,
+        *,
+        limits: Optional[CheckpointLimits] = None,
+    ) -> None:
         from copy import deepcopy
 
         from neva.utils.checkpoint import restore_runtime
 
+        snapshot.validate_limits(limits)
         if snapshot.version == 2:
-            restore_runtime(self, snapshot.runtime_state)
+            restore_runtime(self, snapshot.runtime_state, limits=limits)
         elif snapshot.version != 1:
             raise ValueError(f"Unsupported snapshot version: {snapshot.version}")
+
+        # The graph has already been checked against the optional envelope, so
+        # this isolated environment-state copy cannot grow beyond that bound.
         self.state = deepcopy(snapshot.environment_state)
         name_to_state = {
             name: ConversationState.from_dict(state)
