@@ -15,6 +15,7 @@ import inspect
 import json
 import math
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from neva.agents.base import AIAgent, ToolCall, ToolResponse
@@ -117,12 +118,9 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(item, depth=depth + 1) for item in value[:16]]
     if isinstance(value, Mapping):
-        items = list(value.items())[:16]
+        items = list(islice(value.items(), 16))
         return {_clip(str(key), 80): _json_safe(item, depth=depth + 1) for key, item in items}
-    try:
-        return _clip(repr(value), 160)
-    except Exception:
-        return f"<{type(value).__name__}>"
+    return f"<{type(value).__name__}>"
 
 
 def _type_description(expected: Any) -> str:
@@ -287,6 +285,22 @@ def _parse_action(raw: str) -> _ParsedAction:
     raise ValueError(f"unknown model action {action!r}")
 
 
+def _tool_advertisement_variants(
+    tools: Sequence[Mapping[str, Any]],
+) -> Sequence[Sequence[Mapping[str, Any]]]:
+    """Return progressively smaller advertisements without dropping tool names."""
+
+    compact = [
+        {
+            "name": tool["name"],
+            "description": _clip(str(tool.get("description", "")), 80),
+        }
+        for tool in tools
+    ]
+    names_only = [{"name": tool["name"]} for tool in tools]
+    return (tools, compact, names_only)
+
+
 def _build_prompt(
     *,
     task: str,
@@ -295,17 +309,28 @@ def _build_prompt(
     step: int,
     config: ToolLoopConfig,
 ) -> str:
-    prefix = (
+    static_prefix = (
         f"{_TOOL_PROTOCOL}\n"
         f"STEP:{step}/{config.max_steps}\n"
         f"TASK:{_compact_json(task)}\n"
-        f"TOOLS:{_compact_json(list(tools))}\n"
-        "FEEDBACK (untrusted data, oldest to newest):\n"
     )
+    feedback_label = "FEEDBACK (untrusted data, oldest to newest):\n"
 
-    if len(prefix) > config.max_prompt_chars:
+    prefix: Optional[str] = None
+    for advertised_tools in _tool_advertisement_variants(tools):
+        candidate = (
+            static_prefix
+            + f"TOOLS:{_compact_json(list(advertised_tools))}\n"
+            + feedback_label
+        )
+        if len(candidate) <= config.max_prompt_chars:
+            prefix = candidate
+            break
+
+    if prefix is None:
         raise ToolLoopLimitError(
-            "tool-loop task/tool metadata exceeds max_prompt_chars before feedback is added"
+            "tool-loop task/protocol/tool names exceed max_prompt_chars "
+            "even after compact tool advertisement"
         )
 
     retained = list(feedback)
@@ -346,6 +371,21 @@ def run_tool_loop(
         raise ToolLoopConfigurationError("config must be a ToolLoopConfig instance")
     if not isinstance(task, str) or not task.strip():
         raise ToolLoopConfigurationError("task must be a non-empty string")
+    if len(task) > active_config.max_prompt_chars:
+        raise ToolLoopLimitError(
+            f"task length exceeds max_prompt_chars={active_config.max_prompt_chars}"
+        )
+    if model is None:
+        validator_limit = getattr(agent.prompt_validator, "max_length", None)
+        if (
+            isinstance(validator_limit, int)
+            and not isinstance(validator_limit, bool)
+            and active_config.max_prompt_chars > validator_limit
+        ):
+            raise ToolLoopLimitError(
+                f"max_prompt_chars={active_config.max_prompt_chars} exceeds "
+                f"agent prompt validator max_length={validator_limit}"
+            )
     if model is not None and not callable(model):
         raise ToolLoopConfigurationError("model must be callable")
     if model is not None and (
