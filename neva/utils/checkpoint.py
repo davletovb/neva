@@ -5,7 +5,6 @@ scheduler implementations must provide explicit checkpoint hooks.
 """
 from __future__ import annotations
 
-import json
 from collections import deque
 from copy import deepcopy
 from dataclasses import asdict
@@ -21,6 +20,7 @@ from neva.memory import (
     VectorStoreMemory,
 )
 from neva.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
+from neva.utils.state_management import CheckpointLimits, _validate_checkpoint_value
 
 
 def _type_name(value: Any) -> str:
@@ -267,7 +267,11 @@ _ENV_FIELDS = {
 }
 
 
-def capture_runtime(environment: Any) -> Dict[str, Any]:
+def capture_runtime(
+    environment: Any,
+    *,
+    limits: Optional[CheckpointLimits] = None,
+) -> Dict[str, Any]:
     scheduler = environment.scheduler
     names = [agent.name for agent in environment.agents]
     if len(set(names)) != len(names):
@@ -289,45 +293,69 @@ def capture_runtime(environment: Any) -> Dict[str, Any]:
         "scheduler": capture_scheduler(scheduler),
     }
     try:
-        # A JSON roundtrip both isolates the state and rejects unsupported values.
-        return json.loads(json.dumps(runtime, allow_nan=False))
+        # Structural validation avoids the previous full JSON string + parsed
+        # clone amplification. A bounded deepcopy then isolates live state.
+        _validate_checkpoint_value(runtime, limits, native_only=True)
+        if limits is None:
+            _validate_checkpoint_value(
+                runtime,
+                CheckpointLimits(),
+                native_only=True,
+            )
+        return deepcopy(runtime)
     except (TypeError, ValueError) as exc:
         raise ValueError("Environment checkpoint fields must be JSON serializable") from exc
 
 
-def restore_runtime(environment: Any, runtime: Optional[Dict[str, Any]]) -> None:
+def restore_runtime(
+    environment: Any,
+    runtime: Optional[Dict[str, Any]],
+    *,
+    limits: Optional[CheckpointLimits] = None,
+) -> None:
     if runtime is None:
         raise ValueError("Missing checkpoint runtime state")
-    runtime = deepcopy(runtime)
+
+    _validate_checkpoint_value(runtime, limits, native_only=True)
     agents = {agent.name: agent for agent in environment.agents}
     if len(agents) != len(environment.agents) or set(agents) != set(runtime["agents"]):
         raise ValueError("Checkpoint agent population does not match")
     if runtime["environment_type"] != _type_name(environment):
         raise ValueError("Checkpoint environment type does not match")
+
     apply_scheduler = prepare_scheduler(environment.scheduler, runtime["scheduler"], agents)
+
     # Stage memory restoration so a mismatch cannot partially mutate live agents.
+    # The runtime graph itself is read-only; avoiding deepcopy(runtime) prevents a
+    # second complete checkpoint graph from existing during restore.
     memories = {}
     ids = {}
+    attributes = {}
     budget_updates: Dict[int, Any] = {}
     for name, agent in agents.items():
         payload = runtime["agents"][name]
         if payload["type"] != _type_name(agent):
             raise ValueError("Checkpoint agent type does not match")
         ids[name] = UUID(payload["id"])
+        attributes[name] = deepcopy(payload["attributes"])
         memory = deepcopy(agent.memory, _memory_restore_memo(agent.memory))
         _restore_memory(memory, payload["memory"], budget_updates)
         memories[name] = memory
+
+    environment_extra = deepcopy(runtime["environment_extra"])
+
     apply_scheduler()
     for budget, embedding_calls in budget_updates.values():
         budget._embedding_calls = embedding_calls
     for name, agent in agents.items():
         agent.id = ids[name]
-        agent.attributes = runtime["agents"][name]["attributes"]
+        agent.attributes = attributes[name]
         agent.set_memory(memories[name])
         if agent.cache is not None:
             agent.cache.clear()
+
     for key in list(vars(environment)):
         if key not in _ENV_FIELDS:
             delattr(environment, key)
-    environment.__dict__.update(runtime["environment_extra"])
+    environment.__dict__.update(environment_extra)
     environment.conversation_id = runtime["conversation_id"]
