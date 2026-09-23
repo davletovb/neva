@@ -155,7 +155,7 @@ def _seed_scheduler(
         hook(scheduler_seed)
         seeded[path] = scheduler_seed
     elif hasattr(scheduler, "_rng"):
-        scheduler._rng = random.Random(scheduler_seed)
+        setattr(scheduler, "_rng", random.Random(scheduler_seed))
         seeded[path] = scheduler_seed
 
     children = getattr(scheduler, "_group_schedulers", None)
@@ -193,10 +193,10 @@ def seed_everything(
                 optional_status[name] = "not-installed"
                 continue
             if name == "numpy":
-                module.random.seed(seed % (2**32))
+                getattr(module, "random").seed(seed % (2**32))
                 optional_status[name] = "seeded"
             else:
-                module.manual_seed(seed)
+                getattr(module, "manual_seed")(seed)
                 cuda = getattr(module, "cuda", None)
                 if cuda is not None and callable(getattr(cuda, "manual_seed_all", None)):
                     cuda.manual_seed_all(seed)
@@ -255,15 +255,15 @@ def _scheduler_config(scheduler: Optional["Scheduler"]) -> Optional[Dict[str, An
     }
 
     if hasattr(scheduler, "current_index"):
-        config["current_index"] = int(scheduler.current_index)
+        config["current_index"] = int(getattr(scheduler, "current_index"))
     if hasattr(scheduler, "_current_index"):
-        config["current_index"] = int(scheduler._current_index)
+        config["current_index"] = int(getattr(scheduler, "_current_index"))
     if hasattr(scheduler, "_group_index"):
-        config["group_index"] = int(scheduler._group_index)
+        config["group_index"] = int(getattr(scheduler, "_group_index"))
 
     if hasattr(scheduler, "_queue"):
         rendered = []
-        for item in list(scheduler._queue):
+        for item in list(getattr(scheduler, "_queue")):
             if isinstance(item, tuple) and len(item) == 2:
                 rendered.append([_json_native(item[0]), getattr(item[1], "name", str(item[1]))])
             else:
@@ -310,11 +310,21 @@ def _cache_policy(agent: "AIAgent") -> Dict[str, Any]:
     cache = agent.cache
     if cache is None:
         return {"enabled": False}
-    return {
+
+    policy: Dict[str, Any] = {
         "enabled": True,
         "type": _type_name(cache),
         "max_size": getattr(cache, "_max_size", None),
     }
+    store = getattr(cache, "_store", None)
+    lock = getattr(cache, "_lock", None)
+    if isinstance(store, Mapping) and lock is not None:
+        with lock:
+            items = list(store.items())
+        state_raw = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        policy["initial_entries"] = len(items)
+        policy["state_sha256"] = hashlib.sha256(state_raw).hexdigest()
+    return policy
 
 
 def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
