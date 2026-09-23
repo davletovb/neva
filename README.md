@@ -347,11 +347,15 @@ scheduler = create_scheduler("my_scheduler")
   `prepare_reproducible_run(environment, seed=..., prompts=...)` before the
   run to seed Python, optional NumPy/PyTorch runtimes, Neva scheduler RNGs
   (including nested Composite schedulers), and custom `set_seed` hooks, then
-  capture exact prompt inputs, provider/model identifiers, generation settings,
-  dependency/runtime versions, scheduler configuration, cache policy plus an
-  initial cache-state fingerprint, and the seed report. `environment.seed(...)`
+  capture exact prompt inputs, behavior-affecting public environment configuration/state,
+  provider/model identifiers, generation settings, initial conversation state,
+  agent attributes/tool metadata, dependency/runtime versions, scheduler configuration
+  (including pending event queues), cache policy plus an initial cache-state fingerprint,
+  and the seed report. `environment.seed(...)`
   is the seeding-only convenience API. `ReplayTape.for_manifest(manifest)`
   can attach recording to agents with `tape.attach_recording(env.agents)`;
+  recording wraps future backend resolution instead of replacing the provider backend,
+  so GPT cooperative cancellation still reaches provider waits/retries/requests;
   save the manifest/tape, construct a fresh equivalently configured environment,
   seed/capture its manifest, then use
   `tape.attach_replay(env.agents, manifest=manifest)`. Replay validates exact
