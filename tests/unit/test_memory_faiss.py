@@ -74,6 +74,32 @@ def test_faiss_rejects_non_1d_embeddings(embedding):
 
 
 @pytest.mark.usefixtures("_skip_if_faiss_missing")
+def test_faiss_normalization_does_not_mutate_embedder_array():
+    import numpy as np
+
+    embedding = np.asarray([3.0, 4.0], dtype="float32")
+    original = embedding.copy()
+    memory = FaissVectorStoreMemory(lambda _: embedding)
+
+    memory.remember("A", "owned input")
+
+    assert np.array_equal(embedding, original)
+
+
+@pytest.mark.usefixtures("_skip_if_faiss_missing")
+def test_faiss_accepts_read_only_float32_embeddings():
+    import numpy as np
+
+    embedding = np.asarray([3.0, 4.0], dtype="float32")
+    embedding.flags.writeable = False
+    memory = FaissVectorStoreMemory(lambda _: embedding)
+
+    memory.remember("A", "read only")
+
+    assert memory.recall(query="anything") == "A: read only"
+
+
+@pytest.mark.usefixtures("_skip_if_faiss_missing")
 def test_faiss_still_accepts_generator_embeddings():
     memory = FaissVectorStoreMemory(lambda _: (value for value in (1.0, 2.0)))
     memory.remember("A", "generator")
