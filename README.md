@@ -385,17 +385,23 @@ scheduler = create_scheduler("my_scheduler")
   concurrency quotas, and execution ceilings. Agent-level guards are passed
   with `tool_guard=`; a tool can also carry a guard through
   `tool.set_tool_guard(...)`, which applies even to direct `Tool.use()`
-  calls. Direct calls now enforce declared argument schemas as well, so they no
-  longer bypass the validation/guard path. `AIAgent.call_tool()` composes the
-  agent and tool guards and uses the stricter timeout/output/memory ceilings.
-  `ToolLimits(max_concurrency=N)` bounds simultaneous calls to one tool
-  object. The default `timeout=` mode remains thread-based for compatibility
-  and cannot forcibly stop arbitrary synchronous code; opt into
-  `isolate_process=True` for a hard process timeout. In isolated mode output
-  truncation occurs before IPC, and `max_memory_bytes=` can enforce
-  `resource.RLIMIT_AS` where supported. Process isolation is not a complete
-  sandbox: spawn-only platforms require picklable tools, RLIMIT support is
-  platform-dependent, and child tools retain the application's filesystem and
+  calls. Direct calls enforce schemas/guards and normalize returned values to
+  `str`; normal subclass `super().use(...)` delegation remains supported.
+  `AIAgent.call_tool()` composes agent and tool guards and uses the stricter
+  timeout/output/memory ceilings. `ToolLimits(max_concurrency=N)` bounds
+  simultaneous calls per tool object; stale slot state is weak-reference
+  pruned, and a configured `timeout` also bounds time spent waiting for a
+  concurrency slot. The default timeout mode remains thread-based for
+  compatibility and cannot forcibly stop arbitrary synchronous code; a timed-
+  out worker retains its slot until it exits. Opt into
+  `isolate_process=True` for a hard process timeout. Isolation uses
+  `forkserver` where available, otherwise `spawn`, so isolated tools and
+  configured callables must be picklable. Child-side output truncation occurs
+  before IPC; non-`Exception` child failures are converted to
+  `ToolExecutionError`; and `max_memory_bytes=` can enforce
+  `resource.RLIMIT_AS` where supported. Platforms that expose but reject
+  `RLIMIT_AS` surface `ToolResourceLimitError`. Process isolation is not a
+  complete sandbox: child tools still inherit the application's filesystem and
   network credentials unless a stronger external sandbox is provided.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Built-in
