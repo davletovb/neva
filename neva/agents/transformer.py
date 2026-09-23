@@ -75,18 +75,12 @@ class TransformerAgent(AIAgent):
         self._model = actual_loader(self.model_name)
         self._tokenizer = actual_tokenizer_loader(self.model_name)
 
-    def generate_model_output(self, prompt: str) -> str:
-        """Generate from an already composed prompt without adding agent context."""
+    def replayable_backend(self, *, cancel_event=None):
+        """Return an explicit backend for either custom or local Transformer generation."""
 
-        validated_prompt = self.prompt_validator.validate(prompt)
-        cached = self._cache_lookup(validated_prompt)
-        if cached is not None:
-            return cached
-
+        del cancel_event
         if self.llm_backend is not None:
-            response = self.llm_backend(validated_prompt)
-            self._cache_store(validated_prompt, response)
-            return response
+            return self.llm_backend
 
         self._load_transformer()
         if self._model is None or self._tokenizer is None:
@@ -95,13 +89,25 @@ class TransformerAgent(AIAgent):
                 "or ensure the transformers dependencies are available."
             )
 
-        inputs = self._tokenizer(
-            validated_prompt, return_tensors="pt", truncation=True, padding=True
-        )
-        output_tokens = self._model.generate(**inputs, max_length=200)
-        decoded = self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
-        self._cache_store(validated_prompt, decoded)
-        return decoded
+        def _generate(prompt: str) -> str:
+            inputs = self._tokenizer(
+                prompt, return_tensors="pt", truncation=True, padding=True
+            )
+            output_tokens = self._model.generate(**inputs, max_length=200)
+            return self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+
+        return _generate
+
+    def generate_model_output(self, prompt: str) -> str:
+        """Generate from an already composed prompt without adding agent context."""
+
+        validated_prompt = self.prompt_validator.validate(prompt)
+        cached = self._cache_lookup(validated_prompt)
+        if cached is not None:
+            return cached
+        response = self.replayable_backend()(validated_prompt)
+        self._cache_store(validated_prompt, response)
+        return response
 
     def respond(self, message: str) -> str:
         return self.generate_model_output(self.prepare_prompt(message))
