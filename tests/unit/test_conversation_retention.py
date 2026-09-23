@@ -291,6 +291,40 @@ def test_serialization_preserves_history_byte_limit_and_trims_legacy_payload():
     assert [turn.message for turn in restored.turns] == ["2222", "3333"]
 
 
+def test_history_byte_limit_reconciles_direct_list_mutation():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "abcd")
+    state.turns.append(ConversationTurn("user", "12345678"))
+
+    state.record_turn("user", "z")
+
+    assert [turn.message for turn in state.turns] == ["12345678", "z"]
+    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 10
+
+
+def test_history_byte_limit_reconciles_direct_clear():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "aaaa")
+    state.record_turn("agent", "bbbb")
+    state.turns.clear()
+
+    state.record_turn("user", "cccc")
+
+    assert [turn.message for turn in state.turns] == ["cccc"]
+
+
+def test_history_byte_limit_reconciles_message_mutation_before_persistence():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "a")
+    state.turns[0].message = "x" * 20
+    state.turns.append(ConversationTurn("agent", "ok"))
+
+    payload = state.to_dict()
+
+    assert [turn["message"] for turn in payload["turns"]] == ["ok"]
+    assert [turn.message for turn in state.turns] == ["ok"]
+
+
 def test_environment_checkpoint_keeps_history_byte_policy():
     from neva.agents import TransformerAgent
     from neva.environments import Environment
