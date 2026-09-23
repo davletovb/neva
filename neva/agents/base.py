@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import threading
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -474,13 +475,48 @@ class AIAgent(ABC):
         """Return the agent's response to ``message``."""
         raise NotImplementedError
 
+    def _respond_with_cancel(
+        self,
+        message: str,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> str:
+        """Cancellation-aware response hook for synchronous backends.
+
+        The base implementation preserves compatibility for agents that do not
+        implement cooperative cancellation. Provider-backed agents can override
+        this hook and observe ``cancel_event`` in their own waits/retries.
+        """
+
+        return self.respond(message)
+
     async def arespond(self, message: str) -> str:
-        """Asynchronously return the agent's response to ``message``."""
+        """Asynchronously return the agent's response to ``message``.
+
+        Cancelling the asyncio task sets a threading Event observed by agents
+        that implement cooperative cancellation. The worker thread itself
+        cannot be forcibly killed by Python.
+        """
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: self.respond(message))
+        cancel_event = threading.Event()
+        future = loop.run_in_executor(
+            None,
+            lambda: self._respond_with_cancel(message, cancel_event=cancel_event),
+        )
+        try:
+            return await future
+        except asyncio.CancelledError:
+            cancel_event.set()
+            raise
 
-    def receive(self, message: str, *, sender: Optional[str] = None) -> str:
+    def receive(
+        self,
+        message: str,
+        *,
+        sender: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> str:
         """Generate a response and persist the exchange in memory."""
 
         speaker = sender or "system"
@@ -492,7 +528,10 @@ class AIAgent(ABC):
         )
         try:
             with context:
-                response = self.respond(validated)
+                response = self._respond_with_cancel(
+                    validated,
+                    cancel_event=cancel_event,
+                )
         except Exception:
             self._remember(speaker, validated)
             raise
@@ -522,10 +561,27 @@ class AIAgent(ABC):
         return response
 
     async def areceive(self, message: str, *, sender: Optional[str] = None) -> str:
-        """Asynchronously generate a response and persist the exchange."""
+        """Asynchronously generate a response and persist the exchange.
+
+        Async cancellation is propagated to cooperative synchronous agent
+        backends through a threading Event.
+        """
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: self.receive(message, sender=sender))
+        cancel_event = threading.Event()
+        future = loop.run_in_executor(
+            None,
+            lambda: self.receive(
+                message,
+                sender=sender,
+                cancel_event=cancel_event,
+            ),
+        )
+        try:
+            return await future
+        except asyncio.CancelledError:
+            cancel_event.set()
+            raise
 
 
 class AgentManager:
