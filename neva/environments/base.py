@@ -208,7 +208,8 @@ class Environment:
                     record_written=wrote,
                     retry=retry,
                     exhausted=(
-                        not retry
+                        recovery.max_retries > 0
+                        and not retry
                         and attempt >= recovery.max_attempts
                         and recovery.is_retryable(exc)
                     ),
