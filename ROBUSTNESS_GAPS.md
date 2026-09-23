@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `74f33999` (PRs #49–#52, #54–#66 merged).
+Updated against `main` at `60e34141` (PRs #49–#52, #54–#67 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -73,7 +73,7 @@ Correction to the original review: receivers use their own backend limiters, not
 ### 2. Durable failure recovery — partial
 
 - Per-agent policies merged in PR #57: optional `register_agent(agent, error_policy="raise"|"return", error_value=...)` overrides for selected-turn failures. Omitted policies inherit the environment default. Version-2 checkpoints preserve overrides; older checkpoints clear them. This is not durable recovery or replay.
-- Durable failure records: PR #60 (merged) adds `FailureLog`, an append-only JSONL store flushed/fsynced per record, wired through `Environment(failure_log=...)` for agent and scheduler-selection failures under both policies, with tolerant `load()` and `Environment.replay_failure(record)` re-dispatch. Remaining: automated retry loops, escalation policies, richer recovery-state observability, and log rotation/size bounds for long-running runs.
+- Durable failure records: PR #60 (merged) adds `FailureLog`, an append-only JSONL store flushed/fsynced per record, wired through `Environment(failure_log=...)` for agent and scheduler-selection failures under both policies, with tolerant `load()` and `Environment.replay_failure(record)` re-dispatch. PR #68 adds opt-in `FailureLog(rotate_bytes=..., backup_count=...)` rotation/retention for long-running single-process runs, with oldest-first loading across retained files and intact oversized records. Remaining: automated retry loops, escalation policies, richer recovery-state observability, strict per-record size ceilings if needed, and multi-process rotation coordination.
 - Escalation policies and richer recovery-state observability.
 - Broader concurrent and interruption-path testing of the existing circuit breaker.
 
