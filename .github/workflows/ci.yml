@@ -79,6 +79,37 @@ jobs:
             coverage.xml
             htmlcov
 
+  optional-integrations:
+    name: Optional integrations (Python 3.11)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements-dev.txt
+            requirements-optional.txt
+
+      - name: Install core and optional integration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.2
+          pip install transformers==4.35.2 faiss-cpu==1.7.4 numpy==1.26.4 anthropic==0.26.0
+
+      - name: Run real optional integrations
+        run: |
+          pytest -q -o addopts=""             tests/integration/test_optional_dependencies.py
+
+      - name: Measure FAISS implementation coverage
+        run: |
+          pytest -q -o addopts=""             --cov=neva.memory.faiss_vector_store             --cov-report=term-missing             --cov-fail-under=80             tests/unit/test_memory_faiss.py
+
   docs:
     name: Build documentation
     runs-on: ubuntu-latest
