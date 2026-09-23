@@ -565,3 +565,10 @@ def test_memory_limit_application_failure_is_resource_error(monkeypatch):
     monkeypatch.setattr(guard_module, "_resource", FakeResource)
     with pytest.raises(ToolResourceLimitError, match="could not apply"):
         guard_module._apply_process_memory_limit(1024)
+
+
+
+def test_direct_tool_guard_supports_process_isolation():
+    tool = RecordingTool(name="direct-isolated")
+    tool.set_tool_guard(ToolGuard(limits=ToolLimits(timeout=2.0, isolate_process=True)))
+    assert tool.use("hello") == "echo:hello"
