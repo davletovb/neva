@@ -1,13 +1,19 @@
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from neva.agents import TransformerAgent
 from neva.agents.base import Tool, ToolCall
 from neva.tools import ToolGuard, ToolLimits
-from neva.utils.exceptions import ToolExecutionError, ToolGuardConfigurationError, ToolTimeoutError
+from neva.utils.exceptions import (
+    ToolExecutionError,
+    ToolGuardConfigurationError,
+    ToolResourceLimitError,
+    ToolTimeoutError,
+)
 
 
 class RecordingTool(Tool):
@@ -280,3 +286,108 @@ def test_approval_hook_sees_calls_through_agent():
     allowed = agent.call_tool(ToolCall(name="shell", arguments={"input": "ls"}))
     assert allowed.succeeded()
     assert tool.calls == ["ls"]
+
+
+class ConcurrencyProbeTool(Tool):
+    def __init__(self):
+        super().__init__("probe", "Tracks concurrent executions")
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def use(self, task):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.04)
+            return task
+        finally:
+            with self._lock:
+                self.active -= 1
+
+
+def test_isolated_process_timeout_is_hard():
+    tool = RecordingTool(name="isolated", delay=1.0)
+    guard = ToolGuard(limits=ToolLimits(timeout=0.05, isolate_process=True))
+    started = time.monotonic()
+    with pytest.raises(ToolTimeoutError, match="hard execution limit"):
+        guard.invoke(tool, "slow")
+    assert time.monotonic() - started < 0.8
+    assert not any(
+        process.name == "neva-tool-process-isolated"
+        for process in __import__("multiprocessing").active_children()
+    )
+
+
+def test_isolated_process_truncates_before_parent_result():
+    tool = RecordingTool(name="loud-process", output="z" * 10000)
+    guard = ToolGuard(
+        limits=ToolLimits(
+            timeout=2.0,
+            isolate_process=True,
+            max_output_chars=7,
+        )
+    )
+    output = guard.invoke(tool, "go")
+    assert output.startswith("z" * 7)
+    assert "truncated" in output
+    assert len(output) < 100
+
+
+def test_process_memory_limit_requires_isolation():
+    with pytest.raises(ToolGuardConfigurationError, match="isolate_process"):
+        ToolLimits(max_memory_bytes=1024)
+
+
+def test_process_isolation_requires_timeout():
+    with pytest.raises(ToolGuardConfigurationError, match="requires timeout"):
+        ToolLimits(isolate_process=True)
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, "2"])
+def test_invalid_concurrency_limit_rejected(limit):
+    with pytest.raises(ToolGuardConfigurationError, match="max_concurrency"):
+        ToolLimits(max_concurrency=limit)
+
+
+def test_per_tool_concurrency_quota_serializes_calls():
+    tool = ConcurrencyProbeTool()
+    guard = ToolGuard(limits=ToolLimits(max_concurrency=1))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda value: guard.invoke(tool, value), ["a", "b", "c", "d"]))
+    assert results == ["a", "b", "c", "d"]
+    assert tool.max_active == 1
+
+
+def test_direct_tool_use_honours_tool_guard():
+    tool = RecordingTool(name="direct")
+    tool.set_tool_guard(ToolGuard(allowed_tools={"other"}))
+    with pytest.raises(ToolExecutionError, match="not permitted"):
+        tool.use("blocked")
+    assert tool.calls == []
+
+
+def test_direct_tool_use_honours_output_limit():
+    tool = RecordingTool(name="direct", output="q" * 100)
+    tool.set_tool_guard(ToolGuard(limits=ToolLimits(max_output_chars=6)))
+    output = tool.use("go")
+    assert output.startswith("q" * 6)
+    assert "truncated" in output
+
+
+def test_agent_and_tool_guards_both_apply():
+    tool = RecordingTool(name="shared", output="r" * 50)
+    tool.set_tool_guard(ToolGuard(limits=ToolLimits(max_output_chars=12)))
+    agent = make_agent(
+        tool_guard=ToolGuard(
+            allowed_tools={"shared"},
+            limits=ToolLimits(max_output_chars=5),
+        )
+    )
+    agent.register_tool(tool)
+    response = agent.call_tool(ToolCall(name="shared", arguments={"input": "go"}))
+    assert response.succeeded()
+    assert response.output.startswith("r" * 5)
+    assert "truncated" in response.output
+    assert tool.calls == ["go"]
