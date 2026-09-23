@@ -316,10 +316,11 @@ scheduler = create_scheduler("my_scheduler")
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
   helpers let you persist simulations mid-run and resume them later. Stored
   history is unlimited by default, or can be bounded explicitly with
-  `ConversationState(max_turns=..., max_turn_bytes=...)`; oversized stored
-  messages are normalized to valid UTF-8 and safely truncated with a
-  `...[truncated]` marker while the live response returned by the agent remains
-  unchanged. Live providers receive
+  `ConversationState(max_turns=..., max_turn_bytes=...)`. When a byte ceiling
+  is configured, every stored message is normalized to valid UTF-8 (isolated
+  surrogate code points become `?`); messages over the ceiling are then safely
+  truncated with a `...[truncated]` marker. The live response returned by the
+  agent remains unchanged. Live providers receive
   a recent-turn window as chat messages, not the full stored transcript.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
