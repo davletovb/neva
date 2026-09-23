@@ -269,10 +269,7 @@ def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLim
         def charge(amount: int) -> None:
             nonlocal string_bytes
             string_bytes += amount
-            if (
-                limits.max_string_bytes is not None
-                and string_bytes > limits.max_string_bytes
-            ):
+            if limits.max_string_bytes is not None and string_bytes > limits.max_string_bytes:
                 raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
             if (
                 limits.max_total_string_bytes is not None
