@@ -131,5 +131,9 @@ class ToolTimeoutError(ToolExecutionError):
     """Raised when a tool exceeds its configured execution time limit."""
 
 
+class ToolResourceLimitError(ToolExecutionError):
+    """Raised when an isolated tool exceeds or cannot apply a hard resource limit."""
+
+
 class ToolNotFoundError(ToolError):
     """Raised when attempting to use a tool that is not registered."""
