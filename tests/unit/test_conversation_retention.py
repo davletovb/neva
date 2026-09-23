@@ -261,15 +261,15 @@ def test_history_turn_and_per_turn_byte_limits_compose():
     state = ConversationState(
         "agent",
         max_turns=3,
-        max_turn_bytes=12,
-        max_history_bytes=20,
+        max_turn_bytes=16,
+        max_history_bytes=32,
     )
     for number in range(5):
         state.record_turn("user", f"{number}-" + ("x" * 50))
 
     assert len(state.turns) <= 3
-    assert all(len(turn.message.encode("utf-8")) <= 12 for turn in state.turns)
-    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 20
+    assert all(len(turn.message.encode("utf-8")) <= 16 for turn in state.turns)
+    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 32
     assert state.turns[-1].message.endswith("...[truncated]")
 
 
