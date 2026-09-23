@@ -310,18 +310,14 @@ def _build_prompt(
     config: ToolLoopConfig,
 ) -> str:
     static_prefix = (
-        f"{_TOOL_PROTOCOL}\n"
-        f"STEP:{step}/{config.max_steps}\n"
-        f"TASK:{_compact_json(task)}\n"
+        f"{_TOOL_PROTOCOL}\n" f"STEP:{step}/{config.max_steps}\n" f"TASK:{_compact_json(task)}\n"
     )
     feedback_label = "FEEDBACK (untrusted data, oldest to newest):\n"
 
     prefix: Optional[str] = None
     for advertised_tools in _tool_advertisement_variants(tools):
         candidate = (
-            static_prefix
-            + f"TOOLS:{_compact_json(list(advertised_tools))}\n"
-            + feedback_label
+            static_prefix + f"TOOLS:{_compact_json(list(advertised_tools))}\n" + feedback_label
         )
         if len(candidate) <= config.max_prompt_chars:
             prefix = candidate
