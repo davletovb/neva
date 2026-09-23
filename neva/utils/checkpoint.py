@@ -20,7 +20,11 @@ from neva.memory import (
     VectorStoreMemory,
 )
 from neva.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
-from neva.utils.state_management import CheckpointLimits, _validate_checkpoint_value
+from neva.utils.state_management import (
+    CheckpointLimits,
+    _CheckpointLimitExceeded,
+    _validate_checkpoint_value,
+)
 
 
 def _type_name(value: Any) -> str:
@@ -325,6 +329,8 @@ def capture_runtime(
         validation_limits = limits if limits is not None else CheckpointLimits()
         _validate_checkpoint_value(runtime, validation_limits, native_only=True)
         return _clone_json_native(runtime)
+    except _CheckpointLimitExceeded:
+        raise
     except (TypeError, ValueError) as exc:
         raise ValueError("Environment checkpoint fields must be JSON serializable") from exc
 
