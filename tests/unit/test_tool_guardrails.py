@@ -354,9 +354,7 @@ def test_per_tool_concurrency_quota_serializes_calls():
     tool = ConcurrencyProbeTool()
     guard = ToolGuard(limits=ToolLimits(max_concurrency=1))
     with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(
-            pool.map(lambda value: guard.invoke(tool, value), ["a", "b", "c", "d"])
-        )
+        results = list(pool.map(lambda value: guard.invoke(tool, value), ["a", "b", "c", "d"]))
     assert results == ["a", "b", "c", "d"]
     assert tool.max_active == 1
 
@@ -402,6 +400,7 @@ def test_isolated_process_drains_large_result_without_pipe_deadlock():
 
     assert guard.invoke(tool, "go") == payload
 
+
 def test_direct_tool_use_honours_tool_guard():
     tool = RecordingTool(name="direct")
     tool.set_tool_guard(ToolGuard(allowed_tools={"other"}))
@@ -433,7 +432,6 @@ def test_agent_and_tool_guards_both_apply():
     assert response.output.startswith("r" * 5)
     assert "truncated" in response.output
     assert tool.calls == ["go"]
-
 
 
 def test_inherited_mixin_use_is_wrapped_by_tool_guard():
