@@ -1,4 +1,6 @@
 from copy import deepcopy
+from dataclasses import dataclass
+from datetime import datetime
 
 import pytest
 
@@ -10,6 +12,7 @@ from neva.schedulers import RoundRobinScheduler
 from neva.utils.state_management import (
     CheckpointLimits,
     ConversationState,
+    SimulationSnapshot,
     create_snapshot,
     load_snapshot,
     save_snapshot,
@@ -234,3 +237,26 @@ def test_restore_targeted_copies_do_not_alias_snapshot_runtime():
     restored_agent.attributes["labels"].append("changed")
 
     assert snapshot.runtime_state == frozen_runtime
+
+
+
+def test_streamed_save_does_not_deepcopy_dataclass_payload(tmp_path):
+    class NoDeepcopyList(list):
+        def __deepcopy__(self, memo):
+            raise AssertionError("streamed dataclass encoding must not recursively deepcopy fields")
+
+    @dataclass
+    class Payload:
+        items: object
+
+    snapshot = SimulationSnapshot(
+        created_at=datetime(2026, 9, 23),
+        environment_state={"payload": Payload(NoDeepcopyList(["x", "y"]))},
+        agent_states={},
+    )
+    path = tmp_path / "dataclass.json"
+
+    save_snapshot(snapshot, path)
+    loaded = load_snapshot(path)
+
+    assert loaded.environment_state == {"payload": {"items": ["x", "y"]}}
