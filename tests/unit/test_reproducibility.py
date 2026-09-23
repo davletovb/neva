@@ -151,10 +151,7 @@ def test_manifest_marks_builtin_live_provider_as_not_exactly_reproducible():
 
     assert manifest.reproducibility["live_providers"] == ["openai"]
     assert manifest.reproducibility["live_provider_exact_replay"] is False
-    assert any(
-        "not guaranteed reproducible" in note
-        for note in manifest.reproducibility["notes"]
-    )
+    assert any("not guaranteed reproducible" in note for note in manifest.reproducibility["notes"])
 
 
 def test_cache_policy_fingerprints_initial_lru_state_without_exposing_values():
