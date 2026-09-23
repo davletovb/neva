@@ -361,6 +361,47 @@ def test_per_tool_concurrency_quota_serializes_calls():
     assert tool.max_active == 1
 
 
+
+class TimeoutSlotTool(Tool):
+    def __init__(self):
+        super().__init__("slot", "Blocks the first invocation")
+        self.release_first = threading.Event()
+        self.started = []
+        self._lock = threading.Lock()
+
+    def use(self, task):
+        with self._lock:
+            self.started.append(task)
+        if task == "first":
+            self.release_first.wait()
+        return task
+
+
+def test_timed_out_thread_retains_concurrency_slot_until_worker_finishes():
+    tool = TimeoutSlotTool()
+    guard = ToolGuard(limits=ToolLimits(timeout=0.02, max_concurrency=1))
+
+    with pytest.raises(ToolTimeoutError):
+        guard.invoke(tool, "first")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        second = pool.submit(guard.invoke, tool, "second")
+        time.sleep(0.04)
+        assert not second.done()
+        assert tool.started == ["first"]
+
+        tool.release_first.set()
+        assert second.result(timeout=1.0) == "second"
+        assert tool.started == ["first", "second"]
+
+
+def test_isolated_process_drains_large_result_without_pipe_deadlock():
+    payload = "w" * 250_000
+    tool = RecordingTool(name="large-process", output=payload)
+    guard = ToolGuard(limits=ToolLimits(timeout=2.0, isolate_process=True))
+
+    assert guard.invoke(tool, "go") == payload
+
 def test_direct_tool_use_honours_tool_guard():
     tool = RecordingTool(name="direct")
     tool.set_tool_guard(ToolGuard(allowed_tools={"other"}))
