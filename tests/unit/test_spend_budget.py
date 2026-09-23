@@ -54,6 +54,34 @@ def test_remaining_and_spent_track_exactly():
     assert budget.remaining == pytest.approx(1.75)
 
 
+def test_reservations_reduce_remaining_and_settle_actual_cost():
+    budget = SpendBudget(max_cost=1.0)
+    reservation = budget.reserve(0.6)
+
+    assert budget.reserved == pytest.approx(0.6)
+    assert budget.remaining == pytest.approx(0.4)
+    with pytest.raises(SpendBudgetExceededError):
+        budget.reserve(0.5)
+
+    budget.settle(reservation, 0.25)
+    assert budget.reserved == 0.0
+    assert budget.spent == pytest.approx(0.25)
+    assert budget.remaining == pytest.approx(0.75)
+
+
+def test_release_and_reconcile_preserve_inflight_reservations():
+    budget = SpendBudget(max_cost=2.0)
+    reservation = budget.reserve(0.5)
+    budget.reconcile(0.75)
+
+    assert budget.spent == pytest.approx(0.75)
+    assert budget.reserved == pytest.approx(0.5)
+    assert budget.remaining == pytest.approx(0.75)
+
+    budget.release(reservation)
+    assert budget.remaining == pytest.approx(1.25)
+
+
 def test_concurrent_consumers_never_exceed_budget():
     budget = SpendBudget(max_cost=1.0)
     increments = 0.01
@@ -149,7 +177,9 @@ def test_gpt_agent_budget_overflow_marks_exhausted(monkeypatch):
     from neva.agents.gpt import GPTAgent
 
     _patch_provider(monkeypatch, usage={"prompt_tokens": 1000, "completion_tokens": 1000})
-    budget = SpendBudget(max_cost=0.0001)  # smaller than one turn's estimated cost
+    # Reservation fits the coarse prompt estimate, but provider-reported input
+    # usage is much larger and the settled actual cost crosses the ceiling.
+    budget = SpendBudget(max_cost=0.00065)
     agent = GPTAgent(api_key="x", provider="openai", max_retries=0, spend_budget=budget)
     with pytest.raises(SpendBudgetExceededError):
         agent.respond("ping")
@@ -210,7 +240,7 @@ def test_gpt_agent_nan_pricing_raises_configuration_error(monkeypatch):
     )
     with pytest.raises(ConfigurationError, match="non-finite"):
         agent.respond("ping")
-    assert len(calls) == 1  # call happened; accounting refuses to consume NaN
+    assert calls == []  # invalid pricing is rejected before provider admission
     assert budget.spent == 0.0
 
 
@@ -227,10 +257,11 @@ def test_shared_budget_enforces_common_ceiling_across_agents(monkeypatch):
     first = GPTAgent(api_key="x", provider="openai", max_retries=0, spend_budget=budget)
     second = GPTAgent(api_key="x", provider="openai", max_retries=0, spend_budget=budget)
     assert "priced reply" in first.respond("ping")
-    with pytest.raises(SpendBudgetExceededError):
-        second.respond("ping")  # spends, overflows, clamps, raises
-    assert budget.remaining == 0.0
     before = len(calls)
+    with pytest.raises(SpendBudgetExceededError):
+        second.respond("ping")  # worst-case reservation is refused pre-call
+    assert len(calls) == before
+    assert 0.0 < budget.remaining < 0.0001
     third = GPTAgent(api_key="x", provider="openai", max_retries=0, spend_budget=budget)
     with pytest.raises(SpendBudgetExceededError):
         third.respond("ping")
@@ -292,7 +323,7 @@ def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
 
     _patch_provider(monkeypatch, usage={"prompt_tokens": 1000, "completion_tokens": 1000})
     breaker = _half_open_breaker()
-    budget = SpendBudget(max_cost=0.0001)  # smaller than one turn's cost
+    budget = SpendBudget(max_cost=0.00065)
     agent = GPTAgent(
         api_key="x",
         provider="openai",
@@ -310,3 +341,71 @@ def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
     with pytest.raises(SpendBudgetExceededError):
         agent.respond("ping")
     assert calls == []
+
+
+def test_shared_provider_budget_refusal_releases_half_open_probe(monkeypatch):
+    from neva.agents.gpt import GPTAgent
+    from neva.utils.provider_resources import _clear_provider_resource_registry_for_tests
+
+    _clear_provider_resource_registry_for_tests()
+    calls = []
+    _patch_provider(
+        monkeypatch,
+        usage={"prompt_tokens": 1, "completion_tokens": 1},
+        calls=calls,
+    )
+    breaker = _half_open_breaker()
+    agent = GPTAgent(
+        api_key="half-open-shared-budget",
+        provider="openai",
+        max_retries=0,
+        circuit_breaker=breaker,
+        provider_rate=None,
+        provider_spend_limit=0.0001,
+    )
+
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+
+    assert calls == []
+    _clear_provider_resource_registry_for_tests()
+
+
+def test_local_reservation_refusal_releases_half_open_probe(monkeypatch):
+    from neva.agents.gpt import GPTAgent
+
+    calls = []
+    _patch_provider(
+        monkeypatch,
+        usage={"prompt_tokens": 1, "completion_tokens": 1},
+        calls=calls,
+    )
+    breaker = _half_open_breaker()
+    budget = SpendBudget(max_cost=1.0)
+    original_reserve = budget.reserve
+
+    reserve_calls = []
+
+    def refuse_after_preflight(cost):
+        reserve_calls.append(cost)
+        raise SpendBudgetExceededError("reservation refused")
+
+    budget.reserve = refuse_after_preflight
+    agent = GPTAgent(
+        api_key="half-open-local-budget",
+        provider="openai",
+        max_retries=0,
+        circuit_breaker=breaker,
+        spend_budget=budget,
+    )
+
+    with pytest.raises(SpendBudgetExceededError, match="reservation refused"):
+        agent.respond("ping")
+    with pytest.raises(SpendBudgetExceededError, match="reservation refused"):
+        agent.respond("ping")
+
+    assert len(reserve_calls) == 2
+    assert calls == []
+    budget.reserve = original_reserve

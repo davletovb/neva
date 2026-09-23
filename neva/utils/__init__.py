@@ -8,6 +8,7 @@ failures = _import_module(".failures", __name__)
 logging_utils = _import_module(".logging_utils", __name__)
 metrics = _import_module(".metrics", __name__)
 observer = _import_module(".observer", __name__)
+provider_resources = _import_module(".provider_resources", __name__)
 safety = _import_module(".safety", __name__)
 state_management = _import_module(".state_management", __name__)
 telemetry = _import_module(".telemetry", __name__)
@@ -19,6 +20,7 @@ __all__ = [
     "logging_utils",
     "metrics",
     "observer",
+    "provider_resources",
     "safety",
     "state_management",
     "telemetry",

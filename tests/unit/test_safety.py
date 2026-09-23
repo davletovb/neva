@@ -117,3 +117,75 @@ def test_circuit_breaker_opens_and_probes(monkeypatch) -> None:
     breaker.record_success()
     breaker.allow()
     breaker.allow()
+
+
+def test_rate_limiter_fifo_order_under_contention(monkeypatch):
+    timestamps = [0.0]
+    order = []
+    lock = threading.Lock()
+
+    monkeypatch.setattr(safety.time, "monotonic", lambda: timestamps[0])
+
+    def fake_sleep(duration):
+        timestamps[0] += duration
+
+    monkeypatch.setattr(safety.time, "sleep", fake_sleep)
+    limiter = safety.RateLimiter(rate=1, per=1)
+    limiter.acquire()
+
+    started = []
+    ready = threading.Event()
+
+    def worker(name):
+        with lock:
+            started.append(name)
+            if len(started) == 3:
+                ready.set()
+        limiter.acquire()
+        order.append(name)
+
+    threads = []
+    for name in ("a", "b", "c"):
+        thread = threading.Thread(target=worker, args=(name,))
+        thread.start()
+        threads.append(thread)
+        while True:
+            with lock:
+                if name in started:
+                    break
+
+    assert ready.wait(timeout=1)
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert order == ["a", "b", "c"]
+
+
+def test_rate_limiter_lock_wait_is_cancellable():
+    from neva.utils.exceptions import RateLimiterCancelledError
+
+    limiter = safety.RateLimiter(rate=1, per=60)
+    cancel = threading.Event()
+    outcome = []
+
+    assert limiter._lock.acquire(timeout=1)
+
+    def worker():
+        try:
+            limiter.acquire(cancel_event=cancel)
+        except RateLimiterCancelledError:
+            outcome.append("cancelled")
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        time_limit = threading.Event()
+        time_limit.wait(0.1)
+        cancel.set()
+        thread.join(timeout=1)
+    finally:
+        limiter._lock.release()
+
+    assert not thread.is_alive()
+    assert outcome == ["cancelled"]

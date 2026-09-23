@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `60e34141` (PRs #49–#52, #54–#67 merged).
+Updated against `main` at `90185cbf` (PRs #49–#52, #54–#68 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -61,14 +61,20 @@ Full-suite verification exposed an existing clock inconsistency in `test_rate_li
 
 ## Remaining gaps
 
-### 1. Shared rate, concurrency, and spend budgets — partial
+### 1. Shared rate, concurrency, and spend budgets — complete at the Neva coordination layer
 
-- Automatic provider/account-wide coordination across agents and processes.
-- Token/spend budgets: PR #59 (merged) adds a thread-safe `SpendBudget` ceiling, `GPTAgent(spend_budget=...)` pre-call refusal, pre-call `ConfigurationError` for unpriced models, non-finite pricing/cost rejection, and post-call estimated-cost consumption with ceiling clamping. Remaining: account-/process-wide coordination, reconciling estimates with live billing, and budget-aware token reservations.
-- Global cross-thread/cross-loop concurrency limits, if required.
-- PR #58 (merged) adds explicit Event-based token-wait cancellation via `RateLimiter.acquire(cancel_event=...)` and a dedicated `RateLimiterCancelledError`, tested before admission, after lock entry, and during a real threaded wait. Lock acquisition and in-flight provider calls are not interruptible; agents/asyncio do not automatically propagate cancellation. FIFO fairness and aggregate-contention coverage remain open.
+PR #69 completes the library-level coordination gap as one integrated provider/account resource system:
 
-Correction to the original review: receivers use their own backend limiters, not the sender's limiter. Explicitly sharing a limiter already shares that instance's request-rate budget.
+- Built-in `GPTAgent` instances derive a non-secret provider/account scope and automatically share FIFO request-rate and global concurrency admission across agents, threads, and event loops in one process. Conflicting limits for the same account scope fail closed rather than silently splitting the budget.
+- Cross-process coordination uses the same scope through SQLite when `provider_coordination_path=` or `NEVA_PROVIDER_COORDINATION_DB` points participating processes at the same database. SQLite state covers FIFO tickets, token-bucket state, concurrency leases, spend reservations, and completed spend; expiring leases recover from crashed processes.
+- `SpendBudget` now supports atomic reserve/settle/release semantics. Provider calls reserve worst-case estimated input + configured output-token spend before admission, preventing concurrent pre-check oversubscription, then settle against provider-reported or estimated actual usage.
+- `provider_spend_limit=` applies the same reservation model at the shared provider/account scope. An optional `billing_reconciler` can replace completed estimates with an authoritative account-spend total while preserving in-flight reservations.
+- `RateLimiter` is FIFO, sleeps outside its mutex, and polls mutex acquisition for cancellation. Base async agent execution automatically propagates asyncio cancellation through a threading Event, so provider admission queues and retry backoff cancel cooperatively without leaving FIFO waiters or reservations behind.
+- Aggregate-contention, same-account sharing, conflicting-scope configuration, local and SQLite cancellation cleanup, spend reservations, authoritative reconciliation, real spawned-process SQLite concurrency, and cancel-during-in-flight settlement/cache continuity are covered by tests.
+
+Boundary: Python cannot forcibly kill an already-running synchronous third-party HTTP/SDK call. Async callers are cancelled immediately, while that worker remains governed by its provider/request timeout and performs final accounting/release when it returns. Cross-machine/account-wide coordination would require an external shared coordination service; the built-in SQLite coordinator covers processes sharing the configured database.
+
+Correction to the original review remains relevant: receivers do not consume the sender's limiter. Explicit legacy `rate_limiter=` is still supported and replaces only the shared rate component; shared provider concurrency can remain active.
 
 ### 2. Durable failure recovery — partial
 
