@@ -1,4 +1,5 @@
 import multiprocessing
+import sqlite3
 import threading
 import time
 
@@ -310,3 +311,26 @@ def test_cancelled_sqlite_waiter_does_not_block_queue(tmp_path):
 
     assert not next_worker.is_alive()
     assert acquired == [True]
+
+
+
+def test_sqlite_waiter_cleanup_retries_and_surfaces_failure(tmp_path, monkeypatch):
+    coordinator = ProviderResourceCoordinator(
+        scope="cleanup-failure",
+        rate=None,
+        max_concurrency=1,
+        state_path=tmp_path / "provider.sqlite3",
+        poll_interval=0.001,
+    )
+    attempts = []
+
+    def fail_connect():
+        attempts.append(True)
+        raise sqlite3.OperationalError("database locked")
+
+    monkeypatch.setattr(coordinator, "_connect", fail_connect)
+
+    with pytest.raises(sqlite3.OperationalError, match="database locked"):
+        coordinator._remove_sqlite_waiter("stale-owner")
+
+    assert len(attempts) == 3
