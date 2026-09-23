@@ -1,12 +1,13 @@
 import json
 import random
+import threading
 
 import pytest
 
 from neva.agents import GPTAgent, TransformerAgent
 from neva.agents.base import AIAgent
 from neva.environments import BasicEnvironment, Environment
-from neva.schedulers import CompositeScheduler, RandomScheduler
+from neva.schedulers import CompositeScheduler, EventDrivenScheduler, RandomScheduler
 from neva.utils.caching import LLMCache
 from neva.utils.exceptions import (
     AgentCommunicationError,
@@ -135,6 +136,93 @@ def test_manifest_captures_prompts_provider_model_generation_cache_and_dependenc
     assert "super-secret-key" not in json.dumps(payload)
 
 
+def test_manifest_fingerprint_changes_with_behavior_affecting_environment_config():
+    first = BasicEnvironment("first-name", "first-description", RandomScheduler())
+    second = BasicEnvironment("second-name", "second-description", RandomScheduler())
+    for env in (first, second):
+        env.register_agent(TransformerAgent(name="agent", llm_backend=_deterministic_backend))
+
+    first_manifest = prepare_reproducible_run(
+        first,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    second_manifest = prepare_reproducible_run(
+        second,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+    assert first_manifest.environment["public_config"]["name"] == "first-name"
+    assert first_manifest.environment["public_config"]["description"] == "first-description"
+
+
+def test_manifest_fingerprint_changes_with_environment_state():
+    first = _build_random_env()
+    second = _build_random_env()
+    first.state["phase"] = "one"
+    second.state["phase"] = "two"
+
+    first_manifest = prepare_reproducible_run(
+        first,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    second_manifest = prepare_reproducible_run(
+        second,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+
+
+def test_manifest_captures_initial_conversation_and_agent_attributes():
+    env = BasicEnvironment("agent-config", "prompt inputs", RandomScheduler())
+    agent = TransformerAgent(name="configured", llm_backend=_deterministic_backend)
+    agent.set_attribute("role", "reviewer")
+    agent.conversation_state.record_turn("user", "prior context")
+    env.register_agent(agent)
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+    config = manifest.agents[0]
+
+    assert config["attributes"] == {"role": "reviewer"}
+    assert config["conversation"]["turns"] == [
+        {"speaker": "user", "message": "prior context"}
+    ]
+
+
+def test_event_scheduler_pending_queue_changes_manifest_fingerprint():
+    def build(order):
+        scheduler = EventDrivenScheduler()
+        env = Environment(scheduler)
+        agents = {
+            name: TransformerAgent(name=name, llm_backend=_deterministic_backend)
+            for name in ("a", "b")
+        }
+        for agent in agents.values():
+            env.register_agent(agent)
+        for name in order:
+            scheduler.notify_event(agents[name])
+        return env
+
+    first = build(("a", "b"))
+    second = build(("b", "a"))
+
+    first_manifest = create_run_manifest(first, seed=1, dependencies=[])
+    second_manifest = create_run_manifest(second, seed=1, dependencies=[])
+
+    assert first_manifest.scheduler["event_queue"] == ["a", "b"]
+    assert second_manifest.scheduler["event_queue"] == ["b", "a"]
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+
+
 def test_manifest_marks_builtin_live_provider_as_not_exactly_reproducible():
     env = BasicEnvironment("live", "provider caveat", RandomScheduler())
     agent = GPTAgent(
@@ -168,6 +256,32 @@ def test_cache_policy_fingerprints_initial_lru_state_without_exposing_values():
     assert len(policy["state_sha256"]) == 64
     assert "secret prompt" not in json.dumps(policy)
     assert "secret response" not in json.dumps(policy)
+
+
+def test_recording_preserves_gpt_cancellation_aware_backend_resolution(monkeypatch):
+    agent = GPTAgent(
+        name="cancel-aware",
+        api_key="test-key",
+        provider="openai",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    seen = []
+
+    def fake_default_backend(*, cancel_event=None):
+        seen.append(cancel_event)
+        return lambda prompt: "ok"
+
+    monkeypatch.setattr(agent, "_default_backend", fake_default_backend)
+    tape = ReplayTape()
+    tape.attach_recording([agent])
+
+    assert agent.llm_backend is None
+    cancel_event = threading.Event()
+    assert agent.replayable_backend(cancel_event=cancel_event)("prompt") == "ok"
+    assert seen[-1] is cancel_event
+    assert tape.records[0].response == "ok"
 
 
 def test_provider_backed_gpt_can_record_then_replay_offline(monkeypatch):
@@ -285,6 +399,8 @@ def test_attach_recording_is_atomic_when_one_agent_has_no_backend():
 
     assert good.llm_backend is good_backend
     assert bad.llm_backend is None
+    assert good._model_backend_wrapper is None
+    assert bad._model_backend_wrapper is None
     assert tape.records == ()
 
 
