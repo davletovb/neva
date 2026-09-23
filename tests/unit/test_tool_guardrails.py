@@ -479,7 +479,6 @@ def test_inherited_mixin_use_is_wrapped_by_tool_guard():
         tool.use("blocked")
 
 
-
 def test_subclass_super_use_delegates_to_parent_implementation():
     class ParentTool(Tool):
         def __init__(self):
@@ -548,7 +547,6 @@ def test_concurrency_slot_entry_is_pruned_when_tool_is_collected():
     assert guard._concurrency_slots == {}
 
 
-
 def test_memory_limit_application_failure_is_resource_error(monkeypatch):
     class FakeResource:
         RLIMIT_AS = 1
@@ -565,7 +563,6 @@ def test_memory_limit_application_failure_is_resource_error(monkeypatch):
     monkeypatch.setattr(guard_module, "_resource", FakeResource)
     with pytest.raises(ToolResourceLimitError, match="could not apply"):
         guard_module._apply_process_memory_limit(1024)
-
 
 
 def test_direct_tool_guard_supports_process_isolation():
