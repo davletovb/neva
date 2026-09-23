@@ -255,7 +255,16 @@ def _restore_memory(
 
 # Fields handled explicitly by capture/restore or intentionally preserved
 # across restore (failure_log is external durable storage, not checkpoint state).
-_ENV_FIELDS = {"state", "scheduler", "agents", "conversation_id", "failure_log"}
+_ENV_FIELDS = {
+    "state",
+    "scheduler",
+    "agents",
+    "conversation_id",
+    "failure_log",
+    "recovery_policy",
+    "_recovery",
+    "_recovery_lock",
+}
 
 
 def capture_runtime(environment: Any) -> Dict[str, Any]:
