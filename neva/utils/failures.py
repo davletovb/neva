@@ -42,8 +42,12 @@ class FailureRecord:
     context: Optional[str] = None
     attempt: int = 1
     max_attempts: int = 1
-    action: str = "raise"
+    action: str = ""
     truncated: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.action:
+            object.__setattr__(self, "action", self.policy)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
