@@ -52,10 +52,11 @@ class RecoveryPolicy:
     def max_attempts(self) -> int:
         return self.max_retries + 1
 
+    def is_retryable(self, exc: BaseException) -> bool:
+        return not isinstance(exc, CancelledError) and isinstance(exc, self.retry_on)
+
     def should_retry(self, exc: BaseException, attempt: int) -> bool:
-        if isinstance(exc, CancelledError):
-            return False
-        return attempt < self.max_attempts and isinstance(exc, self.retry_on)
+        return attempt < self.max_attempts and self.is_retryable(exc)
 
     def delay_for(self, attempt: int) -> float:
         """Return seconds to wait after failed attempt before retrying."""
