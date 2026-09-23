@@ -4,7 +4,7 @@ import pytest
 
 from neva.agents import TransformerAgent
 from neva.environments import Environment
-from neva.memory import AdaptiveConversationMemory, MemoryBudget, VectorStoreMemory
+from neva.memory import AdaptiveConversationMemory, MemoryBudget, ShortTermMemory, VectorStoreMemory
 from neva.schedulers import RoundRobinScheduler
 from neva.utils.state_management import SimulationSnapshot
 
@@ -52,6 +52,25 @@ def test_vector_store_memory_roundtrips_without_reembedding():
     assert restored.agents[0].memory.recall(query="alpha") == expected
     assert restored.agents[0].memory._counter == original_memory._counter
     assert restored.agents[0].memory._vectors == original_memory._vectors
+
+
+def test_restored_memory_metadata_does_not_alias_snapshot_runtime():
+    original_memory = ShortTermMemory(capacity=5)
+    original_memory.remember("user", "alpha", metadata={"nested": {"value": 1}})
+    snapshot = _environment(original_memory).snapshot()
+
+    restored = _environment(ShortTermMemory(capacity=5))
+    restored.restore(snapshot)
+
+    first_record = list(restored.agents[0].memory._entries)[0]
+    first_record.metadata["nested"]["value"] = 999
+
+    saved_metadata = snapshot.runtime_state["agents"]["agent"]["memory"]["records"][0]["metadata"]
+    assert saved_metadata == {"nested": {"value": 1}}
+
+    restored.restore(snapshot)
+    second_record = list(restored.agents[0].memory._entries)[0]
+    assert second_record.metadata == {"nested": {"value": 1}}
 
 
 def test_vector_store_checkpoint_rejects_configuration_mismatch():

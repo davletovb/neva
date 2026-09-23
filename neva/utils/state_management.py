@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Protocol, cast, runtime_checkable
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Set, cast, runtime_checkable
 
 
 def _utcnow_naive() -> datetime:
@@ -38,6 +39,324 @@ class ConversationTurn:
 
 
 _TRUNCATION_MARKER = "...[truncated]"
+
+
+@dataclass(frozen=True)
+class CheckpointLimits:
+    """Optional in-memory resource ceilings for checkpoint graphs.
+
+    max_depth bounds nested mapping/sequence depth, max_nodes counts
+    containers, scalar values, and mapping keys, max_string_bytes bounds
+    any individual serialized string/key in UTF-8 bytes, and
+    max_total_string_bytes bounds their aggregate UTF-8 bytes.
+
+    Limits are opt-in so existing callers remain backward compatible. File
+    size remains governed independently by max_bytes on save/load.
+    """
+
+    max_depth: Optional[int] = None
+    max_nodes: Optional[int] = None
+    max_string_bytes: Optional[int] = None
+    max_total_string_bytes: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "max_depth",
+            "max_nodes",
+            "max_string_bytes",
+            "max_total_string_bytes",
+        ):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError(f"{name} must be a positive integer or None")
+
+
+class _CheckpointLimitExceeded(ValueError):
+    """Internal marker for an explicitly configured checkpoint resource ceiling."""
+
+
+def _json_key_text(key: object) -> str:
+    """Normalize a JSON mapping key the same way json.dumps/json.loads would."""
+
+    if isinstance(key, str):
+        return str.__str__(key)
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(int(key))
+    if isinstance(key, float):
+        numeric = float(key)
+        if not math.isfinite(numeric):
+            raise ValueError("Checkpoint contains a non-finite mapping key")
+        return str(numeric)
+    raise TypeError("Checkpoint mapping keys must be str, int, float, bool, or None")
+
+
+class _CheckpointGraphBudget:
+    def __init__(self, limits: CheckpointLimits) -> None:
+        self.limits = limits
+        self.nodes = 0
+        self.total_string_bytes = 0
+        self._active: Set[int] = set()
+
+    def _check_node(self) -> None:
+        self.nodes += 1
+        if self.limits.max_nodes is not None and self.nodes > self.limits.max_nodes:
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_nodes")
+
+    def _check_depth(self, depth: int) -> None:
+        if self.limits.max_depth is not None and depth > self.limits.max_depth:
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_depth")
+
+    def _check_string(self, value: str) -> None:
+        self._check_node()
+        size = len(value.encode("utf-8", errors="replace"))
+        if self.limits.max_string_bytes is not None and size > self.limits.max_string_bytes:
+            raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
+        self.total_string_bytes += size
+        if (
+            self.limits.max_total_string_bytes is not None
+            and self.total_string_bytes > self.limits.max_total_string_bytes
+        ):
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
+
+    def walk(self, value: object, *, depth: int = 0, native_only: bool = False) -> None:
+        if isinstance(value, str):
+            self._check_string(value)
+            return
+        if value is None or isinstance(value, (bool, int)):
+            self._check_node()
+            return
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("Checkpoint contains a non-finite number")
+            self._check_node()
+            return
+        if isinstance(value, datetime):
+            if native_only:
+                raise TypeError("Checkpoint runtime state must contain only native JSON values")
+            self._check_string(value.isoformat())
+            return
+
+        if isinstance(value, dict):
+            self._check_node()
+            container_depth = depth + 1
+            self._check_depth(container_depth)
+            marker = id(value)
+            if marker in self._active:
+                raise ValueError("Checkpoint contains a circular reference")
+            self._active.add(marker)
+            try:
+                for key, item in value.items():
+                    self._check_string(_json_key_text(key))
+                    self.walk(item, depth=container_depth, native_only=native_only)
+            finally:
+                self._active.remove(marker)
+            return
+
+        if isinstance(value, (list, tuple)):
+            self._check_node()
+            container_depth = depth + 1
+            self._check_depth(container_depth)
+            marker = id(value)
+            if marker in self._active:
+                raise ValueError("Checkpoint contains a circular reference")
+            self._active.add(marker)
+            try:
+                for item in value:
+                    self.walk(item, depth=container_depth, native_only=native_only)
+            finally:
+                self._active.remove(marker)
+            return
+
+        if native_only:
+            raise TypeError("Checkpoint runtime state must contain only native JSON values")
+        if isinstance(value, _SupportsToDict):
+            self.walk(value.to_dict(), depth=depth, native_only=False)
+            return
+        if is_dataclass(value):
+            self._check_node()
+            container_depth = depth + 1
+            self._check_depth(container_depth)
+            marker = id(value)
+            if marker in self._active:
+                raise ValueError("Checkpoint contains a circular reference")
+            self._active.add(marker)
+            try:
+                for item in fields(value):
+                    self._check_string(item.name)
+                    self.walk(getattr(value, item.name), depth=container_depth, native_only=False)
+            finally:
+                self._active.remove(marker)
+            return
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")
+
+
+def _validate_checkpoint_value(
+    value: object,
+    limits: Optional[CheckpointLimits],
+    *,
+    native_only: bool = False,
+    budget: Optional[_CheckpointGraphBudget] = None,
+) -> Optional[_CheckpointGraphBudget]:
+    if limits is None:
+        return budget
+    if not isinstance(limits, CheckpointLimits):
+        raise TypeError("limits must be a CheckpointLimits instance or None")
+    active_budget = budget or _CheckpointGraphBudget(limits)
+    active_budget.walk(value, native_only=native_only)
+    return active_budget
+
+
+def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLimits]) -> None:
+    """Reject oversized JSON structure/string tokens before UTF-8 decode/parse.
+
+    JSON escape sequences are charged by their decoded UTF-8 size so the same
+    CheckpointLimits envelope is symmetric between save and load. The scanner
+    never materialises a decoded string.
+    """
+
+    if limits is None:
+        return
+    if not isinstance(limits, CheckpointLimits):
+        raise TypeError("limits must be a CheckpointLimits instance or None")
+
+    nodes = 0
+    depth = 0
+    total_string_bytes = 0
+    i = 0
+    length = len(raw)
+
+    def add_node() -> None:
+        nonlocal nodes
+        nodes += 1
+        if limits.max_nodes is not None and nodes > limits.max_nodes:
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_nodes")
+
+    def decoded_codepoint_bytes(codepoint: int) -> int:
+        if 0xD800 <= codepoint <= 0xDFFF:
+            # json.loads can preserve lone surrogates; graph accounting encodes
+            # them with errors="replace", which is one '?' byte per code unit.
+            return 1
+        if codepoint <= 0x7F:
+            return 1
+        if codepoint <= 0x7FF:
+            return 2
+        return 3
+
+    def parse_hex_codepoint(offset: int) -> Optional[int]:
+        if offset + 4 > length:
+            return None
+        value = 0
+        for current in raw[offset : offset + 4]:
+            if 48 <= current <= 57:
+                digit = current - 48
+            elif 65 <= current <= 70:
+                digit = current - 55
+            elif 97 <= current <= 102:
+                digit = current - 87
+            else:
+                return None
+            value = (value << 4) | digit
+        return value
+
+    def scan_string(offset: int) -> int:
+        nonlocal total_string_bytes
+        string_bytes = 0
+        cursor = offset
+
+        def charge(amount: int) -> None:
+            nonlocal string_bytes
+            string_bytes += amount
+            if limits.max_string_bytes is not None and string_bytes > limits.max_string_bytes:
+                raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
+            if (
+                limits.max_total_string_bytes is not None
+                and total_string_bytes + string_bytes > limits.max_total_string_bytes
+            ):
+                raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
+
+        while cursor < length:
+            current = raw[cursor]
+            if current == 34:
+                total_string_bytes += string_bytes
+                return cursor + 1
+
+            if current != 92:
+                # Raw non-ASCII JSON is UTF-8, so counting its bytes directly is
+                # exactly its decoded UTF-8 byte size.
+                charge(1)
+                cursor += 1
+                continue
+
+            if cursor + 1 >= length:
+                charge(1)
+                cursor += 1
+                continue
+
+            escape = raw[cursor + 1]
+            if escape != 117:  # quote, slash, backslash, b/f/n/r/t, or invalid escape
+                charge(1)
+                cursor += 2
+                continue
+
+            codepoint = parse_hex_codepoint(cursor + 2)
+            if codepoint is None:
+                charge(1)
+                cursor += min(6, length - cursor)
+                continue
+
+            if 0xD800 <= codepoint <= 0xDBFF and cursor + 12 <= length:
+                if raw[cursor + 6] == 92 and raw[cursor + 7] == 117:
+                    low = parse_hex_codepoint(cursor + 8)
+                    if low is not None and 0xDC00 <= low <= 0xDFFF:
+                        charge(4)
+                        cursor += 12
+                        continue
+
+            charge(decoded_codepoint_bytes(codepoint))
+            cursor += 6
+
+        total_string_bytes += string_bytes
+        return cursor
+
+    while i < length:
+        byte = raw[i]
+        if byte in (9, 10, 13, 32, 44, 58):
+            i += 1
+            continue
+        if byte == 34:
+            add_node()
+            i = scan_string(i + 1)
+            continue
+        if byte in (123, 91):
+            add_node()
+            depth += 1
+            if limits.max_depth is not None and depth > limits.max_depth:
+                raise _CheckpointLimitExceeded("Checkpoint exceeds max_depth")
+            i += 1
+            continue
+        if byte in (125, 93):
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if byte in b"-0123456789":
+            add_node()
+            i += 1
+            while i < length and raw[i] not in b" \t\r\n,]}":
+                i += 1
+            continue
+        if byte in (116, 102, 110):
+            add_node()
+            i += 1
+            while i < length and raw[i] not in b" \t\r\n,]}":
+                i += 1
+            continue
+        i += 1
 
 
 def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
@@ -71,57 +390,91 @@ def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
 
 @dataclass
 class ConversationState:
-    """Track chronological history with optional turn-count and byte ceilings.
+    """Track chronological history with optional count and byte ceilings.
 
-    The supplied turn list is always copied. Existing ``ConversationTurn``
-    objects retain their identity when ``max_turn_bytes`` is disabled; enabling
-    the byte ceiling creates normalized, independently owned turn objects.
+    max_turn_bytes bounds each stored message. max_history_bytes bounds the
+    aggregate UTF-8 bytes of retained messages and evicts oldest turns as
+    needed. The effective per-turn ceiling is the stricter of the two, so one
+    oversized newest message is truncated rather than immediately evicted.
+
+    The supplied turn list is always copied. Existing ConversationTurn objects
+    retain their identity only when both byte ceilings are disabled. Because
+    turns remains a public mutable list for compatibility, direct edits are
+    reconciled on the next record_turn() or to_dict() call.
     """
 
     agent_name: str
     turns: List[ConversationTurn] = field(default_factory=list)
     max_turns: Optional[int] = None
     max_turn_bytes: Optional[int] = None
+    max_history_bytes: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.max_turns is not None and (type(self.max_turns) is not int or self.max_turns <= 0):
             raise ValueError("max_turns must be a positive integer or None")
-        if self.max_turn_bytes is not None and (
-            type(self.max_turn_bytes) is not int or self.max_turn_bytes <= 0
-        ):
-            raise ValueError("max_turn_bytes must be a positive integer or None")
-        if self.max_turn_bytes is None:
+        for name in ("max_turn_bytes", "max_history_bytes"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError(f"{name} must be a positive integer or None")
+
+        byte_limit = self._effective_turn_byte_limit()
+        if byte_limit is None:
             self.turns = list(self.turns)
         else:
             self.turns = [
                 ConversationTurn(
                     speaker=turn.speaker,
-                    message=_truncate_utf8(turn.message, self.max_turn_bytes),
+                    message=_truncate_utf8(turn.message, byte_limit),
                     timestamp=turn.timestamp,
                 )
                 for turn in self.turns
             ]
         self._trim()
 
+    @staticmethod
+    def _message_bytes(message: str) -> int:
+        return len(message.encode("utf-8", errors="replace"))
+
+    def _effective_turn_byte_limit(self) -> Optional[int]:
+        limits = [
+            limit for limit in (self.max_turn_bytes, self.max_history_bytes) if limit is not None
+        ]
+        return min(limits) if limits else None
+
+    def _drop_prefix(self, count: int) -> None:
+        if count > 0:
+            del self.turns[:count]
+
     def _trim(self) -> None:
         if self.max_turns is not None:
-            del self.turns[: max(0, len(self.turns) - self.max_turns)]
+            self._drop_prefix(max(0, len(self.turns) - self.max_turns))
+
+        if self.max_history_bytes is None:
+            return
+
+        retained_bytes = sum(self._message_bytes(turn.message) for turn in self.turns)
+        drop_count = 0
+        while drop_count < len(self.turns) and retained_bytes > self.max_history_bytes:
+            retained_bytes -= self._message_bytes(self.turns[drop_count].message)
+            drop_count += 1
+        self._drop_prefix(drop_count)
 
     def record_turn(self, speaker: str, message: str) -> None:
-        self.turns.append(
-            ConversationTurn(
-                speaker=speaker,
-                message=_truncate_utf8(message, self.max_turn_bytes),
-            )
-        )
+        stored = _truncate_utf8(message, self._effective_turn_byte_limit())
+        self.turns.append(ConversationTurn(speaker=speaker, message=stored))
         self._trim()
 
     def to_dict(self) -> Dict[str, object]:
+        # Reconcile any direct mutations of the public turns list before
+        # persistence so retention guarantees cannot be bypassed by a stale
+        # cached byte count.
+        self._trim()
         return {
             "agent_name": self.agent_name,
             "turns": [turn.to_dict() for turn in self.turns],
             "max_turns": self.max_turns,
             "max_turn_bytes": self.max_turn_bytes,
+            "max_history_bytes": self.max_history_bytes,
         }
 
     @classmethod
@@ -137,6 +490,7 @@ class ConversationState:
             turns=turns,
             max_turns=cast(Optional[int], payload.get("max_turns")),
             max_turn_bytes=cast(Optional[int], payload.get("max_turn_bytes")),
+            max_history_bytes=cast(Optional[int], payload.get("max_history_bytes")),
         )
 
 
@@ -164,12 +518,20 @@ class SimulationSnapshot:
             "runtime_state": self.runtime_state,
         }
 
+    def validate_limits(self, limits: Optional[CheckpointLimits]) -> None:
+        _validate_checkpoint_value(self._serialisable(), limits)
+
     def to_json(self) -> str:
         return json.dumps(self._serialisable(), default=_json_default, indent=2)
 
     @classmethod
-    def from_json(cls, raw: str) -> "SimulationSnapshot":
-        payload = json.loads(raw)
+    def _from_payload(
+        cls,
+        payload: Dict[str, Any],
+        *,
+        limits: Optional[CheckpointLimits] = None,
+    ) -> "SimulationSnapshot":
+        _validate_checkpoint_value(payload, limits, native_only=True)
         version = payload.get("version", 1)
         if version not in (1, 2):
             raise ValueError(f"Unsupported snapshot version: {version}")
@@ -182,13 +544,27 @@ class SimulationSnapshot:
             runtime_state=payload.get("runtime_state"),
         )
 
+    @classmethod
+    def from_json(
+        cls,
+        raw: str,
+        *,
+        limits: Optional[CheckpointLimits] = None,
+    ) -> "SimulationSnapshot":
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("Snapshot root must be a JSON object")
+        return cls._from_payload(payload, limits=limits)
+
 
 def create_snapshot(
     *,
     environment_state: Optional[Dict[str, object]] = None,
     agent_states: Optional[Iterable[ConversationState]] = None,
+    limits: Optional[CheckpointLimits] = None,
 ) -> SimulationSnapshot:
     environment_state = environment_state or {}
+
     agent_snapshot: Dict[str, Dict[str, object]] = {}
     if agent_states is None:
         agent_iter: Iterable[ConversationState] = ()
@@ -196,11 +572,18 @@ def create_snapshot(
         agent_iter = agent_states
     for state in agent_iter:
         agent_snapshot[state.agent_name] = state.to_dict()
-    return SimulationSnapshot(
+
+    # Assemble the source graph first, then validate it exactly once before the
+    # environment-state deepcopy. This keeps the pre-copy resource boundary
+    # without walking environment and agent state twice.
+    snapshot = SimulationSnapshot(
         created_at=_utcnow_naive(),
-        environment_state=deepcopy(environment_state),
+        environment_state=environment_state,
         agent_states=agent_snapshot,
     )
+    snapshot.validate_limits(limits)
+    snapshot.environment_state = deepcopy(environment_state)
+    return snapshot
 
 
 def _validate_max_bytes(max_bytes: Optional[int]) -> None:
@@ -209,7 +592,11 @@ def _validate_max_bytes(max_bytes: Optional[int]) -> None:
 
 
 def save_snapshot(
-    snapshot: SimulationSnapshot, path: Path, *, max_bytes: Optional[int] = None
+    snapshot: SimulationSnapshot,
+    path: Path,
+    *,
+    max_bytes: Optional[int] = None,
+    limits: Optional[CheckpointLimits] = None,
 ) -> None:
     """Atomically save UTF-8 JSON without materialising the complete snapshot.
 
@@ -220,12 +607,14 @@ def save_snapshot(
     survive serialization, staging-write, and replacement failures.
 
     This bounds serialization-buffer memory, but it requires temporary disk
-    space on the destination filesystem roughly equal to the new checkpoint
-    and does not bound the snapshot object graph, deep-copy creation, decoded
-    loads, or the size of an individual JSON scalar. ``_serialisable()`` is
-    the shared representation point for both this function and ``to_json()``.
+    space on the destination filesystem roughly equal to the new checkpoint.
+    Pass limits=CheckpointLimits(...) to validate the in-memory graph before
+    staging; decoded-load limits are enforced separately by load_snapshot().
+    ``_serialisable()`` is the shared representation point for both this
+    function and ``to_json()``.
     """
     _validate_max_bytes(max_bytes)
+    snapshot.validate_limits(limits)
     encoder = json.JSONEncoder(default=_json_default, indent=2)
     temp_path: Optional[Path] = None
 
@@ -265,32 +654,50 @@ def save_snapshot(
                 pass
 
 
-def load_snapshot(path: Path, *, max_bytes: Optional[int] = None) -> SimulationSnapshot:
-    """Load UTF-8 JSON with an optional positive byte limit (None is unlimited).
+def load_snapshot(
+    path: Path,
+    *,
+    max_bytes: Optional[int] = None,
+    limits: Optional[CheckpointLimits] = None,
+) -> SimulationSnapshot:
+    """Load UTF-8 JSON with optional file and in-memory graph ceilings.
 
-    Limited loads read in 64 KiB chunks (at most limit + 1 bytes total) and
-    reject overflow before decoding or parsing, so a generous limit never
-    triggers a proportional preallocation. The limit does not bound the memory
-    used by the decoded object graph.
+    max_bytes bounds serialized input bytes. limits preflights nesting, node
+    count, and raw JSON string-token bytes before UTF-8 decode/JSON parse, then
+    validates the parsed graph before constructing the snapshot.
+
+    The stdlib JSON parser still materialises decoded text while parsing. The
+    file and graph ceilings bound that work rather than changing the checkpoint
+    format into a streaming parser.
     """
+
     _validate_max_bytes(max_bytes)
-    raw = b"" if max_bytes is None else None
+    if limits is not None and not isinstance(limits, CheckpointLimits):
+        raise TypeError("limits must be a CheckpointLimits instance or None")
+
+    raw = bytearray()
     with path.open("rb") as source:
-        if max_bytes is None:
-            raw = source.read()
-        else:
-            chunks = []
-            remaining = max_bytes + 1
-            while remaining > 0:
-                chunk = source.read(min(remaining, 65536))
-                if not chunk:
-                    break
-                chunks.append(chunk)
+        remaining = max_bytes + 1 if max_bytes is not None else None
+        while remaining is None or remaining > 0:
+            request = 65536 if remaining is None else min(remaining, 65536)
+            chunk = source.read(request)
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if remaining is not None:
                 remaining -= len(chunk)
-            raw = b"".join(chunks)
+
     if max_bytes is not None and len(raw) > max_bytes:
         raise ValueError("Snapshot exceeds max_bytes")
-    return SimulationSnapshot.from_json(raw.decode("utf-8"))
+
+    _preflight_json_bytes(raw, limits)
+    decoded = raw.decode("utf-8")
+    del raw
+    payload = json.loads(decoded)
+    del decoded
+    if not isinstance(payload, dict):
+        raise ValueError("Snapshot root must be a JSON object")
+    return SimulationSnapshot._from_payload(payload, limits=limits)
 
 
 @runtime_checkable
@@ -305,5 +712,5 @@ def _json_default(value: object) -> Any:
     if isinstance(value, _SupportsToDict):
         return value.to_dict()
     if is_dataclass(value):
-        return asdict(cast(Any, value))
+        return {item.name: getattr(value, item.name) for item in fields(value)}
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")

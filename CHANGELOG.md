@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Checkpoint/transcript resource envelopes: `CheckpointLimits` adds opt-in
+  graph depth, node-count, per-string UTF-8 byte, and aggregate string-byte
+  ceilings across checkpoint creation/save/load and environment snapshot/
+  restore. Limited loads preflight JSON nesting and decoded UTF-8 string-token
+  sizes before UTF-8 decode/JSON parse, then release the serialized byte buffer
+  before object parsing. Runtime capture now validates and structurally clones
+  JSON-native state instead of materialising a complete JSON string and parsed
+  clone; runtime restore no longer deep-copies the entire checkpoint graph,
+  staging only independently owned attributes/environment extras/memory state.
+  `ConversationState(max_history_bytes=N)` independently bounds aggregate
+  retained message bytes and composes with `max_turns` and
+  `max_turn_bytes`; direct public-list edits are reconciled on the next record
+  or serialization operation. The checkpoint benchmark now reports peak-Python-memory
+  amplification relative to serialized checkpoint bytes.
 - Durable automatic recovery: `RecoveryPolicy` adds opt-in bounded retries,
   exponential backoff, retry exception filtering, and final escalation for
   scheduler-selection and selected agent-turn failures. Defaults preserve the

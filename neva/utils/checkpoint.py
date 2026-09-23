@@ -5,7 +5,6 @@ scheduler implementations must provide explicit checkpoint hooks.
 """
 from __future__ import annotations
 
-import json
 from collections import deque
 from copy import deepcopy
 from dataclasses import asdict
@@ -21,10 +20,36 @@ from neva.memory import (
     VectorStoreMemory,
 )
 from neva.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
+from neva.utils.state_management import (
+    CheckpointLimits,
+    _CheckpointLimitExceeded,
+    _json_key_text,
+    _validate_checkpoint_value,
+)
 
 
 def _type_name(value: Any) -> str:
     return f"{type(value).__module__}.{type(value).__qualname__}"
+
+
+def _clone_json_native(value: Any) -> Any:
+    """Clone native JSON data while matching a dumps/loads roundtrip shape."""
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, dict):
+        return {_json_key_text(key): _clone_json_native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clone_json_native(item) for item in value]
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _records(records: Any) -> Any:
@@ -39,9 +64,14 @@ def _records(records: Any) -> Any:
 def _load_records(records: Any) -> Any:
     from datetime import datetime
 
-    return [
-        MemoryRecord(**dict(r, timestamp=datetime.fromisoformat(r["timestamp"]))) for r in records
-    ]
+    restored = []
+    for record in records:
+        payload = dict(record)
+        payload["timestamp"] = datetime.fromisoformat(record["timestamp"])
+        if "metadata" in payload:
+            payload["metadata"] = deepcopy(payload["metadata"])
+        restored.append(MemoryRecord(**payload))
+    return restored
 
 
 def _record(record: MemoryRecord) -> Dict[str, Any]:
@@ -267,7 +297,11 @@ _ENV_FIELDS = {
 }
 
 
-def capture_runtime(environment: Any) -> Dict[str, Any]:
+def capture_runtime(
+    environment: Any,
+    *,
+    limits: Optional[CheckpointLimits] = None,
+) -> Dict[str, Any]:
     scheduler = environment.scheduler
     names = [agent.name for agent in environment.agents]
     if len(set(names)) != len(names):
@@ -289,45 +323,69 @@ def capture_runtime(environment: Any) -> Dict[str, Any]:
         "scheduler": capture_scheduler(scheduler),
     }
     try:
-        # A JSON roundtrip both isolates the state and rejects unsupported values.
-        return json.loads(json.dumps(runtime, allow_nan=False))
+        # Structural validation avoids the previous full JSON string + parsed
+        # clone amplification. The structural clone preserves dumps/loads
+        # normalization (tuples become lists; JSON mapping keys become strings).
+        validation_limits = limits if limits is not None else CheckpointLimits()
+        _validate_checkpoint_value(runtime, validation_limits, native_only=True)
+        return _clone_json_native(runtime)
+    except _CheckpointLimitExceeded:
+        raise
     except (TypeError, ValueError) as exc:
         raise ValueError("Environment checkpoint fields must be JSON serializable") from exc
 
 
-def restore_runtime(environment: Any, runtime: Optional[Dict[str, Any]]) -> None:
+def restore_runtime(
+    environment: Any,
+    runtime: Optional[Dict[str, Any]],
+    *,
+    limits: Optional[CheckpointLimits] = None,
+    validate_limits: bool = True,
+) -> None:
     if runtime is None:
         raise ValueError("Missing checkpoint runtime state")
-    runtime = deepcopy(runtime)
+
+    if validate_limits:
+        _validate_checkpoint_value(runtime, limits, native_only=True)
     agents = {agent.name: agent for agent in environment.agents}
     if len(agents) != len(environment.agents) or set(agents) != set(runtime["agents"]):
         raise ValueError("Checkpoint agent population does not match")
     if runtime["environment_type"] != _type_name(environment):
         raise ValueError("Checkpoint environment type does not match")
+
     apply_scheduler = prepare_scheduler(environment.scheduler, runtime["scheduler"], agents)
+
     # Stage memory restoration so a mismatch cannot partially mutate live agents.
+    # The runtime graph itself is read-only; avoiding deepcopy(runtime) prevents a
+    # second complete checkpoint graph from existing during restore.
     memories = {}
     ids = {}
+    attributes = {}
     budget_updates: Dict[int, Any] = {}
     for name, agent in agents.items():
         payload = runtime["agents"][name]
         if payload["type"] != _type_name(agent):
             raise ValueError("Checkpoint agent type does not match")
         ids[name] = UUID(payload["id"])
+        attributes[name] = deepcopy(payload["attributes"])
         memory = deepcopy(agent.memory, _memory_restore_memo(agent.memory))
         _restore_memory(memory, payload["memory"], budget_updates)
         memories[name] = memory
+
+    environment_extra = deepcopy(runtime["environment_extra"])
+
     apply_scheduler()
     for budget, embedding_calls in budget_updates.values():
         budget._embedding_calls = embedding_calls
     for name, agent in agents.items():
         agent.id = ids[name]
-        agent.attributes = runtime["agents"][name]["attributes"]
+        agent.attributes = attributes[name]
         agent.set_memory(memories[name])
         if agent.cache is not None:
             agent.cache.clear()
+
     for key in list(vars(environment)):
         if key not in _ENV_FIELDS:
             delattr(environment, key)
-    environment.__dict__.update(runtime["environment_extra"])
+    environment.__dict__.update(environment_extra)
     environment.conversation_id = runtime["conversation_id"]

@@ -187,6 +187,10 @@ def run_case(
             "median_peak_python_bytes": _median(
                 sample[stage]["peak_python_bytes"] for sample in samples
             ),
+            "median_peak_to_checkpoint_ratio": _median(
+                sample[stage]["peak_python_bytes"] / max(1, sample["checkpoint_bytes"])
+                for sample in samples
+            ),
         }
         for stage in stage_names
     }
@@ -224,6 +228,10 @@ def run_benchmark(
             "memory": (
                 "peak Python allocations from a separate tracemalloc pass; "
                 "excludes OS page cache and temporary/destination file space"
+            ),
+            "amplification": (
+                "peak_python_bytes / serialized checkpoint bytes; use the ratio "
+                "to identify workloads that may justify externalized persistence"
             ),
             "thresholds": "none; compare results on equivalent hardware",
         },

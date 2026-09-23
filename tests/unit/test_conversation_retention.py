@@ -229,3 +229,127 @@ def test_bounded_agent_history_normalizes_unpaired_surrogates_without_failing():
     assert surrogate not in stored
     assert stored.endswith("...[truncated]")
     assert len(stored.encode("utf-8")) <= 24
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, "64"])
+def test_invalid_history_byte_limit_rejected(limit):
+    with pytest.raises(ValueError, match="max_history_bytes"):
+        ConversationState("agent", max_history_bytes=limit)
+
+
+def test_history_byte_limit_evicts_oldest_messages():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "aaaa")
+    state.record_turn("agent", "bbbb")
+    state.record_turn("user", "cccc")
+
+    assert [turn.message for turn in state.turns] == ["bbbb", "cccc"]
+    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 10
+
+
+def test_history_byte_limit_truncates_single_oversized_newest_turn():
+    state = ConversationState("agent", max_history_bytes=20)
+    state.record_turn("user", "x" * 100)
+
+    assert len(state.turns) == 1
+    assert state.turns[0].message.endswith("...[truncated]")
+    assert len(state.turns[0].message.encode("utf-8")) <= 20
+
+
+def test_history_turn_and_per_turn_byte_limits_compose():
+    state = ConversationState(
+        "agent",
+        max_turns=3,
+        max_turn_bytes=16,
+        max_history_bytes=32,
+    )
+    for number in range(5):
+        state.record_turn("user", f"{number}-" + ("x" * 50))
+
+    assert len(state.turns) <= 3
+    assert all(len(turn.message.encode("utf-8")) <= 16 for turn in state.turns)
+    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 32
+    assert state.turns[-1].message.endswith("...[truncated]")
+
+
+def test_serialization_preserves_history_byte_limit_and_trims_legacy_payload():
+    state = ConversationState("agent", max_history_bytes=8)
+    state.record_turn("user", "aaaa")
+    state.record_turn("agent", "bbbb")
+    restored = ConversationState.from_dict(state.to_dict())
+
+    assert restored.max_history_bytes == 8
+    assert [turn.message for turn in restored.turns] == ["aaaa", "bbbb"]
+
+    payload = state.to_dict()
+    payload["turns"] = [
+        ConversationTurn("user", "1111").to_dict(),
+        ConversationTurn("user", "2222").to_dict(),
+        ConversationTurn("user", "3333").to_dict(),
+    ]
+    restored = ConversationState.from_dict(payload)
+    assert [turn.message for turn in restored.turns] == ["2222", "3333"]
+
+
+def test_history_byte_limit_reconciles_direct_list_mutation():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "abcd")
+    state.turns.append(ConversationTurn("user", "12345678"))
+
+    state.record_turn("user", "z")
+
+    assert [turn.message for turn in state.turns] == ["12345678", "z"]
+    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 10
+
+
+def test_history_byte_limit_reconciles_direct_clear():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "aaaa")
+    state.record_turn("agent", "bbbb")
+    state.turns.clear()
+
+    state.record_turn("user", "cccc")
+
+    assert [turn.message for turn in state.turns] == ["cccc"]
+
+
+def test_history_byte_limit_reconciles_message_mutation_before_persistence():
+    state = ConversationState("agent", max_history_bytes=10)
+    state.record_turn("user", "a")
+    state.turns[0].message = "x" * 20
+    state.turns.append(ConversationTurn("agent", "ok"))
+
+    payload = state.to_dict()
+
+    assert [turn["message"] for turn in payload["turns"]] == ["ok"]
+    assert [turn.message for turn in state.turns] == ["ok"]
+
+
+def test_environment_checkpoint_keeps_history_byte_policy():
+    from neva.agents import TransformerAgent
+    from neva.environments import Environment
+    from neva.schedulers import RoundRobinScheduler
+    from neva.utils.state_management import SimulationSnapshot
+
+    env = Environment(RoundRobinScheduler())
+    agent = TransformerAgent(name="agent", llm_backend=lambda _: "r" * 40)
+    agent.set_conversation_state(
+        ConversationState(
+            agent.name,
+            max_turns=5,
+            max_turn_bytes=24,
+            max_history_bytes=40,
+        )
+    )
+    env.register_agent(agent)
+
+    env.run(3)
+    snapshot = SimulationSnapshot.from_json(env.snapshot().to_json())
+    env.run(1)
+    env.restore(snapshot)
+
+    state = agent.conversation_state
+    assert state.max_turns == 5
+    assert state.max_turn_bytes == 24
+    assert state.max_history_bytes == 40
+    assert sum(len(turn.message.encode("utf-8")) for turn in state.turns) <= 40
