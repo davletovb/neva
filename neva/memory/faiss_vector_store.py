@@ -93,10 +93,19 @@ class FaissVectorStoreMemory(MemoryModule):
             MemoryConfigurationError: If embeddings are not 1D sequences.
         """
         embedding = self._embedder(text)
-        vector = self._np.asarray(tuple(float(x) for x in embedding), dtype="float32")
+        msg = "Embeddings must be one-dimensional sequences of floats"
+        try:
+            vector = self._np.asarray(embedding, dtype="float32")
+        except (TypeError, ValueError):
+            # NumPy does not materialize every generic iterable (for example,
+            # generators) directly. Preserve support for those while still
+            # validating array dimensionality before flattening/conversion.
+            try:
+                vector = self._np.asarray(tuple(embedding), dtype="float32")
+            except (TypeError, ValueError) as exc:
+                raise MemoryConfigurationError(msg) from exc
 
         if vector.ndim != 1:
-            msg = "Embeddings must be one-dimensional sequences of floats"
             raise MemoryConfigurationError(msg)
 
         if self._normalize_embeddings:
