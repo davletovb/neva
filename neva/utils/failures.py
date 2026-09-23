@@ -87,8 +87,10 @@ class FailureLog:
     appending the same path rely on O_APPEND semantics for small lines.
     Optional size-based rotation is intentionally single-process: callers
     using ``rotate_bytes`` must externally coordinate writers that share a
-    path. Rotated files use ``<path>.1``, ``<path>.2``, ... and ``load()``
-    reads retained backups oldest-first before the active file.
+    path. Rotated files use ``<path>.1``, ``<path>.2``, ... . ``load()`` reads
+    retained backups oldest-first only when the reader is also configured with
+    rotation and a sufficient ``backup_count``; a default ``FailureLog(path)``
+    intentionally reads only the active file.
 
     ``rotate_bytes`` is a rotation threshold, not a per-record truncation
     policy. A single record larger than the threshold is kept intact in an
@@ -120,6 +122,7 @@ class FailureLog:
         self.fsync = bool(fsync)
         self.rotate_bytes = rotate_bytes
         self.backup_count = backup_count
+        self._retention_pruned = False
         self._lock = threading.Lock()
 
     def _rotated_path(self, index: int) -> Path:
@@ -131,7 +134,11 @@ class FailureLog:
             if not candidate.name.startswith(prefix):
                 continue
             suffix = candidate.name[len(prefix) :]
-            if suffix.isdigit() and int(suffix) > self.backup_count:
+            if (
+                suffix.isascii()
+                and suffix.isdigit()
+                and int(suffix) > self.backup_count
+            ):
                 try:
                     candidate.unlink()
                 except FileNotFoundError:
@@ -174,8 +181,9 @@ class FailureLog:
         encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            if self.rotate_bytes is not None:
+            if self.rotate_bytes is not None and not self._retention_pruned:
                 self._prune_backups()
+                self._retention_pruned = True
 
             separator = b""
             current_size = self.path.stat().st_size if self.path.exists() else 0
