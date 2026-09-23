@@ -186,9 +186,10 @@ def test_manifest_fingerprint_captures_full_prompt_validator_policy():
     second_manifest = create_run_manifest(second, seed=1, dependencies=[])
 
     assert first_manifest.fingerprint() != second_manifest.fingerprint()
-    assert first_manifest.agents[0]["prompt_validator"]["forbidden_patterns"][0][
-        "pattern"
-    ] == "blocked-one"
+    assert (
+        first_manifest.agents[0]["prompt_validator"]["forbidden_patterns"][0]["pattern"]
+        == "blocked-one"
+    )
 
 
 def test_manifest_fingerprint_captures_provider_api_base_without_api_key():
