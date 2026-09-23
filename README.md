@@ -366,7 +366,10 @@ scheduler = create_scheduler("my_scheduler")
   still at-least-once when retries are enabled, so retry-safe failures or
   idempotent external side effects are recommended. Recovery policy/state are
   runtime-only and remain configured on the receiving environment across
-  checkpoint restore rather than being serialized.
+  checkpoint restore rather than being serialized. `replay_failure(record)`
+  uses the same configured recovery policy as a normal selected turn. A
+  successfully recovered turn's recorded scheduler latency covers the complete
+  turn attempt window, including retry backoff.
   Telemetry omits raw prompts and
   completions unless `include_content=True`. This is not protection against
   prompt injection, unauthorized tool use, or account-wide overspend. Tools
