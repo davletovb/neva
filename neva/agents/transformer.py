@@ -90,9 +90,7 @@ class TransformerAgent(AIAgent):
             )
 
         def _generate(prompt: str) -> str:
-            inputs = self._tokenizer(
-                prompt, return_tensors="pt", truncation=True, padding=True
-            )
+            inputs = self._tokenizer(prompt, return_tensors="pt", truncation=True, padding=True)
             output_tokens = self._model.generate(**inputs, max_length=200)
             return self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
 
