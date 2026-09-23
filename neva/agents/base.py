@@ -143,9 +143,7 @@ class Tool(ABC):
                     "argument_schema must provide a validate(arguments) method"
                 )
             if inspect.iscoroutinefunction(validator):
-                raise ToolSchemaConfigurationError(
-                    "argument_schema.validate must be synchronous"
-                )
+                raise ToolSchemaConfigurationError("argument_schema.validate must be synchronous")
             try:
                 signature = inspect.signature(validator)
             except (TypeError, ValueError):
@@ -175,9 +173,7 @@ class Tool(ABC):
         try:
             reason = schema.validate(validation_arguments)
         except Exception as exc:
-            raise ToolExecutionError(
-                f"tool schema validation for '{self.name}' failed"
-            ) from exc
+            raise ToolExecutionError(f"tool schema validation for '{self.name}' failed") from exc
         if reason is None:
             return None
         if inspect.isawaitable(reason):
@@ -189,17 +185,13 @@ class Tool(ABC):
             return "custom schema reported a violation"
         return reason
 
-    def _evaluate_guard(
-        self, call: ToolCall, guard: Optional["ToolGuard"]
-    ) -> Optional[str]:
+    def _evaluate_guard(self, call: ToolCall, guard: Optional["ToolGuard"]) -> Optional[str]:
         if guard is None:
             return None
         try:
             return guard.evaluate(call)
         except Exception as exc:
-            raise ToolExecutionError(
-                f"tool guard evaluation for '{self.name}' failed"
-            ) from exc
+            raise ToolExecutionError(f"tool guard evaluation for '{self.name}' failed") from exc
 
     def _execute(
         self,
@@ -224,9 +216,7 @@ class Tool(ABC):
             raise ToolExecutionError(reason)
         schema_reason = self._schema_reason(task)
         if schema_reason is not None:
-            raise ToolExecutionError(
-                f"invalid arguments for tool '{self.name}': {schema_reason}"
-            )
+            raise ToolExecutionError(f"invalid arguments for tool '{self.name}': {schema_reason}")
         return self._execute(task)
 
     def metadata(self) -> Dict[str, Sequence[str]]:
