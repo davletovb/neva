@@ -347,16 +347,36 @@ scheduler = create_scheduler("my_scheduler")
   spend enforcement is enabled. Failed turns can be persisted durably with
   `Environment(failure_log=FailureLog(path))` (`neva.utils.failures`): handled
   failures (both policies, plus scheduler-selection failures) are appended as
-  JSON lines. Long-running single-process jobs can opt into retention with
-  `FailureLog(path, rotate_bytes=..., backup_count=...)`; a reader must use a
-  matching rotation configuration (and a sufficient `backup_count`) for
-  `load()` to include retained backups oldest-first. A default
-  `FailureLog(path)` intentionally reads only the active file. The threshold
-  rotates before the next record
-  when possible, but one record larger than the threshold is kept intact rather
-  than truncated. Rotation is not coordinated across processes.
-  `replay_failure(record)` re-dispatches a recorded turn; raw context is stored
-  only with `include_context=True`. Telemetry omits raw prompts and
+  JSON lines. Optional `RecoveryPolicy(max_retries=..., backoff=...)`
+  adds bounded automatic retries for scheduler selection and selected agent
+  turns; final escalation can inherit or force `raise`/`return`, while
+  deliberate cancellation is never retried. `Environment.recovery_state()`
+  exposes retry/recovery/escalation counters and the last recovery event;
+  `retries_exhausted` counts only configured retry sequences that actually
+  consume their final attempt, so the default `max_retries=0` path leaves it
+  at zero.
+  Long-running jobs can opt into retention with
+  `FailureLog(path, rotate_bytes=..., backup_count=...)`; append/load/rotation
+  are coordinated across processes sharing the same path when the sibling lock
+  file is writable. Read-only logs remain loadable: if that lock cannot be
+  opened because the storage is read-only, `load()` falls back to an unlocked
+  snapshot read rather than requiring write access. A reader must use a
+  matching rotation configuration (and sufficient `backup_count`) to load
+  retained backups oldest-first. `max_record_bytes=` independently enforces a
+  strict UTF-8 record ceiling by dropping raw context first and then truncating
+  the diagnostic message with an explicit marker. `replay_failure(record)`
+  re-dispatches a recorded turn; raw context is stored only with
+  `include_context=True`. Automatic retries cover context construction and
+  agent execution only; after `agent.step()` succeeds, completion-hook failures
+  are escalated without rerunning the completed agent call. Agent execution is
+  still at-least-once when retries are enabled, so retry-safe failures or
+  idempotent external side effects are recommended. Recovery policy/state are
+  runtime-only and remain configured on the receiving environment across
+  checkpoint restore rather than being serialized. `replay_failure(record)`
+  uses the same configured recovery policy as a normal selected turn. A
+  successfully recovered turn's recorded scheduler latency covers the complete
+  turn attempt window, including retry backoff.
+  Telemetry omits raw prompts and
   completions unless `include_content=True`. This is not protection against
   prompt injection, unauthorized tool use, or account-wide overspend. Tools
   run with the process's network identity.

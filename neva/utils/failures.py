@@ -7,14 +7,17 @@ survive crashes and restarts and can be inspected or replayed later.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import math
 import os
 import threading
+import time
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,14 @@ class FailureRecord:
     conversation_id: Optional[str] = None
     agent_name: Optional[str] = None
     context: Optional[str] = None
+    attempt: int = 1
+    max_attempts: int = 1
+    action: str = ""
+    truncated: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.action:
+            object.__setattr__(self, "action", self.policy)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -57,6 +68,18 @@ class FailureRecord:
             or timestamp < 0
         ):
             raise ValueError("failure record timestamp must be a finite non-negative number")
+        attempt = payload.get("attempt", 1)
+        max_attempts = payload.get("max_attempts", 1)
+        action = payload.get("action", policy)
+        truncated = payload.get("truncated", False)
+        if type(attempt) is not int or attempt <= 0:
+            raise ValueError("failure record attempt must be a positive integer")
+        if type(max_attempts) is not int or max_attempts < attempt:
+            raise ValueError("failure record max_attempts must be >= attempt")
+        if action not in {"retry", "raise", "return"}:
+            raise ValueError("failure record action must be 'retry', 'raise', or 'return'")
+        if type(truncated) is not bool:
+            raise ValueError("failure record truncated must be a boolean")
         return cls(
             timestamp=float(timestamp),
             environment=payload["environment"],
@@ -66,6 +89,10 @@ class FailureRecord:
             conversation_id=payload.get("conversation_id"),
             agent_name=payload.get("agent_name"),
             context=payload.get("context"),
+            attempt=attempt,
+            max_attempts=max_attempts,
+            action=action,
+            truncated=truncated,
         )
 
 
@@ -83,18 +110,19 @@ class FailureLog:
 
     Raw context is dropped unless ``include_context=True`` (a write-side
     gate: ``load()`` returns whatever context the file already contains).
-    Appends are thread-safe within one instance; separate processes
-    appending the same path rely on O_APPEND semantics for small lines.
-    Optional size-based rotation is intentionally single-process: callers
-    using ``rotate_bytes`` must externally coordinate writers that share a
-    path. Rotated files use ``<path>.1``, ``<path>.2``, ... . ``load()`` reads
+    Appends, loads, and size-based rotation are serialized by a sibling
+    advisory lock file, so multiple processes using FailureLog coordinate the
+    same active/backup set instead of racing rotation. Rotated files use
+    ``<path>.1``, ``<path>.2``, ... . ``load()`` reads
     retained backups oldest-first only when the reader is also configured with
     rotation and a sufficient ``backup_count``; a default ``FailureLog(path)``
     intentionally reads only the active file.
 
-    ``rotate_bytes`` is a rotation threshold, not a per-record truncation
-    policy. A single record larger than the threshold is kept intact in an
-    otherwise empty active file so failure details are not silently discarded.
+    ``rotate_bytes`` controls file rotation. ``max_record_bytes`` is an
+    independent optional hard ceiling: oversized records first drop raw context
+    and then UTF-8-safe truncate the diagnostic message, marking
+    ``truncated=True``. If the structural metadata alone cannot fit, append
+    fails rather than writing an over-limit record.
     Records live in this external file and are not part of simulation
     checkpoints.
     """
@@ -107,6 +135,7 @@ class FailureLog:
         fsync: bool = True,
         rotate_bytes: Optional[int] = None,
         backup_count: int = 3,
+        max_record_bytes: Optional[int] = None,
     ) -> None:
         if not isinstance(path, (str, os.PathLike)):
             raise ValueError("path must be a string or path-like object")
@@ -117,13 +146,113 @@ class FailureLog:
             raise ValueError("rotate_bytes must be a positive integer or None")
         if type(backup_count) is not int or backup_count < 0:
             raise ValueError("backup_count must be a non-negative integer")
+        if max_record_bytes is not None and (
+            type(max_record_bytes) is not int or max_record_bytes <= 0
+        ):
+            raise ValueError("max_record_bytes must be a positive integer or None")
         self.path = candidate
         self.include_context = bool(include_context)
         self.fsync = bool(fsync)
         self.rotate_bytes = rotate_bytes
         self.backup_count = backup_count
+        self.max_record_bytes = max_record_bytes
         self._retention_pruned = False
         self._lock = threading.Lock()
+
+    @property
+    def _lock_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.lock")
+
+    @contextmanager
+    def _process_lock(self) -> Iterator[None]:
+        """Serialize append/rotation/load across processes sharing this path."""
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_path.open("a+b") as handle:
+            if os.name == "nt":  # pragma: no cover - platform-specific branch.
+                import msvcrt
+
+                locking = getattr(msvcrt, "locking")
+                lock_nonblocking = getattr(msvcrt, "LK_NBLCK")
+                unlock = getattr(msvcrt, "LK_UNLCK")
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                while True:
+                    try:
+                        locking(handle.fileno(), lock_nonblocking, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.01)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    locking(handle.fileno(), unlock, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def _load_process_lock(self) -> Iterator[None]:
+        """Coordinate reads when possible without requiring directory write access."""
+
+        stack = ExitStack()
+        try:
+            stack.enter_context(self._process_lock())
+        except OSError as exc:
+            stack.close()
+            if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                raise
+            logger.debug(
+                "Reading failure log without process lock because lock storage is read-only",
+                exc_info=True,
+            )
+            yield
+            return
+
+        with stack:
+            yield
+
+    @staticmethod
+    def _encode_record(failure: FailureRecord) -> bytes:
+        return (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
+
+    def _bounded_record(self, failure: FailureRecord) -> tuple[FailureRecord, bytes]:
+        encoded = self._encode_record(failure)
+        if self.max_record_bytes is None or len(encoded) <= self.max_record_bytes:
+            return failure, encoded
+
+        failure = replace(failure, context=None, truncated=True)
+        encoded = self._encode_record(failure)
+        if len(encoded) <= self.max_record_bytes:
+            return failure, encoded
+
+        original = failure.error_message
+        suffix = "...[truncated]"
+        low, high = 0, len(original)
+        best_record: Optional[FailureRecord] = None
+        best_bytes: Optional[bytes] = None
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = replace(failure, error_message=original[:middle] + suffix)
+            candidate_bytes = self._encode_record(candidate)
+            if len(candidate_bytes) <= self.max_record_bytes:
+                best_record = candidate
+                best_bytes = candidate_bytes
+                low = middle + 1
+            else:
+                high = middle - 1
+        if best_record is None or best_bytes is None:
+            raise ValueError("failure record metadata exceeds max_record_bytes")
+        return best_record, best_bytes
 
     def _rotated_path(self, index: int) -> Path:
         return self.path.with_name(f"{self.path.name}.{index}")
@@ -174,63 +303,67 @@ class FailureLog:
             raise TypeError("failure must be a FailureRecord")
         if not self.include_context and failure.context is not None:
             failure = replace(failure, context=None)
-        encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
+        failure, encoded = self._bounded_record(failure)
+
         with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            if self.rotate_bytes is not None and not self._retention_pruned:
-                self._prune_backups()
-                self._retention_pruned = True
+            with self._process_lock():
+                if self.rotate_bytes is not None and not self._retention_pruned:
+                    self._prune_backups()
+                    self._retention_pruned = True
 
-            separator = b""
-            current_size = self.path.stat().st_size if self.path.exists() else 0
-            if current_size > 0:
-                with self.path.open("rb") as existing:
-                    existing.seek(-1, os.SEEK_END)
-                    if existing.read(1) != b"\n":
-                        separator = b"\n"
-
-            if (
-                self.rotate_bytes is not None
-                and current_size > 0
-                and current_size + len(separator) + len(encoded) > self.rotate_bytes
-            ):
-                self._rotate()
                 separator = b""
+                current_size = self.path.stat().st_size if self.path.exists() else 0
+                if current_size > 0:
+                    with self.path.open("rb") as existing:
+                        existing.seek(-1, os.SEEK_END)
+                        if existing.read(1) != b"\n":
+                            separator = b"\n"
 
-            with self.path.open("ab") as handle:
-                if separator:
-                    handle.write(separator)
-                handle.write(encoded)
-                handle.flush()
-                if self.fsync:
-                    os.fsync(handle.fileno())
+                if (
+                    self.rotate_bytes is not None
+                    and current_size > 0
+                    and current_size + len(separator) + len(encoded) > self.rotate_bytes
+                ):
+                    self._rotate()
+                    separator = b""
+
+                with self.path.open("ab") as handle:
+                    if separator:
+                        handle.write(separator)
+                    handle.write(encoded)
+                    handle.flush()
+                    if self.fsync:
+                        os.fsync(handle.fileno())
 
     def load(self) -> List[FailureRecord]:
         """Return all readable records; malformed lines are skipped with a warning."""
 
         records: List[FailureRecord] = []
         with self._lock:
-            for source in self._retained_paths():
-                with source.open("rb") as handle:
-                    for number, raw in enumerate(handle, start=1):
-                        try:
-                            line = raw.decode("utf-8").strip()
-                        except UnicodeDecodeError:
-                            logger.warning(
-                                "Skipping undecodable failure record at %s line %d",
-                                source,
-                                number,
-                            )
-                            continue
-                        if not line:
-                            continue
-                        try:
-                            records.append(FailureRecord.from_dict(json.loads(line)))
-                        except (ValueError, KeyError, TypeError):
-                            logger.warning(
-                                "Skipping malformed failure record at %s line %d",
-                                source,
-                                number,
-                            )
-                            continue
+            with self._load_process_lock():
+                sources = self._retained_paths()
+                payloads = [(source, source.read_bytes()) for source in sources]
+
+        for source, payload in payloads:
+            for number, raw in enumerate(payload.splitlines(), start=1):
+                try:
+                    line = raw.decode("utf-8").strip()
+                except UnicodeDecodeError:
+                    logger.warning(
+                        "Skipping undecodable failure record at %s line %d",
+                        source,
+                        number,
+                    )
+                    continue
+                if not line:
+                    continue
+                try:
+                    records.append(FailureRecord.from_dict(json.loads(line)))
+                except (ValueError, KeyError, TypeError):
+                    logger.warning(
+                        "Skipping malformed failure record at %s line %d",
+                        source,
+                        number,
+                    )
+                    continue
         return records

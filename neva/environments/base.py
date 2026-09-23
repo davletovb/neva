@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from time import perf_counter, time
+import threading
+from time import perf_counter, sleep, time
 from typing import Dict, List, Optional
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import SchedulingError
 from neva.utils.failures import FailureLog, FailureRecord
+from neva.utils.recovery import RecoveryPolicy, RecoveryState
 from neva.utils.state_management import ConversationState, SimulationSnapshot, create_snapshot
 from neva.utils.telemetry import get_telemetry
 
@@ -27,16 +29,22 @@ class Environment:
         error_policy: str = "raise",
         error_value: Optional[str] = None,
         failure_log: Optional[FailureLog] = None,
+        recovery_policy: Optional[RecoveryPolicy] = None,
     ) -> None:
         if error_policy not in {"raise", "return"}:
             raise ValueError("error_policy must be 'raise' or 'return'")
         if failure_log is not None and not isinstance(failure_log, FailureLog):
             raise ValueError("failure_log must be a FailureLog instance")
+        if recovery_policy is not None and not isinstance(recovery_policy, RecoveryPolicy):
+            raise ValueError("recovery_policy must be a RecoveryPolicy instance")
         self.state: Dict[str, object] = {}
         self.scheduler = scheduler
         self.error_policy = error_policy
         self.error_value = error_value
         self.failure_log = failure_log
+        self.recovery_policy = recovery_policy or RecoveryPolicy()
+        self._recovery = RecoveryState()
+        self._recovery_lock = threading.Lock()
         self._agent_error_policies: Dict[str, Dict[str, Optional[str]]] = {}
         self.agents: List[AIAgent] = []
 
@@ -99,16 +107,57 @@ class Environment:
         if self.scheduler is None or not self.agents:
             return None
 
-        try:
-            agent = self.scheduler.get_next_agent()
-        except SchedulingError as exc:
-            self._record_failure(agent_name=None, exc=exc, context=None, policy=self.error_policy)
-            if self.error_policy == "return":
-                logger.debug("Scheduler failed to select an agent: %s", exc)
-                return self.error_value
-            raise
+        recovery = self.recovery_policy
+        agent: Optional[AIAgent] = None
+        for attempt in range(1, recovery.max_attempts + 1):
+            try:
+                agent = self.scheduler.get_next_agent()
+                break
+            except SchedulingError as exc:
+                retry = recovery.should_retry(exc, attempt)
+                policy = (
+                    self.error_policy if recovery.escalation == "inherit" else recovery.escalation
+                )
+                action = "retry" if retry else policy
+                wrote = self._record_failure(
+                    agent_name=None,
+                    exc=exc,
+                    context=None,
+                    policy=policy,
+                    attempt=attempt,
+                    max_attempts=recovery.max_attempts,
+                    action=action,
+                )
+                self._note_recovery(
+                    exc=exc,
+                    agent_name=None,
+                    action=action,
+                    record_written=wrote,
+                    retry=retry,
+                    exhausted=(
+                        recovery.max_retries > 0
+                        and not retry
+                        and attempt >= recovery.max_attempts
+                        and recovery.is_retryable(exc)
+                    ),
+                    escalated=not retry,
+                )
+                if retry:
+                    delay = recovery.delay_for(attempt)
+                    if delay:
+                        sleep(delay)
+                    continue
+                if policy == "return":
+                    logger.debug("Scheduler failed to select an agent: %s", exc)
+                    return self.error_value
+                raise
+
         if agent is None:
             return None
+        if attempt > 1:
+            with self._recovery_lock:
+                self._recovery.recoveries_succeeded += 1
+                self._recovery.last_action = "recovered"
         telemetry = get_telemetry()
         if telemetry is not None:
             try:
@@ -122,33 +171,99 @@ class Environment:
         return self._execute_turn(agent)
 
     def _execute_turn(self, agent: AIAgent, *, context: Optional[str] = None) -> Optional[str]:
-        """Run one turn for ``agent`` with the standard failure dispatch."""
+        """Run one turn with optional automatic retry and final escalation."""
 
         scheduler = self.scheduler
         if scheduler is None:  # pragma: no cover - step()/replay_failure() guard this.
             return None
+
         started = perf_counter()
+        recovery = self.recovery_policy
+        resolved_context = context
+        response = ""
+
+        for attempt in range(1, recovery.max_attempts + 1):
+            try:
+                if resolved_context is None:
+                    resolved_context = self.context()
+                response = agent.step(resolved_context)
+            except Exception as exc:
+                retry = recovery.should_retry(exc, attempt)
+                inherited = self._effective_error_policy(agent)
+                policy = inherited if recovery.escalation == "inherit" else recovery.escalation
+                action = "retry" if retry else policy
+                wrote = self._record_failure(
+                    agent_name=agent.name,
+                    exc=exc,
+                    context=resolved_context,
+                    policy=policy,
+                    attempt=attempt,
+                    max_attempts=recovery.max_attempts,
+                    action=action,
+                )
+                self._note_recovery(
+                    exc=exc,
+                    agent_name=agent.name,
+                    action=action,
+                    record_written=wrote,
+                    retry=retry,
+                    exhausted=(
+                        recovery.max_retries > 0
+                        and not retry
+                        and attempt >= recovery.max_attempts
+                        and recovery.is_retryable(exc)
+                    ),
+                    escalated=not retry,
+                )
+                if retry:
+                    delay = recovery.delay_for(attempt)
+                    if delay:
+                        sleep(delay)
+                    continue
+
+                scheduler.record_metrics(agent, status="failed", error=repr(exc))
+                if policy == "return":
+                    return self._effective_error_value(agent)
+                raise
+            break
+
         try:
-            if context is None:
-                context = self.context()
-            response = agent.step(context)
             self.on_turn_complete(response)
         except Exception as exc:
-            # Record before observer metrics: a raising observer must not
-            # prevent the durable record from being written.
-            policy = self._effective_error_policy(agent)
-            self._record_failure(agent_name=agent.name, exc=exc, context=context, policy=policy)
+            inherited = self._effective_error_policy(agent)
+            policy = inherited if recovery.escalation == "inherit" else recovery.escalation
+            wrote = self._record_failure(
+                agent_name=agent.name,
+                exc=exc,
+                context=resolved_context,
+                policy=policy,
+                attempt=attempt,
+                max_attempts=recovery.max_attempts,
+                action=policy,
+            )
+            self._note_recovery(
+                exc=exc,
+                agent_name=agent.name,
+                action=policy,
+                record_written=wrote,
+                retry=False,
+                exhausted=False,
+                escalated=True,
+            )
             scheduler.record_metrics(agent, status="failed", error=repr(exc))
-            overrides = getattr(self, "_agent_error_policies", {})
-            override = overrides.get(str(agent.id))
-            if override is not None:
-                if override.get("policy") == "return":
-                    return override.get("value")
-            elif self.error_policy == "return":
-                return self.error_value
+            if policy == "return":
+                return self._effective_error_value(agent)
             raise
+
+        if attempt > 1:
+            with self._recovery_lock:
+                self._recovery.recoveries_succeeded += 1
+                self._recovery.last_action = "recovered"
         scheduler.record_metrics(
-            agent, status="completed", latency=perf_counter() - started, response=response
+            agent,
+            status="completed",
+            latency=perf_counter() - started,
+            response=response,
         )
         return response
 
@@ -159,6 +274,41 @@ class Environment:
             return str(override["policy"])
         return self.error_policy
 
+    def _effective_error_value(self, agent: AIAgent) -> Optional[str]:
+        overrides = getattr(self, "_agent_error_policies", {})
+        override = overrides.get(str(agent.id))
+        if override is not None and override.get("policy") == "return":
+            return override.get("value")
+        return self.error_value
+
+    def _note_recovery(
+        self,
+        *,
+        exc: BaseException,
+        agent_name: Optional[str],
+        action: str,
+        record_written: bool,
+        retry: bool,
+        exhausted: bool,
+        escalated: bool,
+    ) -> None:
+        with self._recovery_lock:
+            self._recovery.failures_seen += 1
+            self._recovery.retries_attempted += int(retry)
+            self._recovery.retries_exhausted += int(exhausted)
+            self._recovery.escalations += int(escalated)
+            self._recovery.failure_records_written += int(record_written)
+            self._recovery.last_action = action
+            self._recovery.last_error_type = type(exc).__name__
+            self._recovery.last_error_message = str(exc)
+            self._recovery.last_agent_name = agent_name
+
+    def recovery_state(self) -> Dict[str, object]:
+        """Return a consistent snapshot of automatic recovery counters."""
+
+        with self._recovery_lock:
+            return dict(self._recovery.to_dict())
+
     def _record_failure(
         self,
         *,
@@ -166,12 +316,15 @@ class Environment:
         exc: BaseException,
         context: Optional[str],
         policy: str,
-    ) -> None:
+        attempt: int = 1,
+        max_attempts: int = 1,
+        action: Optional[str] = None,
+    ) -> bool:
         """Append a durable failure record; logging problems never break a run."""
 
         failure_log = getattr(self, "failure_log", None)
         if failure_log is None:
-            return
+            return False
         try:
             failure_log.append(
                 FailureRecord(
@@ -183,10 +336,15 @@ class Environment:
                     error_message=str(exc),
                     policy=policy,
                     context=context,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    action=action or policy,
                 )
             )
+            return True
         except Exception:
             logger.warning("Failed to record turn failure", exc_info=True)
+            return False
 
     def replay_failure(
         self, record: FailureRecord, *, agent: Optional[AIAgent] = None
