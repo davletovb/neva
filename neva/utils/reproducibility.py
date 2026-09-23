@@ -408,11 +408,25 @@ def _environment_config(environment: "Environment") -> Dict[str, Any]:
         for name, value in sorted(vars(environment).items())
         if not name.startswith("_") and name not in excluded
     }
+    agent_error_policies = []
+    configured_policies = getattr(environment, "_agent_error_policies", {})
+    for index, agent in enumerate(environment.agents):
+        policy = configured_policies.get(str(agent.id))
+        if policy is not None:
+            agent_error_policies.append(
+                {
+                    "agent_index": index,
+                    "agent_name": agent.name,
+                    "policy": _json_native(policy),
+                }
+            )
+
     config: Dict[str, Any] = {
         "type": _type_name(environment),
         "error_policy": environment.error_policy,
         "error_value": environment.error_value,
         "recovery_policy": _json_native(vars(environment.recovery_policy)),
+        "agent_error_policies": agent_error_policies,
         "state": _json_native(environment.state),
         "public_config": public_config,
     }
@@ -549,6 +563,9 @@ def create_run_manifest(
     """Capture the configuration needed to explain or replay a simulation run."""
 
     seed = _validate_seed(seed)
+    agent_names = [agent.name for agent in environment.agents]
+    if len(agent_names) != len(set(agent_names)):
+        raise ReproducibilityError("run manifests require unique agent names")
     agents = [_agent_config(agent) for agent in environment.agents]
     live_providers = sorted(
         {
