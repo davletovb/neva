@@ -155,9 +155,7 @@ class RateLimiter:
                         if self._waiters:
                             self._waiters[0][1].set()
                         return
-                    sleep_time = (1.0 - self._allowance) * (
-                        self._per / self._rate
-                    )
+                    sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
                     wake.clear()
             finally:
                 self._lock_exit(acquired_normally)
