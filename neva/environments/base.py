@@ -105,6 +105,17 @@ class Environment:
 
         return ""
 
+    def seed(self, seed: int, *, optional_libraries: bool = True):
+        """Seed process and Neva-owned scheduler RNGs for reproducible runs."""
+
+        from neva.utils.reproducibility import seed_everything
+
+        return seed_everything(
+            seed,
+            environment=self,
+            optional_libraries=optional_libraries,
+        )
+
     def on_turn_complete(self, response: str) -> None:
         """Update transcript/state before metrics; override instead of wrapping step."""
 
