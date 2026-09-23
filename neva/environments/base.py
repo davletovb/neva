@@ -419,7 +419,14 @@ class Environment:
 
         snapshot.validate_limits(limits)
         if snapshot.version == 2:
-            restore_runtime(self, snapshot.runtime_state, limits=limits)
+            # The complete snapshot was just validated, so avoid walking the
+            # runtime subtree a second time during environment restore.
+            restore_runtime(
+                self,
+                snapshot.runtime_state,
+                limits=limits,
+                validate_limits=False,
+            )
         elif snapshot.version != 1:
             raise ValueError(f"Unsupported snapshot version: {snapshot.version}")
 
