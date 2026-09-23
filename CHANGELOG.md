@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Durable automatic recovery: `RecoveryPolicy` adds opt-in bounded retries,
+  exponential backoff, retry exception filtering, and final escalation for
+  scheduler-selection and selected agent-turn failures. Defaults preserve the
+  historical single-attempt behavior. `Environment.recovery_state()` exposes
+  recovery counters and the last recovery event; deliberate cancellation is
+  never retried.
+- Failure records now persist attempt/max-attempt/action/truncation metadata.
+  `FailureLog(max_record_bytes=...)` adds an optional hard UTF-8 per-record
+  ceiling that preserves structural recovery metadata, drops raw context first,
+  and then truncates the diagnostic message with an explicit marker.
+  Append/load/rotation are serialized across processes by a sibling advisory
+  lock file, closing the previous multi-process rotation race.
+- Circuit-breaker tests now cover concurrent half-open contention and release of
+  interrupted/rejected recovery probes.
 - Checkpoints now natively preserve `VectorStoreMemory` and `AdaptiveConversationMemory` state without custom hooks. Vector records/cached embeddings and adaptive history, summary/short-term views, token counts, and memory-budget embedding usage are restored data-only; incompatible structural configurations fail closed and configured embedder/summarizer callables plus `MemoryBudget` instances are preserved by identity rather than deep-copied. Callables are not serialized or replayed; callers remain responsible for supplying semantically equivalent summarizer/embedder/token-estimator configuration when restoring a checkpoint.
 - `ConversationState(max_turn_bytes=N)` adds an opt-in UTF-8 byte ceiling for each stored turn. Oversized stored messages are truncated safely with a `...[truncated]` marker, the setting survives serialization/restore, and the default remains unlimited; agent calls still return the full live response.
 - A repository-local checkpoint scaling benchmark (`python -m benchmarks.checkpoint_scaling`) measures deterministic small/medium/large workloads across snapshot creation, streamed save, and load. It reports checkpoint bytes, untraced wall-clock time, and peak Python allocations from a separate `tracemalloc` pass with raw samples and medians; no hardware-dependent pass/fail threshold is imposed. The CLI can target a real checkpoint filesystem with `--workdir` and record a local revision with `--git-sha`.
@@ -98,6 +112,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   try again. Pass the same instance to share a provider circuit across agents.
 
 ### Changed
+- Supported/tested Python versions are now 3.11, 3.12, 3.13, and 3.14; Python
+  3.9 and 3.10 were removed from the CI matrix and package classifiers.
 - Snapshot saves now serialize JSON incrementally into a sibling temporary file instead of materialising the complete JSON string and UTF-8 byte string in memory. Optional `max_bytes` limits are enforced while encoding; the staged file is flushed/fsynced and installed with atomic `os.replace`, so overflow, serialization errors, staging-write failures, and replacement failures preserve an existing checkpoint. Large saves therefore require temporary disk space on the destination filesystem roughly equal to the new checkpoint.
 - OpenAI-compatible providers (OpenAI and Grok/xAI) now call `/v1/chat/completions`
   over `requests` instead of the legacy `openai==0.28.1` SDK.
