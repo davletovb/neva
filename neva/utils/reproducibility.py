@@ -182,7 +182,8 @@ def seed_everything(
 
     seed = _validate_seed(seed)
     random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
+    hash_seed = seed % (2**32)
+    os.environ["PYTHONHASHSEED"] = str(hash_seed)
 
     optional_status: Dict[str, str] = {}
     if optional_libraries:
@@ -193,14 +194,16 @@ def seed_everything(
                 optional_status[name] = "not-installed"
                 continue
             if name == "numpy":
-                getattr(module, "random").seed(seed % (2**32))
-                optional_status[name] = "seeded"
+                numpy_seed = seed % (2**32)
+                getattr(module, "random").seed(numpy_seed)
+                optional_status[name] = f"seeded:{numpy_seed}"
             else:
-                getattr(module, "manual_seed")(seed)
+                torch_seed = seed % (2**63)
+                getattr(module, "manual_seed")(torch_seed)
                 cuda = getattr(module, "cuda", None)
                 if cuda is not None and callable(getattr(cuda, "manual_seed_all", None)):
-                    cuda.manual_seed_all(seed)
-                optional_status[name] = "seeded"
+                    cuda.manual_seed_all(torch_seed)
+                optional_status[name] = f"seeded:{torch_seed}"
     else:
         optional_status = {"numpy": "skipped", "torch": "skipped"}
 
@@ -238,8 +241,8 @@ def seed_everything(
         agent_seeds=agent_seeds,
         optional_libraries=optional_status,
         python_hash_seed=(
-            "set-for-child-processes; current interpreter hash randomization "
-            "was fixed at interpreter startup"
+            f"set-to-{hash_seed}-for-child-processes; current interpreter hash "
+            "randomization was fixed at interpreter startup"
         ),
     )
 
