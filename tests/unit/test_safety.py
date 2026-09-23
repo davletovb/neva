@@ -119,7 +119,6 @@ def test_circuit_breaker_opens_and_probes(monkeypatch) -> None:
     breaker.allow()
 
 
-
 def test_rate_limiter_fifo_order_under_contention(monkeypatch):
     timestamps = [0.0]
     order = []
