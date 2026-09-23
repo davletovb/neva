@@ -254,11 +254,14 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-1. Shared provider/spend budgets and durable failure records for unattended runs.
-2. Tool schemas, permissions, and limits before autonomous tool execution.
-3. Checkpoint/transcript resource ceilings and optional-integration/scheduler tests.
-4. Model-aware context limits and experiment manifests/replay.
-5. Bounded tool loops, streaming, and opt-in live-provider examples.
+Sections 1–5 are now implemented at the library/deterministic-integration layer.
+The remaining priorities are:
+
+1. Model-aware context/token budgeting and explicit output-token reservations.
+2. Reproducible experiment manifests, unified seeding, and deterministic offline replay.
+3. A bounded model-driven tool loop built on the completed tool guard/schema layer.
+4. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
+5. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
@@ -277,5 +280,6 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Tool-call guardrails (PR #61).
 - [x] Validated tool argument schemas (PR #62).
 - [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #53 remains separately deferred.
+- [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
