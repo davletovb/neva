@@ -577,4 +577,3 @@ def _execute_with_guards(
         return _truncate_output(output, limits.max_output_chars)
     finally:
         _release_slots(slots)
-
