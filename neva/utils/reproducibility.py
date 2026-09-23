@@ -332,6 +332,69 @@ def _cache_policy(agent: "AIAgent") -> Dict[str, Any]:
     return policy
 
 
+def _without_runtime_timestamps(value: Any) -> Any:
+    """Remove wall-clock record timestamps from captured initial memory state."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _without_runtime_timestamps(item)
+            for key, item in value.items()
+            if key != "timestamp"
+        }
+    if isinstance(value, list):
+        return [_without_runtime_timestamps(item) for item in value]
+    return value
+
+
+def _memory_callable_config(memory: Any) -> Dict[str, Any]:
+    if memory is None:
+        return {}
+
+    config: Dict[str, Any] = {}
+    for attribute, key in (
+        ("_summarizer", "summarizer"),
+        ("_embedder", "embedder"),
+    ):
+        value = getattr(memory, attribute, None)
+        if value is not None:
+            config[key] = _callable_name(value)
+
+    budget = getattr(memory, "_budget", None)
+    if budget is not None:
+        estimator = getattr(budget, "_token_estimator", None)
+        if estimator is not None:
+            config["budget_token_estimator"] = _callable_name(estimator)
+
+    modules = getattr(memory, "_modules", None)
+    if isinstance(modules, list):
+        config["modules"] = [_memory_callable_config(module) for module in modules]
+    return config
+
+
+def _memory_config(memory: Any) -> Dict[str, Any]:
+    if memory is None:
+        return {"type": None}
+
+    config: Dict[str, Any] = {"type": _type_name(memory)}
+    try:
+        from neva.utils.checkpoint import _capture_memory
+
+        captured = _capture_memory(memory)
+    except ValueError:
+        captured = None
+    if captured is not None:
+        config["state"] = _without_runtime_timestamps(captured)
+
+    callables = _memory_callable_config(memory)
+    if callables:
+        config["callables"] = callables
+
+    hook = getattr(memory, "reproducibility_config", None)
+    if callable(hook):
+        config["custom"] = _json_native(hook())
+    return config
+
+
 def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
     generation: Dict[str, Any] = {}
     for name in (
@@ -363,22 +426,21 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
         }
         for tool in sorted(agent.tools, key=lambda item: item.name)
     ]
-    memory = agent.memory
-    memory_config: Dict[str, Any] = {
-        "type": _type_name(memory) if memory is not None else None,
-    }
-    memory_hook = getattr(memory, "reproducibility_config", None)
-    if callable(memory_hook):
-        memory_config["custom"] = _json_native(memory_hook())
+    memory_config = _memory_config(agent.memory)
 
     return {
         "name": agent.name,
         "type": _type_name(agent),
         "provider": getattr(agent, "provider", None),
         "model": getattr(agent, "model", getattr(agent, "model_name", None)),
+        "api_base": getattr(agent, "api_base", None),
         "generation": generation,
         "prompt_validator": {
             "max_length": getattr(agent.prompt_validator, "max_length", None),
+            "forbidden_patterns": [
+                {"pattern": pattern.pattern, "flags": pattern.flags}
+                for pattern in getattr(agent.prompt_validator, "_compiled_patterns", ())
+            ],
         },
         "cache": _cache_policy(agent),
         "backend": _callable_name(backend) if backend is not None else None,
