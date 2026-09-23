@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Deterministic optional-integration coverage now runs in CI with real CPU
+  PyTorch/Transformers, FAISS/NumPy, and the declared Anthropic SDK. A locally
+  generated/saved tiny T5 model exercises real TransformerAgent weights without
+  network downloads; FAISS has a dedicated >=80% module coverage gate; and a
+  local Anthropic /v1/messages server exercises actual SDK request/response
+  objects without live credentials. The tools extra now explicitly includes
+  torch.
+- Provider transport integration now covers deterministic loopback connect,
+  read, and request-body write timeouts plus invalid JSON, non-object JSON, and
+  malformed Chat Completions payloads. Invalid/non-object provider JSON fails
+  with explicit BackendError diagnostics.
+- Composite/Conditional scheduler integration coverage now includes nested
+  lifecycle propagation and fairness. CompositeScheduler propagates pause and
+  resume into its active child scheduler so nested agents do not remain stuck
+  after parent resume.
+- FAISS semantic recall now preserves FAISS nearest-neighbour ordering instead
+  of reversing default L2 distances.
+
 - Checkpoint/transcript resource envelopes: `CheckpointLimits` adds opt-in
   graph depth, node-count, per-string UTF-8 byte, and aggregate string-byte
   ceilings across checkpoint creation/save/load and environment snapshot/
