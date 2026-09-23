@@ -245,8 +245,12 @@ schema and guard layer:
   `{"action":"final","output":...}`.
 - Registered tool metadata is advertised in structured form, including
   descriptions/capabilities and declarative `ArgumentSchema` field
-  requirements/bounds where available. Duplicate tool names fail before a
-  model call, and `max_tools` bounds the advertised registry.
+  requirements/bounds where available. Advertisement is prompt-budget-aware:
+  it uses full metadata when it fits, then compact name/description entries,
+  then name-only entries, preserving every registered tool name rather than
+  making the default `max_tools=32` unreachable under the default prompt
+  ceiling. Duplicate tool names fail before a model call, and `max_tools`
+  bounds the advertised registry.
 - Model-selected calls never execute tools directly. Every call is converted to
   `ToolCall` and routed through `AIAgent.call_tool()`, preserving the
   section-3 enforcement path for agent/tool allowlists, synchronous approval,
@@ -260,7 +264,11 @@ schema and guard layer:
   (`max_steps`), advertised tools, retained/parsed model-output characters,
   each feedback record, and orchestration-prompt characters. Old feedback is
   dropped first when needed to keep a later prompt within its envelope. If the
-  task/tool metadata alone cannot fit, the loop fails before calling the model.
+  task/protocol/tool names alone cannot fit, the loop fails before calling the
+  model. On the default agent model path, a configured `max_prompt_chars`
+  above the agent's own prompt-validator ceiling is rejected up front with
+  `ToolLoopLimitError`; an explicit external `model=` callable is not
+  constrained by the agent validator.
 - An explicit `final` action terminates successfully. A model that never
   finalizes stops at `max_steps` with a non-success `ToolLoopResult`; there
   is no implicit unbounded agentic loop.
