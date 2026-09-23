@@ -7,6 +7,7 @@ survive crashes and restarts and can be inspected or replayed later.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import math
@@ -199,6 +200,23 @@ class FailureLog:
                 finally:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    @contextmanager
+    def _load_process_lock(self) -> Iterator[None]:
+        """Coordinate reads when possible without requiring directory write access."""
+
+        try:
+            with self._process_lock():
+                yield
+                return
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                raise
+            logger.debug(
+                "Reading failure log without process lock because lock storage is read-only",
+                exc_info=True,
+            )
+        yield
+
     @staticmethod
     def _encode_record(failure: FailureRecord) -> bytes:
         return (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
@@ -318,7 +336,7 @@ class FailureLog:
 
         records: List[FailureRecord] = []
         with self._lock:
-            with self._process_lock():
+            with self._load_process_lock():
                 sources = self._retained_paths()
                 payloads = [(source, source.read_bytes()) for source in sources]
 
