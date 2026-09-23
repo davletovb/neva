@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `90185cbf` (PRs #49–#52, #54–#68 merged).
+Updated against `main` at `17c96a4a` (PRs #49–#52, #54–#69 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -76,14 +76,19 @@ Boundary: Python cannot forcibly kill an already-running synchronous third-party
 
 Correction to the original review remains relevant: receivers do not consume the sender's limiter. Explicit legacy `rate_limiter=` is still supported and replaces only the shared rate component; shared provider concurrency can remain active.
 
-### 2. Durable failure recovery — partial
+### 2. Durable failure recovery — complete at the Neva environment layer
 
-- Per-agent policies merged in PR #57: optional `register_agent(agent, error_policy="raise"|"return", error_value=...)` overrides for selected-turn failures. Omitted policies inherit the environment default. Version-2 checkpoints preserve overrides; older checkpoints clear them. This is not durable recovery or replay.
-- Durable failure records: PR #60 (merged) adds `FailureLog`, an append-only JSONL store flushed/fsynced per record, wired through `Environment(failure_log=...)` for agent and scheduler-selection failures under both policies, with tolerant `load()` and `Environment.replay_failure(record)` re-dispatch. PR #68 adds opt-in `FailureLog(rotate_bytes=..., backup_count=...)` rotation/retention for long-running single-process runs, with oldest-first loading across retained files and intact oversized records. Remaining: automated retry loops, escalation policies, richer recovery-state observability, strict per-record size ceilings if needed, and multi-process rotation coordination.
-- Escalation policies and richer recovery-state observability.
-- Broader concurrent and interruption-path testing of the existing circuit breaker.
+PR #70 completes the remaining library-level recovery gap:
 
-The circuit breaker itself is no longer an unimplemented gap. Nor should the old unconditional claim that every turn burns its full retry budget be retained.
+- `RecoveryPolicy` adds opt-in bounded retries, exponential backoff, exception filtering, and final escalation. `max_retries=0` preserves historical one-attempt behavior. Scheduler-selection failures and selected agent turns use the same policy, while deliberate cancellation is never automatically retried.
+- Final escalation may inherit existing environment/per-agent `raise`/`return` handling or force one of those dispositions after retries are exhausted. Intermediate retry failures do not inflate failed-turn metrics; a recovered turn is still recorded as completed.
+- `Environment.recovery_state()` exposes consistent runtime counters for observed failures, retries attempted, successful recoveries, exhausted retry sequences, escalations, durable records written, and the last recovery event.
+- Durable records now include attempt number, maximum attempts, recovery action, and truncation status while remaining backward-compatible with older JSONL records.
+- `FailureLog(max_record_bytes=...)` adds an optional strict UTF-8 per-record ceiling. Oversized records preserve routing/recovery metadata, drop raw context first, then truncate the diagnostic message with an explicit marker; structurally impossible limits fail closed.
+- Appends, reads, and rotation are coordinated across processes by a sibling advisory lock file, closing the multi-process rotation race while retaining fsync, torn-tail separation, tolerant loading, and bounded backup retention.
+- Circuit-breaker tests now cover concurrent half-open contention (exactly one recovery probe) and interrupted/rejected probe release so later recovery attempts cannot be permanently stranded.
+
+Boundary: recovery is synchronous and at-least-once at the turn level. If a custom agent or `on_turn_complete()` hook performs irreversible side effects before raising, an enabled retry can repeat those side effects; callers should scope `retry_on` to retry-safe failures or make side effects idempotent.
 
 ### 3. Tool schemas, permissions, and execution limits — mostly addressed
 
