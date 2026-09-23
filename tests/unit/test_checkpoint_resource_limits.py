@@ -90,6 +90,35 @@ def test_load_preflights_large_string_before_json_parse(tmp_path, monkeypatch):
         load_snapshot(path, limits=_limits(max_string_bytes=100))
 
 
+def test_load_preflight_uses_decoded_utf8_size_for_escaped_unicode(tmp_path):
+    state = ConversationState("agent")
+    snapshot = create_snapshot(
+        environment_state={"message": "你" * 10},
+        agent_states=[state],
+        limits=_limits(max_string_bytes=30),
+    )
+    path = tmp_path / "snapshot.json"
+
+    save_snapshot(snapshot, path, limits=_limits(max_string_bytes=30))
+    assert b"\\u" in path.read_bytes()
+
+    loaded = load_snapshot(path, limits=_limits(max_string_bytes=30))
+    assert loaded.environment_state["message"] == "你" * 10
+
+
+def test_json_preflight_total_string_bytes_match_decoded_unicode():
+    raw = b'{"\\u503c":"\\u4f60\\u597d"}'
+    state_management._preflight_json_bytes(
+        raw,
+        CheckpointLimits(max_total_string_bytes=9),
+    )
+    with pytest.raises(ValueError, match="max_total_string_bytes"):
+        state_management._preflight_json_bytes(
+            raw,
+            CheckpointLimits(max_total_string_bytes=8),
+        )
+
+
 def test_load_preflights_depth_before_json_parse(tmp_path, monkeypatch):
     path = tmp_path / "snapshot.json"
     path.write_text(
