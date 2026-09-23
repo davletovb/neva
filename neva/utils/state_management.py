@@ -530,10 +530,11 @@ def save_snapshot(
     survive serialization, staging-write, and replacement failures.
 
     This bounds serialization-buffer memory, but it requires temporary disk
-    space on the destination filesystem roughly equal to the new checkpoint
-    and does not bound the snapshot object graph, deep-copy creation, decoded
-    loads, or the size of an individual JSON scalar. ``_serialisable()`` is
-    the shared representation point for both this function and ``to_json()``.
+    space on the destination filesystem roughly equal to the new checkpoint.
+    Pass limits=CheckpointLimits(...) to validate the in-memory graph before
+    staging; decoded-load limits are enforced separately by load_snapshot().
+    ``_serialisable()`` is the shared representation point for both this
+    function and ``to_json()``.
     """
     _validate_max_bytes(max_bytes)
     snapshot.validate_limits(limits)
