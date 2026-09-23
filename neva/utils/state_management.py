@@ -37,18 +37,70 @@ class ConversationTurn:
         return cls(speaker=payload["speaker"], message=payload["message"], timestamp=timestamp)
 
 
+_TRUNCATION_MARKER = "...[truncated]"
+
+
+def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
+    """Normalize and bound a stored message when a UTF-8 byte ceiling is configured.
+
+    Python's UTF-8 encoder uses ``?`` for each surrogate code unit when
+    ``errors="replace"``. With no ceiling, the original string is returned
+    byte-for-byte unchanged.
+    """
+
+    if max_bytes is None:
+        return message
+
+    # Python strings can contain isolated surrogate code points (for example
+    # after JSON decoding). Normalise those explicitly so enabling a storage
+    # ceiling cannot turn an otherwise successful agent response into an
+    # encoding failure.
+    normalized = message.encode("utf-8", errors="replace").decode("utf-8")
+    raw = normalized.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return normalized
+
+    marker = _TRUNCATION_MARKER.encode("ascii")
+    if max_bytes <= len(marker):
+        return marker[:max_bytes].decode("ascii")
+
+    prefix_budget = max_bytes - len(marker)
+    prefix = raw[:prefix_budget].decode("utf-8", errors="ignore")
+    return prefix + _TRUNCATION_MARKER
+
+
 @dataclass
 class ConversationState:
-    """Track the chronological conversation history for an agent."""
+    """Track chronological history with optional turn-count and byte ceilings.
+
+    The supplied turn list is always copied. Existing ``ConversationTurn``
+    objects retain their identity when ``max_turn_bytes`` is disabled; enabling
+    the byte ceiling creates normalized, independently owned turn objects.
+    """
 
     agent_name: str
     turns: List[ConversationTurn] = field(default_factory=list)
     max_turns: Optional[int] = None
+    max_turn_bytes: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.max_turns is not None and (type(self.max_turns) is not int or self.max_turns <= 0):
             raise ValueError("max_turns must be a positive integer or None")
-        self.turns = list(self.turns)
+        if self.max_turn_bytes is not None and (
+            type(self.max_turn_bytes) is not int or self.max_turn_bytes <= 0
+        ):
+            raise ValueError("max_turn_bytes must be a positive integer or None")
+        if self.max_turn_bytes is None:
+            self.turns = list(self.turns)
+        else:
+            self.turns = [
+                ConversationTurn(
+                    speaker=turn.speaker,
+                    message=_truncate_utf8(turn.message, self.max_turn_bytes),
+                    timestamp=turn.timestamp,
+                )
+                for turn in self.turns
+            ]
         self._trim()
 
     def _trim(self) -> None:
@@ -56,7 +108,12 @@ class ConversationState:
             del self.turns[: max(0, len(self.turns) - self.max_turns)]
 
     def record_turn(self, speaker: str, message: str) -> None:
-        self.turns.append(ConversationTurn(speaker=speaker, message=message))
+        self.turns.append(
+            ConversationTurn(
+                speaker=speaker,
+                message=_truncate_utf8(message, self.max_turn_bytes),
+            )
+        )
         self._trim()
 
     def to_dict(self) -> Dict[str, object]:
@@ -64,23 +121,23 @@ class ConversationState:
             "agent_name": self.agent_name,
             "turns": [turn.to_dict() for turn in self.turns],
             "max_turns": self.max_turns,
+            "max_turn_bytes": self.max_turn_bytes,
         }
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "ConversationState":
-        state = cls(
-            agent_name=str(payload["agent_name"]),
-            max_turns=cast(Optional[int], payload.get("max_turns")),
-        )
         raw_turns = payload.get("turns", [])
+        turns = []
         if isinstance(raw_turns, Iterable):
             for turn_payload in raw_turns:
                 if isinstance(turn_payload, dict):
-                    state.turns.append(
-                        ConversationTurn.from_dict(cast(Dict[str, str], turn_payload))
-                    )
-            state._trim()
-        return state
+                    turns.append(ConversationTurn.from_dict(cast(Dict[str, str], turn_payload)))
+        return cls(
+            agent_name=str(payload["agent_name"]),
+            turns=turns,
+            max_turns=cast(Optional[int], payload.get("max_turns")),
+            max_turn_bytes=cast(Optional[int], payload.get("max_turn_bytes")),
+        )
 
 
 @dataclass

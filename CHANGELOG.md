@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `ConversationState(max_turn_bytes=N)` adds an opt-in UTF-8 byte ceiling for each stored turn. Oversized stored messages are truncated safely with a `...[truncated]` marker, the setting survives serialization/restore, and the default remains unlimited; agent calls still return the full live response.
 - A repository-local checkpoint scaling benchmark (`python -m benchmarks.checkpoint_scaling`) measures deterministic small/medium/large workloads across snapshot creation, streamed save, and load. It reports checkpoint bytes, untraced wall-clock time, and peak Python allocations from a separate `tracemalloc` pass with raw samples and medians; no hardware-dependent pass/fail threshold is imposed. The CLI can target a real checkpoint filesystem with `--workdir` and record a local revision with `--git-sha`.
 - `SpendBudget` enforces a thread-safe hard ceiling on estimated spend.
   `GPTAgent(spend_budget=...)` refuses models without a pricing entry before
