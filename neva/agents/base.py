@@ -571,6 +571,21 @@ class AIAgent(ABC):
     def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
         self._llm_backend = backend
 
+    def replayable_backend(
+        self,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> LLMBackend:
+        """Return the synchronous model boundary used for record/replay."""
+
+        del cancel_event
+        if self.llm_backend is None:
+            raise AgentCommunicationError(
+                "Agent has no replayable model backend; configure llm_backend "
+                "or override replayable_backend()."
+            )
+        return self.llm_backend
+
     def generate_model_output(self, prompt: str) -> str:
         """Generate from an already composed prompt without adding agent context.
 
@@ -580,15 +595,10 @@ class AIAgent(ABC):
         """
 
         validated_prompt = self.prompt_validator.validate(prompt)
-        if self.llm_backend is None:
-            raise AgentCommunicationError(
-                "Agent has no raw model backend; pass model= to run_tool_loop() "
-                "or override generate_model_output()."
-            )
         cached = self._cache_lookup(validated_prompt)
         if cached is not None:
             return cached
-        response = self.llm_backend(validated_prompt)
+        response = self.replayable_backend()(validated_prompt)
         self._cache_store(validated_prompt, response)
         return response
 
