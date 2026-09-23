@@ -211,7 +211,6 @@ def test_deliberate_cancellation_is_never_retried():
     assert state["escalations"] == 1
 
 
-
 def test_default_policy_does_not_count_retry_exhaustion():
     calls = []
 
@@ -261,7 +260,6 @@ def test_failure_log_writes_physical_jsonl_newlines(tmp_path):
         "alice",
         "bob",
     ]
-
 
 
 def test_failure_log_load_falls_back_when_process_lock_is_read_only(tmp_path, monkeypatch):
