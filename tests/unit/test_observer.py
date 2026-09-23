@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from neva.agents import TransformerAgent
+from neva.agents.base import Tool, ToolCall
 from neva.utils.exceptions import MissingDependencyError
 from neva.utils.observer import SimulationObserver
 
@@ -87,3 +89,32 @@ def test_log_to_mlflow_requires_dependency(monkeypatch):
         obs.log_to_mlflow()
 
     assert "MLflow is not installed" in str(exc.value)
+
+
+
+def test_agent_call_tool_records_usage_after_raw_guarded_execution():
+    class DummyTool(Tool):
+        def __init__(self):
+            super().__init__("dummy", "dummy")
+
+        def use(self, task):
+            return task.upper()
+
+    obs = SimulationObserver()
+    env = SimpleNamespace(
+        transcript=[],
+        state={},
+        scheduler=SimpleNamespace(simulation_observer=obs),
+    )
+    agent = TransformerAgent(name="Explorer", llm_backend=lambda prompt: "ok")
+    agent.set_environment(env)
+    tool = DummyTool()
+    agent.register_tool(tool)
+
+    response = agent.call_tool(ToolCall(name="dummy", arguments={"input": "ping"}))
+    assert response.succeeded()
+    assert response.output == "PING"
+
+    obs.collect_data([agent], env, active_agent=agent)
+    snapshot = obs.latest_snapshot()
+    assert snapshot["tool_usage_counts"]["Explorer"]["dummy"] == 1
