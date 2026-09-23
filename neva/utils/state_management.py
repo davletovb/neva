@@ -7,7 +7,7 @@ import math
 import os
 import tempfile
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Set, cast, runtime_checkable
@@ -712,5 +712,5 @@ def _json_default(value: object) -> Any:
     if isinstance(value, _SupportsToDict):
         return value.to_dict()
     if is_dataclass(value):
-        return asdict(cast(Any, value))
+        return {item.name: getattr(value, item.name) for item in fields(value)}
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")
