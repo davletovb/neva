@@ -8,6 +8,7 @@ prompt claims. Direct :class:`~neva.agents.base.Tool` calls and
 
 from __future__ import annotations
 
+import copy
 import inspect
 import logging
 import math
@@ -56,6 +57,22 @@ def _truncate_output(output: Any, max_output_chars: Optional[int]) -> str:
     if max_output_chars is not None and len(text) > max_output_chars:
         return text[:max_output_chars] + _TRUNCATION_MARKER
     return text
+
+
+def _prepare_isolated_tool(tool: Any) -> Any:
+    """Copy a tool without parent-only guard/observer wrappers before pickling."""
+
+    try:
+        isolated_tool = copy.copy(tool)
+    except Exception as exc:
+        raise ToolExecutionError("could not copy tool state for process isolation") from exc
+
+    if hasattr(isolated_tool, "tool_guard"):
+        isolated_tool.tool_guard = None
+    instance_state = getattr(isolated_tool, "__dict__", None)
+    if isinstance(instance_state, dict):
+        instance_state.pop("use", None)
+    return isolated_tool
 
 
 def _send_worker_message(connection: Any, message: Tuple[Any, ...]) -> None:
@@ -363,11 +380,12 @@ class ToolGuard:
         methods = multiprocessing.get_all_start_methods()
         method = "forkserver" if "forkserver" in methods else "spawn"
         context: Any = multiprocessing.get_context(method)
+        isolated_tool = _prepare_isolated_tool(tool)
         receiver, sender = context.Pipe(duplex=False)
         process = context.Process(
             target=_isolated_tool_worker,
             args=(
-                tool,
+                isolated_tool,
                 payload,
                 limits.max_memory_bytes,
                 limits.max_output_chars,
