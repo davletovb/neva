@@ -59,6 +59,29 @@ def test_faiss_search_keeps_nearest_first_l2_order():
 
 
 @pytest.mark.usefixtures("_skip_if_faiss_missing")
+@pytest.mark.parametrize(
+    "embedding",
+    [
+        [[1.0, 2.0]],
+        [[1.0], [2.0]],
+    ],
+)
+def test_faiss_rejects_non_1d_embeddings(embedding):
+    memory = FaissVectorStoreMemory(lambda _: embedding)
+
+    with pytest.raises(MemoryConfigurationError, match="one-dimensional"):
+        memory.remember("A", "bad shape")
+
+
+@pytest.mark.usefixtures("_skip_if_faiss_missing")
+def test_faiss_still_accepts_generator_embeddings():
+    memory = FaissVectorStoreMemory(lambda _: (value for value in (1.0, 2.0)))
+    memory.remember("A", "generator")
+
+    assert memory.recall(query="anything") == "A: generator"
+
+
+@pytest.mark.usefixtures("_skip_if_faiss_missing")
 def test_faiss_recent_recall_clear_and_reuse():
     memory = FaissVectorStoreMemory(_semantic_embedder, top_k=2)
     assert memory.recall() == ""
