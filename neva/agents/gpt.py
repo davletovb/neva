@@ -769,9 +769,10 @@ class GPTAgent(AIAgent):
         *,
         cancel_event: Optional[threading.Event] = None,
     ) -> LLMBackend:
-        """Return the configured custom backend or the built-in provider boundary."""
+        """Return a cancellation-aware provider/custom model boundary."""
 
-        return self.llm_backend or self._default_backend(cancel_event=cancel_event)
+        backend = self.llm_backend or self._default_backend(cancel_event=cancel_event)
+        return self._wrap_model_backend(backend)
 
     def generate_model_output(self, prompt: str) -> str:
         """Generate from an already composed prompt without adding history/context."""
