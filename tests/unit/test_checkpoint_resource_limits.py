@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from enum import IntEnum
 
 import pytest
 
@@ -207,6 +208,31 @@ def test_runtime_capture_preserves_json_roundtrip_normalization():
     assert snapshot.runtime_state["agents"]["agent"]["attributes"]["coords"] == [1, 2]
 
 
+def test_runtime_capture_normalizes_numeric_subclasses_and_keys():
+    class Level(IntEnum):
+        ONE = 1
+
+    class FancyStr(str):
+        def __str__(self):
+            return "overridden"
+
+    env, _ = _environment()
+    env.extra = {
+        "enum_value": Level.ONE,
+        "str_value": FancyStr("content"),
+        "numeric_key": {Level.ONE: "value"},
+    }
+
+    snapshot = env.snapshot()
+    extra = snapshot.runtime_state["environment_extra"]["extra"]
+
+    assert extra["enum_value"] == 1
+    assert type(extra["enum_value"]) is int
+    assert extra["str_value"] == "content"
+    assert type(extra["str_value"]) is str
+    assert extra["numeric_key"] == {"1": "value"}
+
+
 def test_restore_does_not_deepcopy_entire_runtime_graph():
     source, _ = _environment()
     source.extra = {"items": [1, 2, 3]}
@@ -242,9 +268,7 @@ def test_restore_targeted_copies_do_not_alias_snapshot_runtime():
 def test_streamed_save_does_not_deepcopy_dataclass_payload(tmp_path):
     class NoDeepcopyList(list):
         def __deepcopy__(self, memo):
-            raise AssertionError(
-                "streamed dataclass encoding must not recursively deepcopy fields"
-            )
+            raise AssertionError("streamed dataclass encoding must not recursively deepcopy fields")
 
     @dataclass
     class Payload:
