@@ -336,7 +336,9 @@ treating checkpointed scheduler RNG state as sufficient reproducibility:
   rather than leaking incidental parser/container errors.
 - End-to-end tests construct two independent RandomScheduler environments,
   apply the same seed, record a model run, persist/load manifest+tape, and
-  reproduce the same outputs/transcripts offline. Additional tests cover global
+  reproduce the same outputs and speaker/message transcript content/order
+  offline (wall-clock turn timestamps are intentionally not replayed).
+  Additional tests cover global
   RNG/scheduler repetition, nested Composite seeding, custom agent seed hooks,
   provider/model/generation/cache/dependency manifest fields, secret exclusion,
   cache-state fingerprints, built-in GPT HTTP record→offline replay without a
