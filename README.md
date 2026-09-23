@@ -342,8 +342,11 @@ scheduler = create_scheduler("my_scheduler")
   `Environment(failure_log=FailureLog(path))` (`neva.utils.failures`): handled
   failures (both policies, plus scheduler-selection failures) are appended as
   JSON lines. Long-running single-process jobs can opt into retention with
-  `FailureLog(path, rotate_bytes=..., backup_count=...)`; retained backups are
-  read oldest-first by `load()`. The threshold rotates before the next record
+  `FailureLog(path, rotate_bytes=..., backup_count=...)`; a reader must use a
+  matching rotation configuration (and a sufficient `backup_count`) for
+  `load()` to include retained backups oldest-first. A default
+  `FailureLog(path)` intentionally reads only the active file. The threshold
+  rotates before the next record
   when possible, but one record larger than the threshold is kept intact rather
   than truncated. Rotation is not coordinated across processes.
   `replay_failure(record)` re-dispatches a recorded turn; raw context is stored
