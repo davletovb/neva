@@ -1,8 +1,9 @@
 """Execution guardrails for tool invocations.
 
-Guardrails apply to ``AIAgent.call_tool`` and are enforced in code — an
-allowlist, an approval hook, and execution limits — so they hold regardless
-of what a model or prompt claims.
+Guardrails are enforced in code — allowlists, approval hooks, concurrency
+quotas, and execution limits — so they hold regardless of what a model or
+prompt claims. Direct :class:`~neva.agents.base.Tool` calls and
+:meth:`AIAgent.call_tool` both route through the same execution path.
 """
 
 from __future__ import annotations
@@ -10,11 +11,23 @@ from __future__ import annotations
 import inspect
 import logging
 import math
+import multiprocessing
 import threading
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, FrozenSet, Iterable, Optional
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Optional, Sequence, Tuple
 
-from neva.utils.exceptions import ToolGuardConfigurationError, ToolTimeoutError
+from neva.utils.exceptions import (
+    ToolExecutionError,
+    ToolGuardConfigurationError,
+    ToolResourceLimitError,
+    ToolTimeoutError,
+)
+
+try:  # pragma: no cover - unavailable on Windows.
+    import resource as _resource
+except ImportError:  # pragma: no cover - platform dependent.
+    _resource = None
 
 __all__ = ["ToolGuard", "ToolLimits"]
 
@@ -22,6 +35,75 @@ logger = logging.getLogger(__name__)
 
 _TRUNCATION_MARKER = "...[tool output truncated]"
 
+
+def _raw_tool_use(tool: Any, payload: str) -> Any:
+    """Invoke a tool implementation without re-entering its public wrapper."""
+
+    raw = getattr(tool, "_use_unchecked", None)
+    if callable(raw):
+        return raw(payload)
+    return tool.use(payload)
+
+
+def _truncate_output(output: Any, max_output_chars: Optional[int]) -> str:
+    text = str(output)
+    if max_output_chars is not None and len(text) > max_output_chars:
+        return text[:max_output_chars] + _TRUNCATION_MARKER
+    return text
+
+
+def _send_worker_message(connection: Any, message: Tuple[Any, ...]) -> None:
+    try:
+        connection.send(message)
+    except Exception:
+        # The parent turns a missing result into a bounded worker failure.
+        pass
+
+
+def _apply_process_memory_limit(max_memory_bytes: Optional[int]) -> None:
+    if max_memory_bytes is None:
+        return
+    if _resource is None or not hasattr(_resource, "RLIMIT_AS"):
+        raise ToolResourceLimitError(
+            "hard tool memory limits require resource.RLIMIT_AS on this platform"
+        )
+    _, hard = _resource.getrlimit(_resource.RLIMIT_AS)
+    limit = max_memory_bytes
+    if hard != _resource.RLIM_INFINITY:
+        limit = min(limit, hard)
+    _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+
+
+def _isolated_tool_worker(
+    tool: Any,
+    payload: str,
+    max_memory_bytes: Optional[int],
+    max_output_chars: Optional[int],
+    connection: Any,
+) -> None:
+    """Execute one tool call in a child process and send back a bounded result."""
+
+    try:
+        _apply_process_memory_limit(max_memory_bytes)
+        try:
+            output = _raw_tool_use(tool, payload)
+            text = _truncate_output(output, max_output_chars)
+        except MemoryError:
+            if max_memory_bytes is not None:
+                _send_worker_message(connection, ("resource", "memory"))
+                return
+            raise
+        except BaseException as exc:
+            try:
+                connection.send(("error", exc))
+            except Exception:
+                _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
+            return
+        _send_worker_message(connection, ("value", text))
+    except BaseException as exc:
+        _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
+    finally:
+        connection.close()
 
 @dataclass(frozen=True)
 class ToolLimits:
