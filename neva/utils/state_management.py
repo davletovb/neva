@@ -41,7 +41,12 @@ _TRUNCATION_MARKER = "...[truncated]"
 
 
 def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
-    """Return message bounded to max_bytes of UTF-8 when configured."""
+    """Normalize and bound a stored message when a UTF-8 byte ceiling is configured.
+
+    Python's UTF-8 encoder uses ``?`` for each isolated surrogate when
+    ``errors="replace"``. With no ceiling, the original string is returned
+    byte-for-byte unchanged.
+    """
 
     if max_bytes is None:
         return message
@@ -66,7 +71,12 @@ def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
 
 @dataclass
 class ConversationState:
-    """Track chronological history with optional turn-count and byte ceilings."""
+    """Track chronological history with optional turn-count and byte ceilings.
+
+    The supplied turn list is always copied. Existing ``ConversationTurn``
+    objects retain their identity when ``max_turn_bytes`` is disabled; enabling
+    the byte ceiling creates normalized, independently owned turn objects.
+    """
 
     agent_name: str
     turns: List[ConversationTurn] = field(default_factory=list)
@@ -80,14 +90,17 @@ class ConversationState:
             type(self.max_turn_bytes) is not int or self.max_turn_bytes <= 0
         ):
             raise ValueError("max_turn_bytes must be a positive integer or None")
-        self.turns = [
-            ConversationTurn(
-                speaker=turn.speaker,
-                message=_truncate_utf8(turn.message, self.max_turn_bytes),
-                timestamp=turn.timestamp,
-            )
-            for turn in self.turns
-        ]
+        if self.max_turn_bytes is None:
+            self.turns = list(self.turns)
+        else:
+            self.turns = [
+                ConversationTurn(
+                    speaker=turn.speaker,
+                    message=_truncate_utf8(turn.message, self.max_turn_bytes),
+                    timestamp=turn.timestamp,
+                )
+                for turn in self.turns
+            ]
         self._trim()
 
     def _trim(self) -> None:
