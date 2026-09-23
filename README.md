@@ -423,6 +423,23 @@ scheduler = create_scheduler("my_scheduler")
   `RLIMIT_AS` surface `ToolResourceLimitError`. Process isolation is not a
   complete sandbox: child tools still inherit the application's filesystem and
   network credentials unless a stronger external sandbox is provided.
+- **Model-driven tool loop**: `agent.run_tool_loop(task)` (or
+  `neva.tools.run_tool_loop(agent, task)`) adds a bounded JSON-action loop on
+  top of those guardrails. The model must emit exactly one
+  `{"action":"tool",...}` or `{"action":"final",...}` object per turn.
+  Tool selections always re-enter `AIAgent.call_tool()`, so allowlists,
+  approvals, argument schemas, concurrency/resource ceilings, and observer
+  accounting remain the enforcement path. Malformed actions, unknown tools,
+  schema failures, and permission denials are returned to the model as bounded
+  feedback so it can correct itself on a later step. `ToolLoopConfig` bounds
+  model turns/tool calls, advertised tools, retained model output, each feedback
+  record, and orchestration prompt size; hitting `max_steps` returns a
+  non-success `ToolLoopResult` instead of looping indefinitely. Tool results
+  are explicitly labelled untrusted data, but prompt wording is not a security
+  boundary: hostile tool output may still influence a model, while code-level
+  tool guards remain authoritative. The generic loop consumes text JSON rather
+  than provider-native function-calling events; streaming/native tool APIs are
+  separate concerns.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
   environment, and memory objects are not generally thread-safe. Built-in
   provider calls share account-scoped rate/concurrency admission in-process;
