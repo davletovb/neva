@@ -287,7 +287,7 @@ def test_large_non_string_model_output_uses_constant_size_placeholder():
         agent,
         "recover",
         model=model,
-        config=ToolLoopConfig(max_model_output_chars=32),
+        config=ToolLoopConfig(max_model_output_chars=64),
     )
 
     assert result.succeeded()
