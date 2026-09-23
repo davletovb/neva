@@ -30,7 +30,7 @@ jobs:
         run: black --check .
 
       - name: isort
-        run: isort --check-only --diff .
+        run: isort --check-only .
 
       - name: Flake8
         run: flake8
