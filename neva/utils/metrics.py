@@ -136,9 +136,15 @@ class CostTracker:
 
         cost = 0.0
         for model, tokens in self.usage.items():
-            prompt_tokens, response_tokens = self.split_usage.get(model, (0, 0))
-            if tokens and prompt_tokens + response_tokens != tokens:
+            price = self.pricing_per_1k_tokens.get(model)
+            if price is None:
                 return None
+            if isinstance(price, dict):
+                prompt_tokens, response_tokens = self.split_usage.get(model, (0, 0))
+                if tokens and prompt_tokens + response_tokens != tokens:
+                    return None
+            else:
+                prompt_tokens, response_tokens = tokens, 0
             call_cost = self.cost_for(
                 model,
                 prompt_tokens=prompt_tokens,
