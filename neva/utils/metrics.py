@@ -269,9 +269,7 @@ class SpendBudget:
             or not math.isfinite(cost)
             or cost < 0
         ):
-            raise SpendBudgetConfigurationError(
-                "cost must be a finite, non-negative number"
-            )
+            raise SpendBudgetConfigurationError("cost must be a finite, non-negative number")
 
     def reserve(self, cost: float) -> SpendReservation:
         """Atomically reserve estimated worst-case spend before a provider call."""
