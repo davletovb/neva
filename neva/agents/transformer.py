@@ -80,7 +80,7 @@ class TransformerAgent(AIAgent):
 
         del cancel_event
         if self.llm_backend is not None:
-            return self.llm_backend
+            return self._wrap_model_backend(self.llm_backend)
 
         self._load_transformer()
         if self._model is None or self._tokenizer is None:
@@ -97,7 +97,7 @@ class TransformerAgent(AIAgent):
             output_tokens = model.generate(**inputs, max_length=200)
             return tokenizer.decode(output_tokens[0], skip_special_tokens=True)
 
-        return _generate
+        return self._wrap_model_backend(_generate)
 
     def generate_model_output(self, prompt: str) -> str:
         """Generate from an already composed prompt without adding agent context."""
