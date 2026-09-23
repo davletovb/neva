@@ -267,7 +267,6 @@ def test_sqlite_scope_configuration_mismatch_fails_closed(tmp_path):
         )
 
 
-
 def test_cancelled_sqlite_waiter_does_not_block_queue(tmp_path):
     path = tmp_path / "provider.sqlite3"
     coordinator = ProviderResourceCoordinator(
