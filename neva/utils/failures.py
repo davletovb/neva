@@ -161,7 +161,7 @@ class FailureLog:
             raise TypeError("failure must be a FailureRecord")
         if not self.include_context and failure.context is not None:
             failure = replace(failure, context=None)
-        encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
+        encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode(\n            "utf-8"\n        )
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -176,7 +176,7 @@ class FailureLog:
             if (
                 self.rotate_bytes is not None
                 and current_size > 0
-                and current_size + len(separator) + len(encoded) > self.rotate_bytes
+                and current_size + len(separator) + len(encoded)\n                > self.rotate_bytes
             ):
                 self._rotate()
                 separator = b""
