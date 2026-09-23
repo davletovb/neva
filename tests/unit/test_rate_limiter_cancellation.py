@@ -143,3 +143,47 @@ def test_waiting_acquire_is_cancelled_without_consuming_token(monkeypatch):
     with pytest.raises(RateLimiterCancelledError, match="cancelled"):
         limiter.acquire(cancel_event=cancel)
     assert limiter._allowance == 0
+
+
+
+def test_cancel_during_post_queue_lock_poll_removes_waiter():
+    cancel = threading.Event()
+    second_lock_poll = threading.Event()
+    limiter = RateLimiter(rate=1, per=60)
+
+    class PollingLock:
+        def __init__(self):
+            self.calls = 0
+
+        def acquire(self, timeout=None):
+            self.calls += 1
+            if self.calls == 2:
+                second_lock_poll.set()
+                return False
+            return True
+
+        def release(self):
+            return None
+
+    limiter._lock = PollingLock()
+    outcome = []
+
+    def worker():
+        try:
+            limiter.acquire(cancel_event=cancel)
+        except RateLimiterCancelledError:
+            outcome.append("cancelled")
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert second_lock_poll.wait(timeout=1)
+    cancel.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert outcome == ["cancelled"]
+    assert limiter._waiters == []
+
+    # A later caller must not be stranded behind the cancelled ticket.
+    assert limiter.acquire() is None
+    assert limiter._waiters == []
