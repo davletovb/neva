@@ -219,9 +219,7 @@ def test_manifest_captures_initial_conversation_and_agent_attributes():
     config = manifest.agents[0]
 
     assert config["attributes"] == {"role": "reviewer"}
-    assert config["conversation"]["turns"] == [
-        {"speaker": "user", "message": "prior context"}
-    ]
+    assert config["conversation"]["turns"] == [{"speaker": "user", "message": "prior context"}]
 
 
 def test_event_scheduler_pending_queue_changes_manifest_fingerprint():
