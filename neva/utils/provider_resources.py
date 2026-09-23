@@ -72,9 +72,7 @@ class ProviderResourceCoordinator:
         if max_concurrency is not None and (
             type(max_concurrency) is not int or max_concurrency <= 0
         ):
-            raise ConfigurationError(
-                "provider max_concurrency must be a positive integer or None"
-            )
+            raise ConfigurationError("provider max_concurrency must be a positive integer or None")
         if max_cost is not None and (
             isinstance(max_cost, bool)
             or not isinstance(max_cost, (int, float))
@@ -88,11 +86,7 @@ class ProviderResourceCoordinator:
             or poll_interval <= 0
         ):
             raise ConfigurationError("poll_interval must be positive")
-        if (
-            isinstance(lease_ttl, bool)
-            or not isinstance(lease_ttl, (int, float))
-            or lease_ttl <= 0
-        ):
+        if isinstance(lease_ttl, bool) or not isinstance(lease_ttl, (int, float)) or lease_ttl <= 0:
             raise ConfigurationError("lease_ttl must be positive")
 
         self.scope = scope.strip()
@@ -258,14 +252,12 @@ class ProviderResourceCoordinator:
                     now = time.monotonic()
                     rate_wait = self._refill_local(now)
                     concurrency_available = (
-                        self.max_concurrency is None
-                        or len(self._active) < self.max_concurrency
+                        self.max_concurrency is None or len(self._active) < self.max_concurrency
                     )
                     reserved_total = sum(self._reservations.values())
                     if (
                         self.max_cost is not None
-                        and self._spent + reserved_total + reserve_cost
-                        > self.max_cost + _EPSILON
+                        and self._spent + reserved_total + reserve_cost > self.max_cost + _EPSILON
                     ):
                         self._queue.pop(0)
                         self._condition.notify_all()
@@ -333,13 +325,11 @@ class ProviderResourceCoordinator:
                     connection.execute("BEGIN IMMEDIATE")
                     self._sqlite_cleanup(connection, now)
                     connection.execute(
-                        "UPDATE provider_waiters SET expires = ? "
-                        "WHERE scope = ? AND owner = ?",
+                        "UPDATE provider_waiters SET expires = ? " "WHERE scope = ? AND owner = ?",
                         (now + self.lease_ttl, self.scope, owner),
                     )
                     ticket_row = connection.execute(
-                        "SELECT ticket FROM provider_waiters "
-                        "WHERE scope = ? AND owner = ?",
+                        "SELECT ticket FROM provider_waiters " "WHERE scope = ? AND owner = ?",
                         (self.scope, owner),
                     ).fetchone()
                     if ticket_row is None:
@@ -381,8 +371,7 @@ class ProviderResourceCoordinator:
                             > self.max_cost + _EPSILON
                         ):
                             connection.execute(
-                                "DELETE FROM provider_waiters "
-                                "WHERE scope = ? AND owner = ?",
+                                "DELETE FROM provider_waiters " "WHERE scope = ? AND owner = ?",
                                 (self.scope, owner),
                             )
                             connection.commit()
@@ -391,8 +380,7 @@ class ProviderResourceCoordinator:
                             )
                         rate_available = self.rate is None or float(allowance) >= 1.0
                         concurrency_available = (
-                            self.max_concurrency is None
-                            or int(active) < self.max_concurrency
+                            self.max_concurrency is None or int(active) < self.max_concurrency
                         )
                         if rate_available and concurrency_available:
                             if self.rate is not None:
@@ -419,8 +407,7 @@ class ProviderResourceCoordinator:
                                     ),
                                 )
                             connection.execute(
-                                "DELETE FROM provider_waiters "
-                                "WHERE scope = ? AND owner = ?",
+                                "DELETE FROM provider_waiters " "WHERE scope = ? AND owner = ?",
                                 (self.scope, owner),
                             )
                             connection.commit()
@@ -486,10 +473,7 @@ class ProviderResourceCoordinator:
         if self.state_path is None:
             overflow = False
             with self._condition:
-                known = (
-                    permit.owner in self._active
-                    or permit.owner in self._reservations
-                )
+                known = permit.owner in self._active or permit.owner in self._reservations
                 if not known:
                     return
                 self._active.discard(permit.owner)
@@ -587,8 +571,7 @@ class ProviderResourceCoordinator:
                 return sum(self._reservations.values())
         with self._connect() as connection:
             value = connection.execute(
-                "SELECT COALESCE(SUM(amount), 0.0) "
-                "FROM provider_reservations WHERE scope = ?",
+                "SELECT COALESCE(SUM(amount), 0.0) " "FROM provider_reservations WHERE scope = ?",
                 (self.scope,),
             ).fetchone()[0]
             return float(value)
