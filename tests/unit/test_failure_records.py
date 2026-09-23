@@ -515,7 +515,6 @@ def test_rotated_log_can_be_reopened_with_same_policy(tmp_path):
     assert [record.agent_name for record in reopened.load()] == ["a", "b"]
 
 
-
 def test_lower_backup_count_prunes_stale_generations_on_next_append(tmp_path):
     path = tmp_path / "failures.jsonl"
     records = [make_record(agent_name=name) for name in ("a", "b", "c", "d", "e")]
