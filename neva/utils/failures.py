@@ -111,9 +111,7 @@ class FailureLog:
         candidate = Path(path)
         if candidate.exists() and candidate.is_dir():
             raise ValueError("path must point to a file, not a directory")
-        if rotate_bytes is not None and (
-            type(rotate_bytes) is not int or rotate_bytes <= 0
-        ):
+        if rotate_bytes is not None and (type(rotate_bytes) is not int or rotate_bytes <= 0):
             raise ValueError("rotate_bytes must be a positive integer or None")
         if type(backup_count) is not int or backup_count < 0:
             raise ValueError("backup_count must be a non-negative integer")
@@ -161,9 +159,7 @@ class FailureLog:
             raise TypeError("failure must be a FailureRecord")
         if not self.include_context and failure.context is not None:
             failure = replace(failure, context=None)
-        encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode(
-            "utf-8"
-        )
+        encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -178,8 +174,7 @@ class FailureLog:
             if (
                 self.rotate_bytes is not None
                 and current_size > 0
-                and current_size + len(separator) + len(encoded)
-                > self.rotate_bytes
+                and current_size + len(separator) + len(encoded) > self.rotate_bytes
             ):
                 self._rotate()
                 separator = b""
@@ -191,6 +186,7 @@ class FailureLog:
                 handle.flush()
                 if self.fsync:
                     os.fsync(handle.fileno())
+
     def load(self) -> List[FailureRecord]:
         """Return all readable records; malformed lines are skipped with a warning."""
 
