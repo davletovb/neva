@@ -75,10 +75,10 @@ class TransformerAgent(AIAgent):
         self._model = actual_loader(self.model_name)
         self._tokenizer = actual_tokenizer_loader(self.model_name)
 
-    def respond(self, message: str) -> str:
-        prompt = self.prepare_prompt(message)
-        validated_prompt = self.prompt_validator.validate(prompt)
+    def generate_model_output(self, prompt: str) -> str:
+        """Generate from an already composed prompt without adding agent context."""
 
+        validated_prompt = self.prompt_validator.validate(prompt)
         cached = self._cache_lookup(validated_prompt)
         if cached is not None:
             return cached
@@ -91,7 +91,7 @@ class TransformerAgent(AIAgent):
         self._load_transformer()
         if self._model is None or self._tokenizer is None:
             raise BackendUnavailableError(
-                "Transformer model components failed to load; provide an ``llm_backend`` "
+                "Transformer model components failed to load; provide an llm_backend "
                 "or ensure the transformers dependencies are available."
             )
 
@@ -102,6 +102,10 @@ class TransformerAgent(AIAgent):
         decoded = self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
         self._cache_store(validated_prompt, decoded)
         return decoded
+
+    def respond(self, message: str) -> str:
+        return self.generate_model_output(self.prepare_prompt(message))
+
 
 
 __all__ = ["TransformerAgent"]
