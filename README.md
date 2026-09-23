@@ -193,7 +193,8 @@ configuration steps:
 
 - **API keys** – supply the relevant key (`OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, or an xAI token) when using
-  `GPTAgent`. Select a backend by passing `provider="openai"`,
+  `GPTAgent`. The providers extra constrains `httpx<0.28` because the
+  declared Anthropic 0.26 client still uses the pre-0.28 proxy constructor API. Select a backend by passing `provider="openai"`,
   `"anthropic"`, `"gemini"`, or `"grok"`. Community members often rely on
   [OpenAI compatible endpoints](https://platform.openai.com/docs/api-reference/introduction), but any drop-in replacement that matches the Chat
   Completions API works.
