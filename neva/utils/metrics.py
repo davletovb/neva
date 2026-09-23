@@ -255,7 +255,12 @@ class SpendBudget:
         self._validate_cost(required_cost)
         with self._lock:
             committed = self._spent + sum(self._reservations.values())
-            if committed + required_cost > self._max_cost + 1e-9:
+            exhausted = (
+                committed >= self._max_cost - 1e-9
+                if required_cost == 0
+                else committed + required_cost > self._max_cost + 1e-9
+            )
+            if exhausted:
                 raise SpendBudgetExceededError(
                     "spend budget exhausted or reserved "
                     f"({committed:.6f} + {required_cost:.6f} > {self._max_cost:.6f})"
