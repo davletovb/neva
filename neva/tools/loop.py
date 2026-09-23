@@ -328,7 +328,7 @@ def run_tool_loop(
     for provider-native wrappers or deterministic/offline tests.
     """
 
-    active_config = config or ToolLoopConfig()
+    active_config = ToolLoopConfig() if config is None else config
     if not isinstance(active_config, ToolLoopConfig):
         raise ToolLoopConfigurationError("config must be a ToolLoopConfig instance")
     if not isinstance(task, str) or not task.strip():
