@@ -13,7 +13,8 @@ import logging
 import math
 import multiprocessing
 import threading
-from dataclasses import dataclass
+import weakref
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any, Callable, Dict, FrozenSet, Iterable, Optional, Sequence, Tuple
 
@@ -41,6 +42,9 @@ _TRUNCATION_MARKER = "...[tool output truncated]"
 def _raw_tool_use(tool: Any, payload: str) -> Any:
     """Invoke a tool implementation without re-entering its public wrapper."""
 
+    invoke_unchecked = getattr(tool, "_invoke_unchecked", None)
+    if callable(invoke_unchecked):
+        return invoke_unchecked(payload)
     raw = getattr(tool, "_use_unchecked", None)
     if callable(raw):
         return raw(payload)
@@ -59,7 +63,7 @@ def _send_worker_message(connection: Any, message: Tuple[Any, ...]) -> None:
         connection.send(message)
     except Exception:
         # The parent turns a missing result into a bounded worker failure.
-        pass
+        logger.debug("Could not send isolated tool worker result", exc_info=True)
 
 
 def _apply_process_memory_limit(max_memory_bytes: Optional[int]) -> None:
@@ -69,11 +73,16 @@ def _apply_process_memory_limit(max_memory_bytes: Optional[int]) -> None:
         raise ToolResourceLimitError(
             "hard tool memory limits require resource.RLIMIT_AS on this platform"
         )
-    _, hard = _resource.getrlimit(_resource.RLIMIT_AS)
-    limit = max_memory_bytes
-    if hard != _resource.RLIM_INFINITY:
-        limit = min(limit, hard)
-    _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+    try:
+        _, hard = _resource.getrlimit(_resource.RLIMIT_AS)
+        limit = max_memory_bytes
+        if hard != _resource.RLIM_INFINITY:
+            limit = min(limit, hard)
+        _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+    except (OSError, ValueError) as exc:
+        raise ToolResourceLimitError(
+            "could not apply resource.RLIMIT_AS for the isolated tool worker"
+        ) from exc
 
 
 def _isolated_tool_worker(
@@ -86,7 +95,12 @@ def _isolated_tool_worker(
     """Execute one tool call in a child process and send back a bounded result."""
 
     try:
-        _apply_process_memory_limit(max_memory_bytes)
+        try:
+            _apply_process_memory_limit(max_memory_bytes)
+        except ToolResourceLimitError as exc:
+            _send_worker_message(connection, ("resource", "unavailable", str(exc)))
+            return
+
         try:
             output = _raw_tool_use(tool, payload)
             text = _truncate_output(output, max_output_chars)
@@ -95,12 +109,16 @@ def _isolated_tool_worker(
                 _send_worker_message(connection, ("resource", "memory"))
                 return
             raise
-        except BaseException as exc:
+        except Exception as exc:
             try:
                 connection.send(("error", exc))
             except Exception:
                 _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
             return
+        except BaseException as exc:
+            _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
+            return
+
         _send_worker_message(connection, ("value", text))
     except BaseException as exc:
         _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
@@ -221,7 +239,7 @@ class ToolGuard:
             raise ToolGuardConfigurationError("limits must be a ToolLimits instance")
         self.limits = limits or ToolLimits()
         self._concurrency_lock = threading.Lock()
-        self._concurrency_slots: Dict[int, threading.BoundedSemaphore] = {}
+        self._concurrency_slots: Dict[int, Tuple[Any, threading.BoundedSemaphore]] = {}
 
     def evaluate(self, call: Any) -> Optional[str]:
         """Return a denial reason, or None when the call is permitted."""
@@ -255,12 +273,36 @@ class ToolGuard:
         limit = self.limits.max_concurrency
         if limit is None:
             return None
+
         key = id(tool)
         with self._concurrency_lock:
-            slot = self._concurrency_slots.get(key)
-            if slot is None:
-                slot = threading.BoundedSemaphore(limit)
-                self._concurrency_slots[key] = slot
+            entry = self._concurrency_slots.get(key)
+            if entry is not None:
+                tool_ref, slot = entry
+                if tool_ref() is tool:
+                    return slot
+                self._concurrency_slots.pop(key, None)
+
+            guard_ref = weakref.ref(self)
+
+            def remove_slot(tool_ref: Any, *, slot_key: int = key) -> None:
+                guard = guard_ref()
+                if guard is None:
+                    return
+                with guard._concurrency_lock:
+                    current = guard._concurrency_slots.get(slot_key)
+                    if current is not None and current[0] is tool_ref:
+                        guard._concurrency_slots.pop(slot_key, None)
+
+            try:
+                tool_ref = weakref.ref(tool, remove_slot)
+            except TypeError as exc:
+                raise ToolGuardConfigurationError(
+                    "max_concurrency requires weak-referenceable tool objects"
+                ) from exc
+
+            slot = threading.BoundedSemaphore(limit)
+            self._concurrency_slots[key] = (tool_ref, slot)
             return slot
 
     def invoke(self, tool: Any, payload: str) -> str:
@@ -280,8 +322,12 @@ class ToolGuard:
         def runner() -> None:
             try:
                 outcome["value"] = _raw_tool_use(tool, payload)
-            except BaseException as exc:
+            except Exception as exc:
                 outcome["error"] = exc
+            except BaseException as exc:
+                outcome["error"] = ToolExecutionError(
+                    f"tool '{tool.name}' failed with {type(exc).__name__}: {exc}"
+                )
             finally:
                 if on_finish is not None:
                     on_finish()
@@ -315,7 +361,7 @@ class ToolGuard:
             raise ToolGuardConfigurationError("process isolation requires a timeout")
 
         methods = multiprocessing.get_all_start_methods()
-        method = "fork" if "fork" in methods else "spawn"
+        method = "forkserver" if "forkserver" in methods else "spawn"
         context: Any = multiprocessing.get_context(method)
         receiver, sender = context.Pipe(duplex=False)
         process = context.Process(
@@ -350,8 +396,8 @@ class ToolGuard:
                 process.start()
             except Exception as exc:
                 raise ToolExecutionError(
-                    "could not start isolated tool worker; on spawn-only platforms "
-                    "the tool and its configured callables must be picklable"
+                    "could not start isolated tool worker; process-isolated tools "
+                    "and configured callables must be picklable"
                 ) from exc
             finally:
                 sender.close()
@@ -389,8 +435,13 @@ class ToolGuard:
                 if kind == "error":
                     raise message[1]
                 if kind == "resource":
+                    if len(message) > 1 and message[1] == "memory":
+                        raise ToolResourceLimitError(
+                            f"tool '{tool.name}' exceeded its isolated memory limit"
+                        )
+                    detail = message[2] if len(message) > 2 else "resource limit unavailable"
                     raise ToolResourceLimitError(
-                        f"tool '{tool.name}' exceeded its isolated memory limit"
+                        f"tool '{tool.name}' could not apply its isolated memory limit: {detail}"
                     )
                 if kind == "error_text":
                     raise ToolExecutionError(
@@ -434,6 +485,12 @@ def _release_slots(slots: Sequence[threading.BoundedSemaphore]) -> None:
         slot.release()
 
 
+def _timeout_remaining(deadline: Optional[float]) -> Optional[float]:
+    if deadline is None:
+        return None
+    return max(0.0, deadline - monotonic())
+
+
 def _execute_with_guards(
     tool: Any,
     payload: str,
@@ -446,29 +503,60 @@ def _execute_with_guards(
         return str(_raw_tool_use(tool, payload))
 
     limits = _combined_limits(ordered_guards)
+    deadline = monotonic() + limits.timeout if limits.timeout is not None else None
     slots = []
-    for guard in ordered_guards:
-        slot = guard._slot_for(tool)
-        if slot is not None:
-            slot.acquire()
+
+    try:
+        for guard in ordered_guards:
+            slot = guard._slot_for(tool)
+            if slot is None:
+                continue
+
+            remaining = _timeout_remaining(deadline)
+            if remaining is None:
+                acquired = slot.acquire()
+            elif remaining <= 0:
+                acquired = False
+            else:
+                acquired = slot.acquire(timeout=remaining)
+
+            if not acquired:
+                raise ToolTimeoutError(
+                    f"tool '{tool.name}' exhausted its {limits.timeout:g}s execution "
+                    "limit while waiting for a concurrency slot"
+                )
             slots.append(slot)
+    except BaseException:
+        _release_slots(slots)
+        raise
+
+    remaining = _timeout_remaining(deadline)
+    if deadline is not None and (remaining is None or remaining <= 0):
+        _release_slots(slots)
+        raise ToolTimeoutError(
+            f"tool '{tool.name}' exhausted its {limits.timeout:g}s execution limit "
+            "before execution started"
+        )
 
     if limits.isolate_process:
+        process_limits = replace(limits, timeout=remaining)
         try:
-            return ToolGuard._invoke_in_process(tool, payload, limits)
+            return ToolGuard._invoke_in_process(tool, payload, process_limits)
         finally:
             _release_slots(slots)
 
-    if limits.timeout is not None:
-        return ToolGuard._invoke_with_timeout(
+    if remaining is not None:
+        output = ToolGuard._invoke_with_timeout(
             tool,
             payload,
-            limits.timeout,
+            remaining,
             on_finish=lambda: _release_slots(slots),
         )
+        return _truncate_output(output, limits.max_output_chars)
 
     try:
         output = _raw_tool_use(tool, payload)
         return _truncate_output(output, limits.max_output_chars)
     finally:
         _release_slots(slots)
+
