@@ -15,7 +15,6 @@ import sqlite3
 import threading
 import time
 import uuid
-import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -595,9 +594,7 @@ class ProviderResourceCoordinator:
 
 
 _registry_lock = threading.Lock()
-_registry: "weakref.WeakValueDictionary[str, ProviderResourceCoordinator]" = (
-    weakref.WeakValueDictionary()
-)
+_registry: dict[str, ProviderResourceCoordinator] = {}
 
 
 def account_scope(
