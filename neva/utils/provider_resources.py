@@ -257,7 +257,8 @@ class ProviderResourceCoordinator:
                         reserved_total = sum(self._reservations.values())
                         if (
                             self.max_cost is not None
-                            and self._spent + reserved_total + reserve_cost > self.max_cost + _EPSILON
+                            and self._spent + reserved_total + reserve_cost
+                            > self.max_cost + _EPSILON
                         ):
                             raise SpendBudgetExceededError(
                                 "provider spend reservation exceeds remaining shared budget"
