@@ -91,7 +91,6 @@ def test_log_to_mlflow_requires_dependency(monkeypatch):
     assert "MLflow is not installed" in str(exc.value)
 
 
-
 def test_agent_call_tool_records_usage_after_raw_guarded_execution():
     class DummyTool(Tool):
         def __init__(self):
