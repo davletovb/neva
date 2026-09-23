@@ -137,3 +137,11 @@ class ToolResourceLimitError(ToolExecutionError):
 
 class ToolNotFoundError(ToolError):
     """Raised when attempting to use a tool that is not registered."""
+
+
+class ToolLoopConfigurationError(ConfigurationError):
+    """Raised when the model-driven tool loop is configured unsafely."""
+
+
+class ToolLoopLimitError(ToolError):
+    """Raised when a bounded tool-loop resource envelope cannot be satisfied."""
