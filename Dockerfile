@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM python:3.10-slim AS runtime
+FROM python:3.11-slim AS runtime
 
 ARG POETRY_VERSION=1.6.1
 ARG WITH_EXTRAS=""
