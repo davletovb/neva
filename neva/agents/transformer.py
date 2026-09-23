@@ -89,10 +89,13 @@ class TransformerAgent(AIAgent):
                 "or ensure the transformers dependencies are available."
             )
 
+        model = self._model
+        tokenizer = self._tokenizer
+
         def _generate(prompt: str) -> str:
-            inputs = self._tokenizer(prompt, return_tensors="pt", truncation=True, padding=True)
-            output_tokens = self._model.generate(**inputs, max_length=200)
-            return self._tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True)
+            output_tokens = model.generate(**inputs, max_length=200)
+            return tokenizer.decode(output_tokens[0], skip_special_tokens=True)
 
         return _generate
 
