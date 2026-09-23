@@ -7,6 +7,7 @@ import pytest
 from neva.agents import GPTAgent, TransformerAgent
 from neva.agents.base import AIAgent
 from neva.environments import BasicEnvironment, Environment
+from neva.memory import ShortTermMemory
 from neva.schedulers import CompositeScheduler, EventDrivenScheduler, RandomScheduler
 from neva.utils.caching import LLMCache
 from neva.utils.exceptions import (
@@ -15,6 +16,7 @@ from neva.utils.exceptions import (
     ReplayMismatchError,
     ReproducibilityError,
 )
+from neva.utils.safety import PromptValidator
 from neva.utils.reproducibility import (
     ReplayRecord,
     ReplayTape,
@@ -134,6 +136,91 @@ def test_manifest_captures_prompts_provider_model_generation_cache_and_dependenc
     assert payload["dependencies"]["definitely-not-installed-neva-test-package"] is None
     assert payload["metadata"] == {"experiment": "baseline"}
     assert "super-secret-key" not in json.dumps(payload)
+
+
+def test_manifest_fingerprint_captures_builtin_memory_state_without_timestamps():
+    def build(message):
+        memory = ShortTermMemory(capacity=3)
+        memory.remember("user", message)
+        env = BasicEnvironment("memory", "initial state", RandomScheduler())
+        env.register_agent(
+            TransformerAgent(
+                name="agent",
+                llm_backend=_deterministic_backend,
+                memory=memory,
+            )
+        )
+        return env
+
+    same_one = create_run_manifest(build("same"), seed=1, dependencies=[])
+    same_two = create_run_manifest(build("same"), seed=1, dependencies=[])
+    different = create_run_manifest(build("different"), seed=1, dependencies=[])
+
+    assert same_one.fingerprint() == same_two.fingerprint()
+    assert same_one.fingerprint() != different.fingerprint()
+    state = same_one.agents[0]["memory"]["state"]
+    assert state["capacity"] == 3
+    assert state["records"][0]["message"] == "same"
+    assert "timestamp" not in json.dumps(state)
+
+
+def test_manifest_fingerprint_captures_full_prompt_validator_policy():
+    first = BasicEnvironment("validator", "policy", RandomScheduler())
+    second = BasicEnvironment("validator", "policy", RandomScheduler())
+    first.register_agent(
+        TransformerAgent(
+            name="agent",
+            llm_backend=_deterministic_backend,
+            prompt_validator=PromptValidator(forbidden_patterns=[r"blocked-one"]),
+        )
+    )
+    second.register_agent(
+        TransformerAgent(
+            name="agent",
+            llm_backend=_deterministic_backend,
+            prompt_validator=PromptValidator(forbidden_patterns=[r"blocked-two"]),
+        )
+    )
+
+    first_manifest = create_run_manifest(first, seed=1, dependencies=[])
+    second_manifest = create_run_manifest(second, seed=1, dependencies=[])
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+    assert first_manifest.agents[0]["prompt_validator"]["forbidden_patterns"][0][
+        "pattern"
+    ] == "blocked-one"
+
+
+def test_manifest_fingerprint_captures_provider_api_base_without_api_key():
+    def build(api_base, api_key):
+        env = BasicEnvironment("provider", "endpoint", RandomScheduler())
+        env.register_agent(
+            GPTAgent(
+                name="agent",
+                api_key=api_key,
+                provider="openai",
+                model="gpt-test",
+                api_base=api_base,
+                provider_rate=None,
+                max_provider_concurrency=None,
+            )
+        )
+        return env
+
+    first = create_run_manifest(
+        build("https://one.example/v1", "secret-one"),
+        seed=1,
+        dependencies=[],
+    )
+    second = create_run_manifest(
+        build("https://two.example/v1", "secret-two"),
+        seed=1,
+        dependencies=[],
+    )
+
+    assert first.fingerprint() != second.fingerprint()
+    assert first.agents[0]["api_base"] == "https://one.example/v1"
+    assert "secret-one" not in json.dumps(first.to_dict())
 
 
 def test_manifest_fingerprint_changes_with_behavior_affecting_environment_config():
