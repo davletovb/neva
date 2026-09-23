@@ -7,11 +7,7 @@ import pytest
 from neva.agents import TransformerAgent
 from neva.environments import Environment
 from neva.schedulers import RoundRobinScheduler
-from neva.utils.exceptions import (
-    CircuitOpenError,
-    RateLimiterCancelledError,
-    SchedulingError,
-)
+from neva.utils.exceptions import CircuitOpenError, RateLimiterCancelledError, SchedulingError
 from neva.utils.failures import FailureLog, FailureRecord
 from neva.utils.recovery import RecoveryPolicy
 from neva.utils.safety import CircuitBreaker
