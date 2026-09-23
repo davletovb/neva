@@ -107,5 +107,4 @@ class TransformerAgent(AIAgent):
         return self.generate_model_output(self.prepare_prompt(message))
 
 
-
 __all__ = ["TransformerAgent"]
