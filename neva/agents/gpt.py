@@ -513,12 +513,11 @@ class GPTAgent(AIAgent):
                                 self._circuit_breaker.record_rejected()
                         raise
                     if isinstance(exc, (CircuitOpenError, SpendBudgetExceededError)):
-                        if (
-                            isinstance(exc, SpendBudgetExceededError)
-                            and provider_succeeded
-                            and self._circuit_breaker is not None
-                        ):
-                            self._circuit_breaker.record_success()
+                        if self._circuit_breaker is not None:
+                            if provider_succeeded:
+                                self._circuit_breaker.record_success()
+                            elif isinstance(exc, SpendBudgetExceededError):
+                                self._circuit_breaker.record_rejected()
                         raise
                     if isinstance(exc, ConfigurationError):
                         if self._circuit_breaker is not None:
