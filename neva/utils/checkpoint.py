@@ -27,6 +27,32 @@ def _type_name(value: Any) -> str:
     return f"{type(value).__module__}.{type(value).__qualname__}"
 
 
+def _json_key_text(key: object) -> str:
+    if isinstance(key, str):
+        return key
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if type(key) in (int, float):
+        return str(key)
+    raise TypeError("Checkpoint runtime mapping keys are not JSON serializable")
+
+
+def _clone_json_native(value: Any) -> Any:
+    """Clone native JSON data while matching a dumps/loads roundtrip shape."""
+
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {_json_key_text(key): _clone_json_native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clone_json_native(item) for item in value]
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _records(records: Any) -> Any:
     result = []
     for record in records:
@@ -294,15 +320,11 @@ def capture_runtime(
     }
     try:
         # Structural validation avoids the previous full JSON string + parsed
-        # clone amplification. A bounded deepcopy then isolates live state.
-        _validate_checkpoint_value(runtime, limits, native_only=True)
-        if limits is None:
-            _validate_checkpoint_value(
-                runtime,
-                CheckpointLimits(),
-                native_only=True,
-            )
-        return deepcopy(runtime)
+        # clone amplification. The structural clone preserves dumps/loads
+        # normalization (tuples become lists; JSON mapping keys become strings).
+        validation_limits = limits if limits is not None else CheckpointLimits()
+        _validate_checkpoint_value(runtime, validation_limits, native_only=True)
+        return _clone_json_native(runtime)
     except (TypeError, ValueError) as exc:
         raise ValueError("Environment checkpoint fields must be JSON serializable") from exc
 
