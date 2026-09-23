@@ -53,6 +53,7 @@ transformers = { version = "^4.35.2", optional = true }
 torch = { version = "^2.2.2", optional = true }
 mlflow = { version = "^2.9.1", optional = true }
 anthropic = { version = "^0.26.0", optional = true }
+httpx = { version = ">=0.23,<0.28", optional = true }
 "google-generativeai" = { version = "^0.3.2", optional = true }
 "faiss-cpu" = { version = "^1.7.4", optional = true }
 numpy = { version = "^1.26.4", optional = true }
@@ -73,7 +74,7 @@ types-requests = "2.31.0.7"
 [tool.poetry.extras]
 tools = ["wikipedia", "deep-translator", "transformers", "torch"]
 mlops = ["mlflow"]
-providers = ["openai", "anthropic", "google-generativeai"]
+providers = ["openai", "anthropic", "httpx", "google-generativeai"]
 observability = ["opentelemetry-api", "opentelemetry-sdk"]
 memory = ["faiss-cpu", "numpy"]
 all = [
@@ -84,6 +85,7 @@ all = [
     "mlflow",
     "openai",
     "anthropic",
+    "httpx",
     "google-generativeai",
     "opentelemetry-api",
     "opentelemetry-sdk",
