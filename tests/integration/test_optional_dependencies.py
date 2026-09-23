@@ -20,6 +20,7 @@ pytest.importorskip("numpy")
 pytest.importorskip("anthropic")
 
 from neva.agents import GPTAgent, TransformerAgent
+from neva.utils.exceptions import BackendError
 from neva.memory import FaissVectorStoreMemory
 
 
@@ -171,6 +172,6 @@ def test_real_anthropic_sdk_empty_text_fails_closed(anthropic_server):
         request_timeout=2.0,
     )
 
-    with pytest.raises(Exception, match="empty content"):
+    with pytest.raises(BackendError, match="empty content"):
         agent._invoke_anthropic("hello")
     assert len(calls) == 1
