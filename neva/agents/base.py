@@ -9,7 +9,9 @@ import logging
 import threading
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 from datetime import datetime
 from time import perf_counter
 from typing import (
@@ -106,19 +108,38 @@ class ToolResponse:
         return self.error is None
 
 
+_TOOL_USE_REENTRY: ContextVar[Tuple[int, ...]] = ContextVar(
+    "neva_tool_use_reentry", default=()
+)
+
+
 class Tool(ABC):
     """Base class for validated, guardable tools used by AIAgent instances."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         implementation = cls.__dict__.get("use")
+
         if implementation is None:
             inherited = getattr(cls, "use", None)
-            if inherited is not Tool.use:
-                implementation = inherited
-        if implementation is not None and implementation is not Tool.use:
-            setattr(cls, "_use_unchecked", implementation)
-            setattr(cls, "use", Tool.use)
+            if inherited is Tool.use or getattr(inherited, "_neva_tool_wrapper", False):
+                return
+            implementation = inherited
+
+        if not callable(implementation):
+            return
+
+        setattr(cls, "_tool_use_impl", implementation)
+        setattr(cls, "_use_unchecked", implementation)
+
+        @wraps(implementation)
+        def guarded_use(self: "Tool", task: str) -> str:
+            if id(self) in _TOOL_USE_REENTRY.get():
+                return implementation(self, task)
+            return Tool.use(self, task)
+
+        setattr(guarded_use, "_neva_tool_wrapper", True)
+        setattr(cls, "use", guarded_use)
 
     def __init__(
         self,
@@ -131,7 +152,7 @@ class Tool(ABC):
     ) -> None:
         if self.__class__ is Tool:
             raise TypeError("Tool is a base class and must be subclassed")
-        if not callable(getattr(self, "_use_unchecked", None)):
+        if not callable(getattr(type(self), "_tool_use_impl", None)):
             raise TypeError(f"{type(self).__name__} must implement use(task)")
         self.name = name
         self.description = description
@@ -193,6 +214,19 @@ class Tool(ABC):
         except Exception as exc:
             raise ToolExecutionError(f"tool guard evaluation for '{self.name}' failed") from exc
 
+    def _invoke_unchecked(self, task: str) -> Any:
+        """Call the effective implementation while allowing normal super().use() delegation."""
+
+        implementation = getattr(type(self), "_tool_use_impl", None)
+        if not callable(implementation):
+            raise ToolExecutionError(f"tool '{self.name}' has no executable use implementation")
+        active = _TOOL_USE_REENTRY.get()
+        token = _TOOL_USE_REENTRY.set(active + (id(self),))
+        try:
+            return implementation(self, task)
+        finally:
+            _TOOL_USE_REENTRY.reset(token)
+
     def _execute(
         self,
         payload: str,
@@ -210,7 +244,12 @@ class Tool(ABC):
     def use(self, task: str) -> str:
         """Execute a direct tool call through schema validation and tool guardrails."""
 
-        call = ToolCall(name=self.name, arguments=task)
+        if id(self) in _TOOL_USE_REENTRY.get():
+            raise ToolExecutionError(
+                f"tool '{self.name}' delegated use() past its last concrete implementation"
+            )
+
+        call = ToolCall(name=self.name, arguments={"input": task})
         reason = self._evaluate_guard(call, self.tool_guard)
         if reason is not None:
             raise ToolExecutionError(reason)
