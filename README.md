@@ -434,8 +434,15 @@ scheduler = create_scheduler("my_scheduler")
   feedback so it can correct itself on a later step. `ToolLoopConfig` bounds
   model turns/tool calls, advertised tools, retained model output, each feedback
   record, and orchestration prompt size; hitting `max_steps` returns a
-  non-success `ToolLoopResult` instead of looping indefinitely. Tool results
-  are explicitly labelled untrusted data, but prompt wording is not a security
+  non-success `ToolLoopResult` instead of looping indefinitely. When no
+  explicit model callable is supplied, the loop uses the agent's
+  `generate_model_output()` hook: this sends the already composed bounded loop
+  prompt without re-prepending agent memory/tool summaries. TransformerAgent and
+  GPTAgent implement that raw path while retaining their normal
+  `respond()` behavior; GPTAgent still applies provider admission, retries,
+  spend/circuit controls, cache/telemetry, and provider context checks, but does
+  not add prior conversation history to the loop prompt. Tool results are
+  explicitly labelled untrusted data, but prompt wording is not a security
   boundary: hostile tool output may still influence a model, while code-level
   tool guards remain authoritative. The generic loop consumes text JSON rather
   than provider-native function-calling events; streaming/native tool APIs are
