@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `17c96a4a` (PRs #49–#52, #54–#69 merged).
+Updated against `main` at `94d72011` (PRs #49–#52, #54–#70 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -90,14 +90,22 @@ PR #70 completes the remaining library-level recovery gap:
 
 Boundary: automatic retries apply only to context construction and agent execution before a successful turn completes. Once `agent.step()` succeeds, `on_turn_complete()` is not retried, preventing a hook failure from repeating a completed model/backend call. Agent execution itself is still at-least-once when retries are enabled, so callers should scope `retry_on` to retry-safe failures or make external side effects idempotent. Recovery policy/state counters are runtime-only and intentionally remain configured on the receiving environment across checkpoint restore rather than being serialized.
 
-### 3. Tool schemas, permissions, and execution limits — mostly addressed
+### 3. Tool schemas, permissions, and execution limits — complete at the Neva tool layer
 
-- Tool-call guardrails (PR #61): `ToolGuard`/`ToolLimits` consulted by `AIAgent.call_tool` — allowlist, approval hook called with each `ToolCall` (only an identity `True` permits; non-bool, awaitable, or raised-exception approvals deny), execution timeout, and output truncation — all independent of model instructions.
-- Validated argument schemas (PR #62, merged): tools declare `ArgumentSchema`/`ArgumentSpec` rules (type, required, min/max length, min/max value, choices; unknown keys rejected unless `allow_extra=True`); `call_tool` validates mapping arguments (a raw string counts as `{"input": ...}`) and fails closed before execution.
-- PR #63 adds schemas to the built-in calculator, Wikipedia, summarizer, and translator tools. They share the normalizer's alias constant and preserve `input`/`task`/`query`/`text`, metadata-bearing calls, and single-string mappings. Mapping shapes that previously fell through to JSON serialization and reached the tool as JSON text are now rejected before execution.
-- Remaining: per-tool resource quotas beyond time and returned-string size (a timed-out tool keeps its daemon thread until it returns, and truncation does not bound peak output memory); direct `Tool.use` calls (as in the shipped examples) bypass both guardrails and schema validation.
+PR #71 closes the remaining library-level execution gap while preserving the public tool API:
 
-Regex prompt validation is input hygiene, not protection against prompt injection or unauthorized execution. Narrow math bounds and corrected README wording do not close this gap.
+- Direct `Tool.use()` routes through schema validation and optional per-tool guardrails. Approval hooks receive the same mapping-shaped `{"input": ...}` arguments as agent-mediated calls, and guarded execution normalizes direct results to `str`, matching the declared return type.
+- Concrete tool implementations are preserved separately from the public wrapper. Inherited/mixin implementations are guarded, while normal subclass `super().use(...)` delegation continues to call the parent implementation without recursively re-entering the guard wrapper.
+- `AIAgent.call_tool()` composes its agent guard with any tool-level guard. Permission checks run before execution; the stricter timeout/output/memory ceiling wins; the implementation runs once; observer usage/telemetry still records centrally.
+- `ToolLimits(max_concurrency=N)` bounds simultaneous executions per tool object. Slot bookkeeping is weak-reference-backed so dead tool objects are pruned instead of leaking or reusing stale `id(tool)` entries. When a timeout is configured, time spent waiting for a concurrency slot consumes that same deadline and fails with `ToolTimeoutError` instead of hanging behind a stuck timed-out worker.
+- The compatibility timeout mode remains thread-based and cannot forcibly stop a worker that ignores cancellation. Such a worker keeps its concurrency slot until it exits, but later callers with a timeout are still bounded by their own deadline. Output truncation remains active on this timeout path.
+- `ToolLimits(timeout=..., isolate_process=True)` adds a hard process timeout. Isolation uses `forkserver` where available, otherwise `spawn`, so isolated tools/configured callables must be picklable. Large results are drained concurrently to avoid pipe deadlock, and non-`Exception` failures such as `SystemExit` are converted to `ToolExecutionError` rather than escaping into the parent.
+- In isolated mode, `max_output_chars` is applied in the child before IPC. Optional `max_memory_bytes` applies `resource.RLIMIT_AS` where the runtime supports and accepts it. Missing support is rejected at configuration time; a platform that exposes `RLIMIT_AS` but rejects the actual limit operation now fails clearly with `ToolResourceLimitError`. Linux CI covers actual memory enforcement.
+- Tests cover direct-call schema/permission enforcement, approval-argument consistency, parent `super().use()` delegation, timeout-path truncation, bounded quota waits, weak slot cleanup, hard process timeout cleanup, large isolated results, `SystemExit` containment, isolated output bounding, Linux memory enforcement, and resource-limit application failures.
+
+Boundary: this is a library-level execution boundary, not a universal OS/container sandbox. Thread mode cannot forcibly terminate arbitrary synchronous code. Process isolation must be explicitly enabled for hard termination, requires picklable tool state, and still inherits the application's filesystem/network credentials. `RLIMIT_AS` availability and enforceability vary by platform; failures are surfaced rather than silently ignored.
+
+Regex prompt validation is input hygiene, not protection against prompt injection or unauthorized execution. Permission enforcement belongs to the tool guard path above.
 
 ### 4. Checkpoint and transcript scalability — partial
 

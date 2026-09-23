@@ -1,13 +1,23 @@
+import gc
 import logging
+import sys
 import threading
 import time
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+import neva.tools.guard as guard_module
 from neva.agents import TransformerAgent
 from neva.agents.base import Tool, ToolCall
 from neva.tools import ToolGuard, ToolLimits
-from neva.utils.exceptions import ToolExecutionError, ToolGuardConfigurationError, ToolTimeoutError
+from neva.utils.exceptions import (
+    ToolExecutionError,
+    ToolGuardConfigurationError,
+    ToolResourceLimitError,
+    ToolTimeoutError,
+)
 
 
 class RecordingTool(Tool):
@@ -25,6 +35,23 @@ class RecordingTool(Tool):
         if self.error is not None:
             raise self.error
         return self.output if self.output is not None else f"echo:{task}"
+
+
+class SystemExitTool(Tool):
+    def __init__(self):
+        super().__init__("exit", "Raises SystemExit")
+
+    def use(self, task):
+        raise SystemExit(7)
+
+
+class MemoryHogTool(Tool):
+    def __init__(self):
+        super().__init__("memory-hog", "Allocates more memory than allowed")
+
+    def use(self, task):
+        bytearray(2 * 1024 * 1024 * 1024)
+        return "unexpected"
 
 
 class ExplodingGuard:
@@ -198,6 +225,14 @@ def test_invoke_within_output_limit_unchanged():
     assert guard.invoke(tool, "anything") == "short"
 
 
+def test_thread_timeout_path_still_truncates_output():
+    tool = RecordingTool(output="x" * 1000)
+    guard = ToolGuard(limits=ToolLimits(timeout=1.0, max_output_chars=10))
+    output = guard.invoke(tool, "anything")
+    assert output.startswith("x" * 10)
+    assert "truncated" in output
+
+
 def test_call_tool_denied_by_allowlist():
     tool = RecordingTool(name="shell", output="ran")
     agent = make_agent(tool_guard=ToolGuard(allowed_tools={"echo"}))
@@ -280,3 +315,257 @@ def test_approval_hook_sees_calls_through_agent():
     allowed = agent.call_tool(ToolCall(name="shell", arguments={"input": "ls"}))
     assert allowed.succeeded()
     assert tool.calls == ["ls"]
+
+
+class ConcurrencyProbeTool(Tool):
+    def __init__(self):
+        super().__init__("probe", "Tracks concurrent executions")
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def use(self, task):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.04)
+            return task
+        finally:
+            with self._lock:
+                self.active -= 1
+
+
+def test_isolated_process_timeout_is_hard():
+    tool = RecordingTool(name="isolated", delay=1.0)
+    guard = ToolGuard(limits=ToolLimits(timeout=0.05, isolate_process=True))
+    started = time.monotonic()
+    with pytest.raises(ToolTimeoutError, match="hard execution limit"):
+        guard.invoke(tool, "slow")
+    assert time.monotonic() - started < 0.8
+    assert not any(
+        process.name == "neva-tool-process-isolated"
+        for process in __import__("multiprocessing").active_children()
+    )
+
+
+def test_isolated_process_truncates_before_parent_result():
+    tool = RecordingTool(name="loud-process", output="z" * 10000)
+    guard = ToolGuard(
+        limits=ToolLimits(
+            timeout=2.0,
+            isolate_process=True,
+            max_output_chars=7,
+        )
+    )
+    output = guard.invoke(tool, "go")
+    assert output.startswith("z" * 7)
+    assert "truncated" in output
+    assert len(output) < 100
+
+
+def test_process_memory_limit_requires_isolation():
+    with pytest.raises(ToolGuardConfigurationError, match="isolate_process"):
+        ToolLimits(max_memory_bytes=1024)
+
+
+def test_process_isolation_requires_timeout():
+    with pytest.raises(ToolGuardConfigurationError, match="requires timeout"):
+        ToolLimits(isolate_process=True)
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, "2"])
+def test_invalid_concurrency_limit_rejected(limit):
+    with pytest.raises(ToolGuardConfigurationError, match="max_concurrency"):
+        ToolLimits(max_concurrency=limit)
+
+
+def test_per_tool_concurrency_quota_serializes_calls():
+    tool = ConcurrencyProbeTool()
+    guard = ToolGuard(limits=ToolLimits(max_concurrency=1))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda value: guard.invoke(tool, value), ["a", "b", "c", "d"]))
+    assert results == ["a", "b", "c", "d"]
+    assert tool.max_active == 1
+
+
+class TimeoutSlotTool(Tool):
+    def __init__(self):
+        super().__init__("slot", "Blocks the first invocation")
+        self.release_first = threading.Event()
+        self.started = []
+        self._lock = threading.Lock()
+
+    def use(self, task):
+        with self._lock:
+            self.started.append(task)
+        if task == "first":
+            self.release_first.wait()
+        return task
+
+
+def test_timed_out_thread_retains_slot_but_later_wait_is_bounded():
+    tool = TimeoutSlotTool()
+    guard = ToolGuard(limits=ToolLimits(timeout=0.05, max_concurrency=1))
+
+    with pytest.raises(ToolTimeoutError):
+        guard.invoke(tool, "first")
+
+    started = time.monotonic()
+    with pytest.raises(ToolTimeoutError, match="concurrency slot"):
+        guard.invoke(tool, "second")
+    assert time.monotonic() - started < 0.5
+    assert tool.started == ["first"]
+
+    tool.release_first.set()
+    time.sleep(0.02)
+    assert guard.invoke(tool, "third") == "third"
+    assert tool.started == ["first", "third"]
+
+
+def test_isolated_process_drains_large_result_without_pipe_deadlock():
+    payload = "w" * 250_000
+    tool = RecordingTool(name="large-process", output=payload)
+    guard = ToolGuard(limits=ToolLimits(timeout=2.0, isolate_process=True))
+
+    assert guard.invoke(tool, "go") == payload
+
+
+def test_direct_tool_use_honours_tool_guard():
+    tool = RecordingTool(name="direct")
+    tool.set_tool_guard(ToolGuard(allowed_tools={"other"}))
+    with pytest.raises(ToolExecutionError, match="not permitted"):
+        tool.use("blocked")
+    assert tool.calls == []
+
+
+def test_direct_tool_use_honours_output_limit():
+    tool = RecordingTool(name="direct", output="q" * 100)
+    tool.set_tool_guard(ToolGuard(limits=ToolLimits(max_output_chars=6)))
+    output = tool.use("go")
+    assert output.startswith("q" * 6)
+    assert "truncated" in output
+
+
+def test_agent_and_tool_guards_both_apply():
+    tool = RecordingTool(name="shared", output="r" * 50)
+    tool.set_tool_guard(ToolGuard(limits=ToolLimits(max_output_chars=12)))
+    agent = make_agent(
+        tool_guard=ToolGuard(
+            allowed_tools={"shared"},
+            limits=ToolLimits(max_output_chars=5),
+        )
+    )
+    agent.register_tool(tool)
+    response = agent.call_tool(ToolCall(name="shared", arguments={"input": "go"}))
+    assert response.succeeded()
+    assert response.output.startswith("r" * 5)
+    assert "truncated" in response.output
+    assert tool.calls == ["go"]
+
+
+def test_inherited_mixin_use_is_wrapped_by_tool_guard():
+    class UseMixin:
+        def use(self, task):
+            return f"mixin:{task}"
+
+    class MixedTool(UseMixin, Tool):
+        def __init__(self):
+            super().__init__("mixed", "Uses an inherited mixin implementation")
+
+    tool = MixedTool()
+    tool.set_tool_guard(ToolGuard(allowed_tools={"other"}))
+    with pytest.raises(ToolExecutionError, match="not permitted"):
+        tool.use("blocked")
+
+
+def test_subclass_super_use_delegates_to_parent_implementation():
+    class ParentTool(Tool):
+        def __init__(self):
+            super().__init__("parent", "parent")
+
+        def use(self, task):
+            return f"parent:{task}"
+
+    class ChildTool(ParentTool):
+        def use(self, task):
+            return f"child:{super().use(task)}"
+
+    tool = ChildTool()
+    assert tool.use("x") == "child:parent:x"
+
+
+def test_direct_approval_hook_receives_mapping_arguments():
+    seen = []
+
+    def approve(call):
+        seen.append(call.arguments)
+        return True
+
+    tool = RecordingTool(name="direct-approve")
+    tool.set_tool_guard(ToolGuard(approve=approve))
+    assert tool.use("hello") == "echo:hello"
+    assert seen == [{"input": "hello"}]
+
+
+def test_thread_timeout_contains_non_exception_baseexception():
+    tool = SystemExitTool()
+    guard = ToolGuard(limits=ToolLimits(timeout=1.0))
+    with pytest.raises(ToolExecutionError, match="SystemExit"):
+        guard.invoke(tool, "go")
+
+
+def test_isolated_process_contains_system_exit():
+    tool = SystemExitTool()
+    guard = ToolGuard(limits=ToolLimits(timeout=2.0, isolate_process=True))
+    with pytest.raises(ToolExecutionError, match="SystemExit"):
+        guard.invoke(tool, "go")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="RLIMIT_AS enforcement test is Linux-specific")
+def test_isolated_process_enforces_memory_limit_on_linux():
+    tool = MemoryHogTool()
+    guard = ToolGuard(
+        limits=ToolLimits(
+            timeout=5.0,
+            isolate_process=True,
+            max_memory_bytes=768 * 1024 * 1024,
+        )
+    )
+    with pytest.raises(ToolResourceLimitError, match="memory limit"):
+        guard.invoke(tool, "go")
+
+
+def test_concurrency_slot_entry_is_pruned_when_tool_is_collected():
+    guard = ToolGuard(limits=ToolLimits(max_concurrency=1))
+    tool = RecordingTool(name="ephemeral")
+    guard.invoke(tool, "go")
+    ref = weakref.ref(tool)
+    del tool
+    gc.collect()
+    assert ref() is None
+    assert guard._concurrency_slots == {}
+
+
+def test_memory_limit_application_failure_is_resource_error(monkeypatch):
+    class FakeResource:
+        RLIMIT_AS = 1
+        RLIM_INFINITY = -1
+
+        @staticmethod
+        def getrlimit(resource):
+            return (-1, -1)
+
+        @staticmethod
+        def setrlimit(resource, limits):
+            raise ValueError("platform rejected RLIMIT_AS")
+
+    monkeypatch.setattr(guard_module, "_resource", FakeResource)
+    with pytest.raises(ToolResourceLimitError, match="could not apply"):
+        guard_module._apply_process_memory_limit(1024)
+
+
+def test_direct_tool_guard_supports_process_isolation():
+    tool = RecordingTool(name="direct-isolated")
+    tool.set_tool_guard(ToolGuard(limits=ToolLimits(timeout=2.0, isolate_process=True)))
+    assert tool.use("hello") == "echo:hello"

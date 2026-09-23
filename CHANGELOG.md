@@ -39,6 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authoritative account-spend total while preserving in-flight reservations.
   Unpriced or non-finite model pricing still fails closed when spend
   enforcement is active.
+- Tool execution guardrails now cover direct calls as well as agent-mediated
+  calls. `Tool.use()` enforces declared schemas and an optional per-tool guard,
+  normalizes direct results to `str`, and preserves subclass
+  `super().use(...)` delegation. Agent and tool guards compose without
+  duplicate execution. `ToolLimits` adds per-tool concurrency quotas with
+  weak-reference cleanup and deadline-bounded quota waits, plus opt-in process
+  isolation for hard timeouts. Isolated execution prefers `forkserver` and
+  falls back to `spawn`, drains large results concurrently, contains
+  non-`Exception` child failures, truncates output before IPC, and supports
+  optional `resource.RLIMIT_AS` memory ceilings. OS rejection of the memory
+  limit now surfaces as `ToolResourceLimitError`; Linux CI covers actual
+  enforcement. The legacy thread-timeout behavior remains the compatibility
+  default, including the fact that an over-time worker cannot be forcibly
+  stopped and keeps its concurrency slot until it exits.
 - Tool-call guardrails: `AIAgent(tool_guard=ToolGuard(...))` (forwarded by
   `GPTAgent` and `TransformerAgent`) enforces code-level policy independent of
   prompt content — an allowlist, an approval hook called with each `ToolCall`,
@@ -52,7 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns leaks that one thread, and nothing is re-joined at interpreter
   exit) and raise `ToolTimeoutError` (a `ToolExecutionError`); outputs longer
   than `max_output_chars` keep that many characters plus a truncation marker.
-  Guardrails apply to `call_tool`; direct `Tool.use` calls bypass them.
+  PR #71 extends this path to direct `Tool.use` calls and adds opt-in hard
+  process isolation; the thread behavior remains the compatibility default.
 - Validated tool argument schemas: tools may declare
   `argument_schema=ArgumentSchema({...})` with per-field `ArgumentSpec` rules
   (type, required, min/max length, min/max value, choices; unknown keys are
@@ -67,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `input`/`task`/`query`/`text`, metadata-bearing calls, and single-string
   mappings. Mapping shapes that previously fell through to JSON serialization
   and reached the tool as JSON text are now rejected before execution.
-  Tools without a schema behave as before.
+  PR #71 also applies declared schemas to direct `Tool.use` calls. Tools
+  without a schema behave as before.
 - Durable failure records: `Environment(failure_log=FailureLog(path))` appends
   one JSON line per handled turn failure (both `raise` and `return` policies,
   including scheduler-selection failures), flushed and fsynced by default.
