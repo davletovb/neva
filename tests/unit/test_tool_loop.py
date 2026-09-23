@@ -478,6 +478,66 @@ def test_schema_metadata_is_advertised_to_model():
     assert '"type":"str"' in prompt
 
 
+def test_default_tool_registry_budget_can_advertise_max_tools_by_name():
+    agent = _agent()
+    for index in range(ToolLoopConfig().max_tools):
+        agent.register_tool(
+            EchoTool(
+                name=f"tool-{index}",
+                description="description-" + ("x" * 300),
+            )
+        )
+    model = ScriptedModel(_final("fits"))
+
+    result = run_tool_loop(agent, "choose if needed", model=model)
+
+    assert result.succeeded()
+    assert len(model.prompts) == 1
+    prompt = model.prompts[0]
+    assert len(prompt) <= ToolLoopConfig().max_prompt_chars
+    assert '"name":"tool-0"' in prompt
+    assert '"name":"tool-31"' in prompt
+    # The registry degrades rather than dropping tool names.
+    assert "description-" not in prompt
+
+
+def test_rich_schema_metadata_is_used_when_it_fits():
+    agent = _agent()
+    agent.register_tool(EchoTool(schema=_schema()))
+    model = ScriptedModel(_final())
+
+    result = run_tool_loop(agent, "inspect tools", model=model)
+
+    assert result.succeeded()
+    assert '"kind":"arguments"' in model.prompts[0]
+
+
+def test_default_model_path_rejects_prompt_limit_above_agent_validator():
+    agent = _agent()
+
+    with pytest.raises(ToolLoopLimitError, match=r"max_prompt_chars=5000.*max_length=4000"):
+        run_tool_loop(
+            agent,
+            "bounded",
+            config=ToolLoopConfig(max_prompt_chars=5000),
+        )
+
+
+def test_explicit_model_can_use_prompt_limit_above_agent_validator():
+    agent = _agent()
+    model = ScriptedModel(_final("explicit"))
+
+    result = run_tool_loop(
+        agent,
+        "bounded",
+        model=model,
+        config=ToolLoopConfig(max_prompt_chars=5000),
+    )
+
+    assert result.succeeded()
+    assert result.output == "explicit"
+
+
 def test_final_action_needs_no_registered_tools():
     agent = _agent()
     result = run_tool_loop(agent, "answer directly", model=lambda prompt: _final("direct"))
