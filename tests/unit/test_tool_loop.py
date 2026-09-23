@@ -191,6 +191,8 @@ def test_unknown_tool_becomes_feedback_instead_of_escaping():
         '{"action":"final","output":"ok","extra":1}',
         '{"action":"tool","name":"echo","arguments":{"input":"x"},"extra":1}',
         '{"action":"final","output":NaN}',
+        '{"action":"final","action":"tool","name":"echo","arguments":{"input":"x"}}',
+        '{"action":"tool","name":"echo","arguments":{"input":"a","input":"b"}}',
     ],
 )
 def test_protocol_errors_are_bounded_feedback_and_recoverable(bad_output):
@@ -213,6 +215,50 @@ def test_non_string_model_output_is_protocol_feedback():
 
     assert result.succeeded()
     assert result.steps[0].protocol_error == "model callable must return a string"
+
+
+def test_falsey_callable_model_is_still_used():
+    class FalseyModel:
+        def __bool__(self):
+            return False
+
+        def __call__(self, prompt):
+            return _final("falsey-ok")
+
+    result = run_tool_loop(_agent(), "use supplied model", model=FalseyModel())
+
+    assert result.succeeded()
+    assert result.output == "falsey-ok"
+
+
+def test_async_model_callable_is_rejected_before_invocation():
+    async def async_model(prompt):
+        return _final()
+
+    with pytest.raises(ToolLoopConfigurationError, match="synchronous"):
+        run_tool_loop(_agent(), "no async", model=async_model)
+
+
+def test_returned_awaitable_becomes_bounded_protocol_feedback():
+    class AwaitableModel:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                async def later():
+                    return _final("late")
+
+                return later()
+            return _final("recovered")
+
+    model = AwaitableModel()
+    result = run_tool_loop(_agent(), "recover awaitable", model=model)
+
+    assert result.succeeded()
+    assert "awaitable" in result.steps[0].protocol_error
+    assert result.output == "recovered"
 
 
 def test_model_output_limit_rejects_before_json_parsing():
