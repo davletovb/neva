@@ -125,6 +125,18 @@ class FailureLog:
     def _rotated_path(self, index: int) -> Path:
         return self.path.with_name(f"{self.path.name}.{index}")
 
+    def _prune_backups(self) -> None:
+        prefix = f"{self.path.name}."
+        for candidate in self.path.parent.iterdir():
+            if not candidate.name.startswith(prefix):
+                continue
+            suffix = candidate.name[len(prefix) :]
+            if suffix.isdigit() and int(suffix) > self.backup_count:
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    pass
+
     def _rotate(self) -> None:
         if not self.path.exists():
             return
@@ -162,6 +174,8 @@ class FailureLog:
         encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.rotate_bytes is not None:
+                self._prune_backups()
 
             separator = b""
             current_size = self.path.stat().st_size if self.path.exists() else 0
