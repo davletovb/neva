@@ -307,8 +307,10 @@ treating checkpointed scheduler RNG state as sufficient reproducibility:
 - Version-1 run manifests record exact caller-supplied prompts, environment and
   recovery configuration, scheduler type/order/paused/configuration plus RNG
   state digest and pending event queues, behavior-affecting public environment
-  configuration/state, agent type/provider/model, relevant generation/request
-  settings, initial conversation content/retention policy, agent attributes,
+  configuration/state, agent type/provider/model/provider endpoint, relevant
+  generation/request settings, full prompt-validator regex policy, initial
+  conversation content/retention policy, built-in memory state/configuration,
+  agent attributes,
   tool metadata, prompt-validator ceiling, backend identity, cache policy/capacity
   and initial cache-state fingerprint, selected dependency versions, Python/
   platform versions, seed application report, user metadata, and explicit
@@ -346,7 +348,7 @@ treating checkpointed scheduler RNG state as sufficient reproducibility:
   RNG/scheduler repetition, nested Composite seeding, custom agent seed hooks,
   provider/model/generation/cache/dependency manifest fields, environment public
   config/state, EventDriven pending order, initial conversation/agent attributes,
-  secret exclusion,
+  built-in memory fingerprints, prompt-validator policy, provider endpoint, secret exclusion,
   cache-state fingerprints, built-in GPT HTTP record→offline replay without a
   second network call, manifest mismatch, prompt mismatch, exhaustion,
   unconsumed calls, recorded failures, tampering, and malformed persisted data.
