@@ -106,7 +106,14 @@ class ToolResponse:
 
 
 class Tool(ABC):
-    """An abstract base class for tools used by :class:`AIAgent` instances."""
+    """Base class for validated, guardable tools used by AIAgent instances."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        implementation = cls.__dict__.get("use")
+        if implementation is not None and implementation is not Tool.use:
+            setattr(cls, "_use_unchecked", implementation)
+            setattr(cls, "use", Tool.use)
 
     def __init__(
         self,
@@ -115,7 +122,10 @@ class Tool(ABC):
         *,
         capabilities: Optional[Sequence[str]] = None,
         argument_schema: Optional[Any] = None,
+        tool_guard: Optional["ToolGuard"] = None,
     ) -> None:
+        if self.__class__ is Tool:
+            raise TypeError("Tool is a base class and must be subclassed")
         self.name = name
         self.description = description
         self.capabilities: Sequence[str] = tuple(capabilities or ())
@@ -139,10 +149,74 @@ class Tool(ABC):
                         "argument_schema.validate must accept a single " "arguments mapping"
                     ) from exc
         self.argument_schema = argument_schema
+        self.tool_guard: Optional["ToolGuard"] = tool_guard
 
-    @abstractmethod
+    def set_tool_guard(self, guard: Optional["ToolGuard"]) -> None:
+        """Configure guardrails that apply even to direct use() calls."""
+
+        self.tool_guard = guard
+
+    def _schema_reason(self, arguments: ToolArguments) -> Optional[str]:
+        schema = self.argument_schema
+        if schema is None:
+            return None
+        validation_arguments = (
+            dict(arguments) if not isinstance(arguments, str) else {"input": arguments}
+        )
+        try:
+            reason = schema.validate(validation_arguments)
+        except Exception as exc:
+            raise ToolExecutionError(
+                f"tool schema validation for '{self.name}' failed"
+            ) from exc
+        if reason is None:
+            return None
+        if inspect.isawaitable(reason):
+            close = getattr(reason, "close", None)
+            if callable(close):
+                close()
+            return "custom schema returned an awaitable"
+        if not isinstance(reason, str):
+            return "custom schema reported a violation"
+        return reason
+
+    def _evaluate_guard(self, call: ToolCall, guard: Optional["ToolGuard"]) -> Optional[str]:
+        if guard is None:
+            return None
+        try:
+            return guard.evaluate(call)
+        except Exception as exc:
+            raise ToolExecutionError(
+                f"tool guard evaluation for '{self.name}' failed"
+            ) from exc
+
+    def _execute(
+        self,
+        payload: str,
+        *,
+        additional_guards: Sequence["ToolGuard"] = (),
+    ) -> str:
+        from neva.tools.guard import _execute_with_guards
+
+        guards = []
+        if self.tool_guard is not None:
+            guards.append(self.tool_guard)
+        guards.extend(additional_guards)
+        return _execute_with_guards(self, payload, tuple(guards))
+
     def use(self, task: str) -> str:
-        """Execute the tool for the given task description."""
+        """Execute a direct tool call through schema validation and tool guardrails."""
+
+        call = ToolCall(name=self.name, arguments=task)
+        reason = self._evaluate_guard(call, self.tool_guard)
+        if reason is not None:
+            raise ToolExecutionError(reason)
+        schema_reason = self._schema_reason(task)
+        if schema_reason is not None:
+            raise ToolExecutionError(
+                f"invalid arguments for tool '{self.name}': {schema_reason}"
+            )
+        return self._execute(task)
 
     def metadata(self) -> Dict[str, Sequence[str]]:
         """Return metadata describing the tool's capabilities."""
@@ -260,22 +334,23 @@ class AIAgent(ABC):
         return json.dumps(arguments, sort_keys=True)
 
     def call_tool(self, call: ToolCall) -> ToolResponse:
-        """Invoke a registered tool using a standardised interface.
-
-        When the agent has a :class:`~neva.tools.guard.ToolGuard`, denied
-        calls return a failed response without executing the tool, and
-        execution runs under the guard's limits.
-        """
+        """Invoke a registered tool through policy, schema, and execution limits."""
 
         tool = self.get_tool(call.name)
         if isinstance(call.arguments, str):
             arguments: ToolArguments = call.arguments
         else:
             arguments = dict(call.arguments)
-        guard = self.tool_guard
-        if guard is not None:
+
+        guards = []
+        if self.tool_guard is not None:
+            guards.append(self.tool_guard)
+        if tool.tool_guard is not None and tool.tool_guard is not self.tool_guard:
+            guards.append(tool.tool_guard)
+
+        for guard in guards:
             try:
-                reason = guard.evaluate(call)
+                reason = guard.evaluate(ToolCall(name=call.name, arguments=arguments))
             except Exception:
                 logger.exception("Tool guard evaluation failed for tool '%s'", call.name)
                 reason = f"tool guard evaluation for '{call.name}' failed"
@@ -287,37 +362,31 @@ class AIAgent(ABC):
                     output="",
                     error=reason,
                 )
-        schema = getattr(tool, "argument_schema", None)
-        if schema is not None:
-            validation_arguments = (
-                arguments if isinstance(arguments, dict) else {"input": arguments}
+
+        try:
+            schema_reason = tool._schema_reason(arguments)
+        except ToolExecutionError as exc:
+            logger.warning("Tool '%s' schema failed for agent '%s': %s", call.name, self.name, exc)
+            return ToolResponse(
+                name=tool.name,
+                arguments=arguments,
+                output="",
+                error=str(exc),
             )
-            try:
-                schema_reason = schema.validate(validation_arguments)
-            except Exception:
-                logger.exception("Tool schema validation failed for tool '%s'", call.name)
-                schema_reason = f"tool schema validation for '{call.name}' failed"
-            if schema_reason is not None:
-                if inspect.isawaitable(schema_reason):
-                    close = getattr(schema_reason, "close", None)
-                    if callable(close):
-                        close()
-                    schema_reason = "custom schema returned an awaitable"
-                elif not isinstance(schema_reason, str):
-                    logger.warning("Schema for tool '%s' returned %r", call.name, schema_reason)
-                    schema_reason = "custom schema reported a violation"
-                logger.warning(
-                    "Tool '%s' rejected for agent '%s': invalid arguments: %s",
-                    call.name,
-                    self.name,
-                    schema_reason,
-                )
-                return ToolResponse(
-                    name=tool.name,
-                    arguments=arguments,
-                    output="",
-                    error=f"invalid arguments for tool '{call.name}': {schema_reason}",
-                )
+        if schema_reason is not None:
+            logger.warning(
+                "Tool '%s' rejected for agent '%s': invalid arguments: %s",
+                call.name,
+                self.name,
+                schema_reason,
+            )
+            return ToolResponse(
+                name=tool.name,
+                arguments=arguments,
+                output="",
+                error=f"invalid arguments for tool '{call.name}': {schema_reason}",
+            )
+
         try:
             payload = self._normalise_tool_input(arguments)
         except Exception:
@@ -328,8 +397,9 @@ class AIAgent(ABC):
                 output="",
                 error=f"could not normalise arguments for tool '{call.name}'",
             )
+
         try:
-            output = guard.invoke(tool, payload) if guard is not None else tool.use(payload)
+            output = tool._execute(payload, additional_guards=tuple(guards))
         except ToolExecutionError as exc:
             logger.warning("Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc)
             return ToolResponse(
@@ -338,7 +408,7 @@ class AIAgent(ABC):
                 output="",
                 error=str(exc),
             )
-        except Exception as exc:  # pragma: no cover - defensive guard.
+        except Exception as exc:
             logger.exception(
                 "Tool '%s' raised an unexpected error for agent '%s'", tool.name, self.name
             )
