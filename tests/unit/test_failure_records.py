@@ -434,7 +434,7 @@ def test_invalid_rotation_threshold_rejected(tmp_path, rotate_bytes):
 @pytest.mark.parametrize("backup_count", [-1, True, 1.5, "2"])
 def test_invalid_backup_count_rejected(tmp_path, backup_count):
     with pytest.raises(ValueError, match="backup_count"):
-        FailureLog(tmp_path / "failures.jsonl", rotate_bytes=100, backup_count=backup_count)
+        FailureLog(\n            tmp_path / "failures.jsonl",\n            rotate_bytes=100,\n            backup_count=backup_count,\n        )
 
 
 def test_rotation_retains_records_and_loads_oldest_first(tmp_path):
