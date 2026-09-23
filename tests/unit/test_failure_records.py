@@ -550,3 +550,34 @@ def test_zero_backup_count_prunes_existing_generations_on_next_append(tmp_path):
 
     assert not (tmp_path / "failures.jsonl.1").exists()
     assert [record.agent_name for record in reopened.load()] == ["b", "c"]
+
+
+
+def test_default_reader_does_not_implicitly_load_rotated_backups(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    first = make_record(agent_name="a")
+    second = make_record(agent_name="b")
+    threshold = encoded_record_size(first)
+    writer = FailureLog(path, rotate_bytes=threshold, backup_count=1)
+    writer.append(first)
+    writer.append(second)
+
+    assert [record.agent_name for record in writer.load()] == ["a", "b"]
+    assert [record.agent_name for record in FailureLog(path).load()] == ["b"]
+
+
+def test_retention_pruning_runs_only_once_per_log_instance(tmp_path, monkeypatch):
+    path = tmp_path / "failures.jsonl"
+    log = FailureLog(path, rotate_bytes=10_000, backup_count=1)
+    calls = []
+    original = log._prune_backups
+
+    def counted():
+        calls.append(True)
+        return original()
+
+    monkeypatch.setattr(log, "_prune_backups", counted)
+    log.append(make_record(agent_name="a"))
+    log.append(make_record(agent_name="b"))
+
+    assert calls == [True]
