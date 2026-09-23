@@ -202,8 +202,9 @@ class FaissVectorStoreMemory(MemoryModule):
         if not results:
             return ""
 
-        # Sort by score (desc) then by recency (desc)
-        results.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        # FAISS search already returns nearest neighbours in metric order.
+        # The default "Flat" factory uses L2 distance, where lower scores are
+        # better; re-sorting descending would invert semantic relevance.
         top_records = [record for _, _, record in results[:k]]
 
         return "\n".join(f"{r.speaker}: {r.message}" for r in top_records)
