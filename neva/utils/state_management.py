@@ -691,7 +691,10 @@ def load_snapshot(
         raise ValueError("Snapshot exceeds max_bytes")
 
     _preflight_json_bytes(raw, limits)
-    payload = json.loads(raw.decode("utf-8"))
+    decoded = raw.decode("utf-8")
+    del raw
+    payload = json.loads(decoded)
+    del decoded
     if not isinstance(payload, dict):
         raise ValueError("Snapshot root must be a JSON object")
     return SimulationSnapshot._from_payload(payload, limits=limits)
