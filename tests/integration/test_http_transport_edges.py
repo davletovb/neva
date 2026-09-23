@@ -14,7 +14,6 @@ import urllib3
 
 from neva.agents import GPTAgent
 from neva.utils.exceptions import BackendError
-from neva.utils.safety import PromptValidator
 
 
 def _agent(base: str, *, timeout: float = 0.1, max_context_chars: int = 24_000) -> GPTAgent:
@@ -133,18 +132,30 @@ def write_stall_server():
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
+    listener.settimeout(0.2)
     release = threading.Event()
     accepted = threading.Event()
 
     def worker():
-        connection, _ = listener.accept()
+        connection = None
         try:
+            while not release.is_set():
+                try:
+                    connection, _ = listener.accept()
+                    break
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+            if connection is None:
+                return
             connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
             accepted.set()
             # Deliberately never read the request body.
             release.wait(timeout=3)
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     thread = threading.Thread(target=worker)
     thread.start()
@@ -173,7 +184,7 @@ def test_real_request_body_write_timeout_is_wrapped(write_stall_server, monkeypa
     )
 
     agent = _agent(base, timeout=0.05, max_context_chars=2_000_000)
-    agent.prompt_validator = PromptValidator(max_length=2_000_000)
+    agent.prompt_validator.max_length = 2_000_000
 
     with pytest.raises(BackendError) as caught:
         agent.respond("x" * 1_000_000)
