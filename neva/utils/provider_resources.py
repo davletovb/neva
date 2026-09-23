@@ -297,14 +297,27 @@ class ProviderResourceCoordinator:
         )
 
     def _remove_sqlite_waiter(self, owner: str) -> None:
-        try:
-            with self._connect() as connection:
-                connection.execute(
-                    "DELETE FROM provider_waiters WHERE scope = ? AND owner = ?",
-                    (self.scope, owner),
-                )
-        except sqlite3.Error:
-            pass
+        """Remove a persisted waiter, retrying transient SQLite failures.
+
+        Cleanup failures are surfaced rather than silently leaving a stale FIFO
+        head until its lease expires.
+        """
+
+        last_error: Optional[sqlite3.Error] = None
+        for attempt in range(3):
+            try:
+                with self._connect() as connection:
+                    connection.execute(
+                        "DELETE FROM provider_waiters WHERE scope = ? AND owner = ?",
+                        (self.scope, owner),
+                    )
+                return
+            except sqlite3.Error as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(self.poll_interval)
+        if last_error is not None:
+            raise last_error
 
     def _acquire_sqlite(
         self,
