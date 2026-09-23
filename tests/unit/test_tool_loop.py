@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from neva.agents import TransformerAgent
+from neva.agents import GPTAgent, TransformerAgent
 from neva.agents.base import Tool
 from neva.tools import (
     ArgumentSchema,
@@ -15,10 +15,18 @@ from neva.utils.exceptions import ToolLoopConfigurationError, ToolLoopLimitError
 
 
 class EchoTool(Tool):
-    def __init__(self, *, guard=None, schema=None, name="echo", output=None):
+    def __init__(
+        self,
+        *,
+        guard=None,
+        schema=None,
+        name="echo",
+        output=None,
+        description="Echoes a validated input string",
+    ):
         super().__init__(
             name,
-            "Echoes a validated input string",
+            description,
             capabilities=("echo",),
             argument_schema=schema,
             tool_guard=guard,
@@ -100,7 +108,7 @@ def test_successful_tool_feedback_final_flow():
     assert "untrusted data" in model.prompts[1]
 
 
-def test_agent_convenience_method_uses_agent_respond_by_default():
+def test_agent_convenience_method_uses_raw_model_generation_path():
     outputs = iter([_final("from-agent")])
     prompts = []
 
@@ -109,12 +117,51 @@ def test_agent_convenience_method_uses_agent_respond_by_default():
         return next(outputs)
 
     agent = TransformerAgent(name="agent", llm_backend=backend)
+    agent.register_tool(EchoTool(description="d" * 5000))
     result = agent.run_tool_loop("finish immediately")
 
     assert result.succeeded()
     assert result.output == "from-agent"
     assert len(prompts) == 1
+    assert len(prompts[0]) <= ToolLoopConfig().max_prompt_chars
     assert "finish immediately" in prompts[0]
+    assert "d" * 5000 not in prompts[0]
+
+
+def test_gpt_default_tool_loop_model_path_excludes_existing_history(monkeypatch):
+    sent = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": _final("provider-ok")}}]}
+
+    def fake_post(url, *, headers, json, timeout):
+        sent.append(json)
+        return Response()
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    agent = GPTAgent(
+        api_key="test-key",
+        provider="openai",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    agent.conversation_state.record_turn("user", "OLD HISTORY MUST NOT BE SENT")
+
+    result = agent.run_tool_loop("use bounded prompt")
+
+    assert result.succeeded()
+    assert result.output == "provider-ok"
+    assert len(sent) == 1
+    messages = sent[0]["messages"]
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert "OLD HISTORY MUST NOT BE SENT" not in messages[0]["content"]
+    assert "use bounded prompt" in messages[0]["content"]
 
 
 def test_schema_rejection_is_feedback_and_model_can_retry():
