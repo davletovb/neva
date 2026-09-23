@@ -108,9 +108,7 @@ class ToolResponse:
         return self.error is None
 
 
-_TOOL_USE_REENTRY: ContextVar[Tuple[int, ...]] = ContextVar(
-    "neva_tool_use_reentry", default=()
-)
+_TOOL_USE_REENTRY: ContextVar[Tuple[int, ...]] = ContextVar("neva_tool_use_reentry", default=())
 
 
 class Tool(ABC):
