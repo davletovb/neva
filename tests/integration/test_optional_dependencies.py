@@ -20,8 +20,8 @@ pytest.importorskip("numpy")
 pytest.importorskip("anthropic")
 
 from neva.agents import GPTAgent, TransformerAgent
-from neva.utils.exceptions import BackendError
 from neva.memory import FaissVectorStoreMemory
+from neva.utils.exceptions import BackendError
 
 
 class _TinyTokenizer:
