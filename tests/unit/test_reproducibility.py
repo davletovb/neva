@@ -16,7 +16,6 @@ from neva.utils.exceptions import (
     ReplayMismatchError,
     ReproducibilityError,
 )
-from neva.utils.safety import PromptValidator
 from neva.utils.reproducibility import (
     ReplayRecord,
     ReplayTape,
@@ -25,6 +24,7 @@ from neva.utils.reproducibility import (
     prepare_reproducible_run,
     seed_everything,
 )
+from neva.utils.safety import PromptValidator
 
 
 class SeedAwareAgent(AIAgent):
