@@ -42,6 +42,11 @@ def make_record(**overrides):
     return FailureRecord(**defaults)
 
 
+def encoded_record_size(record):
+    line = json.dumps(record.to_dict(), sort_keys=True) + "\n"
+    return len(line.encode("utf-8"))
+
+
 def test_record_round_trip():
     record = make_record(context="prompt text")
     assert FailureRecord.from_dict(record.to_dict()) == record
@@ -417,3 +422,91 @@ def test_replay_nameless_record_validated_before_empty_environment():
     env = Environment(RoundRobinScheduler())
     with pytest.raises(ValueError, match="agent_name"):
         env.replay_failure(make_record(agent_name=None))
+
+
+
+@pytest.mark.parametrize("rotate_bytes", [0, -1, True, 1.5, "100"])
+def test_invalid_rotation_threshold_rejected(tmp_path, rotate_bytes):
+    with pytest.raises(ValueError, match="rotate_bytes"):
+        FailureLog(tmp_path / "failures.jsonl", rotate_bytes=rotate_bytes)
+
+
+@pytest.mark.parametrize("backup_count", [-1, True, 1.5, "2"])
+def test_invalid_backup_count_rejected(tmp_path, backup_count):
+    with pytest.raises(ValueError, match="backup_count"):
+        FailureLog(tmp_path / "failures.jsonl", rotate_bytes=100, backup_count=backup_count)
+
+
+def test_rotation_retains_records_and_loads_oldest_first(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    records = [make_record(agent_name=name) for name in ("a", "b", "c")]
+    threshold = encoded_record_size(records[0]) + encoded_record_size(records[1])
+    log = FailureLog(path, rotate_bytes=threshold, backup_count=2)
+
+    for record in records:
+        log.append(record)
+
+    assert (tmp_path / "failures.jsonl.1").exists()
+    assert path.exists()
+    assert [record.agent_name for record in log.load()] == ["a", "b", "c"]
+
+
+def test_rotation_discards_oldest_backup_after_retention_limit(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    records = [make_record(agent_name=name) for name in ("a", "b", "c", "d")]
+    threshold = encoded_record_size(records[0])
+    log = FailureLog(path, rotate_bytes=threshold, backup_count=2)
+
+    for record in records:
+        log.append(record)
+
+    assert [record.agent_name for record in log.load()] == ["b", "c", "d"]
+    assert (tmp_path / "failures.jsonl.1").exists()
+    assert (tmp_path / "failures.jsonl.2").exists()
+    assert not (tmp_path / "failures.jsonl.3").exists()
+
+
+def test_zero_backup_count_keeps_only_active_file(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    first = make_record(agent_name="a")
+    second = make_record(agent_name="b")
+    log = FailureLog(
+        path,
+        rotate_bytes=encoded_record_size(first),
+        backup_count=0,
+    )
+
+    log.append(first)
+    log.append(second)
+
+    assert [record.agent_name for record in log.load()] == ["b"]
+    assert not (tmp_path / "failures.jsonl.1").exists()
+
+
+def test_single_oversized_record_is_preserved_intact(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    first = make_record(agent_name="a", error_message="x" * 500)
+    second = make_record(agent_name="b", error_message="y" * 500)
+    log = FailureLog(path, rotate_bytes=64, backup_count=1)
+
+    log.append(first)
+    assert path.stat().st_size > 64
+
+    log.append(second)
+
+    assert [record.agent_name for record in log.load()] == ["a", "b"]
+    assert path.stat().st_size > 64
+    assert (tmp_path / "failures.jsonl.1").exists()
+
+
+def test_rotated_log_can_be_reopened_with_same_policy(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    first = make_record(agent_name="a")
+    second = make_record(agent_name="b")
+    threshold = encoded_record_size(first)
+    FailureLog(path, rotate_bytes=threshold, backup_count=1).append(first)
+    FailureLog(path, rotate_bytes=threshold, backup_count=1).append(second)
+
+    reopened = FailureLog(path, rotate_bytes=threshold, backup_count=1)
+
+    assert [record.agent_name for record in reopened.load()] == ["a", "b"]
