@@ -235,48 +235,59 @@ class ProviderResourceCoordinator:
         cancel_event: Optional[threading.Event],
     ) -> ProviderPermit:
         owner = uuid.uuid4().hex
+        admitted = False
         with self._condition:
             self._queue.append(owner)
 
-        while True:
-            self._check_cancel(cancel_event)
-            wait_for = self.poll_interval
-            with self._condition:
-                if cancel_event is not None and cancel_event.is_set():
+        try:
+            while True:
+                self._check_cancel(cancel_event)
+                wait_for = self.poll_interval
+                with self._condition:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RateLimiterCancelledError(
+                            "Provider resource acquisition cancelled"
+                        )
+
+                    if self._queue and self._queue[0] == owner:
+                        now = time.monotonic()
+                        rate_wait = self._refill_local(now)
+                        concurrency_available = (
+                            self.max_concurrency is None
+                            or len(self._active) < self.max_concurrency
+                        )
+                        reserved_total = sum(self._reservations.values())
+                        if (
+                            self.max_cost is not None
+                            and self._spent + reserved_total + reserve_cost
+                            > self.max_cost + _EPSILON
+                        ):
+                            raise SpendBudgetExceededError(
+                                "provider spend reservation exceeds remaining shared budget"
+                            )
+                        rate_available = self.rate is None or self._allowance >= 1.0
+                        if rate_available and concurrency_available:
+                            if self.rate is not None:
+                                self._allowance -= 1.0
+                            self._active.add(owner)
+                            if reserve_cost:
+                                self._reservations[owner] = reserve_cost
+                            self._queue.pop(0)
+                            admitted = True
+                            self._condition.notify_all()
+                            return ProviderPermit(
+                                owner=owner,
+                                reserved_cost=reserve_cost,
+                            )
+                        if not rate_available:
+                            wait_for = max(0.001, rate_wait)
+                self._wait(cancel_event, wait_for)
+        finally:
+            if not admitted:
+                with self._condition:
                     if owner in self._queue:
                         self._queue.remove(owner)
                         self._condition.notify_all()
-                    raise RateLimiterCancelledError("Provider resource acquisition cancelled")
-
-                if self._queue and self._queue[0] == owner:
-                    now = time.monotonic()
-                    rate_wait = self._refill_local(now)
-                    concurrency_available = (
-                        self.max_concurrency is None or len(self._active) < self.max_concurrency
-                    )
-                    reserved_total = sum(self._reservations.values())
-                    if (
-                        self.max_cost is not None
-                        and self._spent + reserved_total + reserve_cost > self.max_cost + _EPSILON
-                    ):
-                        self._queue.pop(0)
-                        self._condition.notify_all()
-                        raise SpendBudgetExceededError(
-                            "provider spend reservation exceeds remaining shared budget"
-                        )
-                    rate_available = self.rate is None or self._allowance >= 1.0
-                    if rate_available and concurrency_available:
-                        if self.rate is not None:
-                            self._allowance -= 1.0
-                        self._active.add(owner)
-                        if reserve_cost:
-                            self._reservations[owner] = reserve_cost
-                        self._queue.pop(0)
-                        self._condition.notify_all()
-                        return ProviderPermit(owner=owner, reserved_cost=reserve_cost)
-                    if not rate_available:
-                        wait_for = max(0.001, rate_wait)
-            self._wait(cancel_event, wait_for)
 
     def _sqlite_cleanup(self, connection: sqlite3.Connection, now: float) -> None:
         connection.execute(
@@ -584,7 +595,7 @@ class ProviderResourceCoordinator:
 
 
 _registry_lock = threading.Lock()
-_registry: "weakref.WeakValueDictionary[Tuple[object, ...], ProviderResourceCoordinator]" = (
+_registry: "weakref.WeakValueDictionary[str, ProviderResourceCoordinator]" = (
     weakref.WeakValueDictionary()
 )
 
@@ -637,8 +648,7 @@ def shared_provider_resources(
         configured = os.getenv("NEVA_PROVIDER_COORDINATION_DB")
         resolved_path = configured or None
     path_key = str(Path(resolved_path).expanduser().resolve()) if resolved_path else None
-    key = (
-        resolved_scope,
+    expected_config = (
         rate,
         float(per),
         max_concurrency,
@@ -646,8 +656,19 @@ def shared_provider_resources(
         path_key,
     )
     with _registry_lock:
-        existing = _registry.get(key)
+        existing = _registry.get(resolved_scope)
         if existing is not None:
+            existing_path = (
+                str(existing.state_path.expanduser().resolve())
+                if existing.state_path is not None
+                else None
+            )
+            existing_config = (*existing.config_key, existing_path)
+            if existing_config != expected_config:
+                raise ConfigurationError(
+                    "provider account scope already exists with different limits "
+                    "or coordination storage"
+                )
             return existing
         coordinator = ProviderResourceCoordinator(
             scope=resolved_scope,
@@ -657,7 +678,7 @@ def shared_provider_resources(
             max_cost=max_cost,
             state_path=resolved_path,
         )
-        _registry[key] = coordinator
+        _registry[resolved_scope] = coordinator
         return coordinator
 
 
