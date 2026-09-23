@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Environment.seed()`. Manifests record explicit prompts, provider/model and
   generation settings, dependency/runtime versions, recursively captured
   scheduler configuration (including pending event queues), behavior-affecting
-  environment config/state, initial conversation/agent prompt inputs, cache
+  environment config/state, initial conversation and built-in memory state,
+  complete prompt-validator policy, provider endpoint, agent prompt inputs, cache
   policy/initial-state fingerprint, seed application, metadata, and live-provider
   reproducibility caveats. Unified
   seeding covers Python plus optional NumPy/PyTorch RNGs, nested Neva scheduler
