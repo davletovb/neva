@@ -102,6 +102,24 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.2
           pip install transformers==4.35.2 faiss-cpu==1.7.4 numpy==1.26.4 anthropic==0.26.0 httpx==0.27.2
 
+      - name: Verify optional integration imports
+        run: |
+          python - <<'PY'
+          import anthropic
+          import faiss
+          import httpx
+          import numpy
+          import torch
+          import transformers
+
+          print("torch", torch.__version__)
+          print("transformers", transformers.__version__)
+          print("faiss", getattr(faiss, "__version__", "unknown"))
+          print("numpy", numpy.__version__)
+          print("anthropic", anthropic.__version__)
+          print("httpx", httpx.__version__)
+          PY
+
       - name: Run real optional integrations
         run: |
           pytest -q -o addopts=""             tests/integration/test_optional_dependencies.py
