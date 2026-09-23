@@ -53,8 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FailureLog.load()` tolerates truncated, undecodable, or malformed lines
   (skipped with a warning) and a torn tail is newline-separated so later
   records cannot merge into it. Optional `rotate_bytes` + `backup_count`
-  retain a bounded number of rotated JSONL files for long-running jobs;
-  retained files load oldest-first. Rotation is single-process and the byte
+  retain a bounded number of rotated JSONL files for long-running jobs.
+  Readers must opt into rotation with a sufficient `backup_count` to load
+  retained generations oldest-first; a default reader loads only the active
+  file. Retention pruning is performed once per configured log instance before
+  its first append, while rotations maintain the bound thereafter. Rotation is
+  single-process and the byte
   value is a threshold rather than a per-record truncation rule, so an
   oversized individual record is preserved intact. In addition,
   `Environment.replay_failure(record)` re-dispatches a recorded turn through
