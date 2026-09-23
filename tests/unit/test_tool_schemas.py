@@ -3,7 +3,7 @@ import pytest
 from neva.agents import TransformerAgent
 from neva.agents.base import Tool, ToolCall
 from neva.tools import ArgumentSchema, ArgumentSpec
-from neva.utils.exceptions import ToolSchemaConfigurationError
+from neva.utils.exceptions import ToolExecutionError, ToolSchemaConfigurationError
 
 
 class SchemaTool(Tool):
@@ -463,7 +463,7 @@ def test_schema_failure_returns_failed_response_when_validate_raises():
 
 def test_direct_tool_use_validates_schema_before_body():
     tool = SchemaTool(schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=3)}))
-    with pytest.raises(Exception, match="invalid arguments"):
+    with pytest.raises(ToolExecutionError, match="invalid arguments"):
         tool.use("too long")
     assert tool.calls == []
 
