@@ -351,10 +351,16 @@ scheduler = create_scheduler("my_scheduler")
   adds bounded automatic retries for scheduler selection and selected agent
   turns; final escalation can inherit or force `raise`/`return`, while
   deliberate cancellation is never retried. `Environment.recovery_state()`
-  exposes retry/recovery/escalation counters and the last recovery event.
+  exposes retry/recovery/escalation counters and the last recovery event;
+  `retries_exhausted` counts only configured retry sequences that actually
+  consume their final attempt, so the default `max_retries=0` path leaves it
+  at zero.
   Long-running jobs can opt into retention with
   `FailureLog(path, rotate_bytes=..., backup_count=...)`; append/load/rotation
-  are coordinated across processes sharing the same path. A reader must use a
+  are coordinated across processes sharing the same path when the sibling lock
+  file is writable. Read-only logs remain loadable: if that lock cannot be
+  opened because the storage is read-only, `load()` falls back to an unlocked
+  snapshot read rather than requiring write access. A reader must use a
   matching rotation configuration (and sufficient `backup_count`) to load
   retained backups oldest-first. `max_record_bytes=` independently enforces a
   strict UTF-8 record ceiling by dropping raw context first and then truncating
