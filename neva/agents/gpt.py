@@ -576,8 +576,13 @@ class GPTAgent(AIAgent):
         }
         response = requests.post(url, headers=headers, json=payload, timeout=self._request_timeout)
         response.raise_for_status()
-        data = response.json()
-        usage = data.get("usage") if isinstance(data, dict) else None
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise BackendError("Provider returned invalid JSON.") from exc
+        if not isinstance(data, dict):
+            raise BackendError("Provider returned a malformed JSON response.")
+        usage = data.get("usage")
         if isinstance(usage, dict):
             self._last_provider_usage = usage
         content = _extract_chat_content(data)
