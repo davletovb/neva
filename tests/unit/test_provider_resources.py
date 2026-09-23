@@ -69,6 +69,25 @@ def test_process_registry_reuses_same_account_coordinator():
     assert first is not other
 
 
+def test_process_registry_rejects_conflicting_limits_for_same_account():
+    shared_provider_resources(
+        provider="openai",
+        api_key="same",
+        rate=10,
+        max_concurrency=1,
+        max_cost=1.0,
+    )
+
+    with pytest.raises(ConfigurationError, match="different limits"):
+        shared_provider_resources(
+            provider="openai",
+            api_key="same",
+            rate=10,
+            max_concurrency=2,
+            max_cost=1.0,
+        )
+
+
 def test_local_fifo_concurrency_order():
     coordinator = ProviderResourceCoordinator(
         scope="fifo",
@@ -220,9 +239,10 @@ def test_sqlite_coordinates_separate_processes(tmp_path):
         parent.release(permit)
         assert queue.get(timeout=5) == "acquired"
     finally:
+        process.join(timeout=5)
         if process.is_alive():
             process.terminate()
-        process.join(timeout=5)
+            process.join(timeout=5)
     assert process.exitcode == 0
 
 
