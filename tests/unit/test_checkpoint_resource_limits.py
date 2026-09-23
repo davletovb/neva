@@ -239,11 +239,12 @@ def test_restore_targeted_copies_do_not_alias_snapshot_runtime():
     assert snapshot.runtime_state == frozen_runtime
 
 
-
 def test_streamed_save_does_not_deepcopy_dataclass_payload(tmp_path):
     class NoDeepcopyList(list):
         def __deepcopy__(self, memo):
-            raise AssertionError("streamed dataclass encoding must not recursively deepcopy fields")
+            raise AssertionError(
+                "streamed dataclass encoding must not recursively deepcopy fields"
+            )
 
     @dataclass
     class Payload:
