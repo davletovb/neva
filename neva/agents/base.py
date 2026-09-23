@@ -50,6 +50,7 @@ from neva.utils.telemetry import get_telemetry
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.environments.base import Environment
     from neva.tools.guard import ToolGuard
+    from neva.tools.loop import ToolLoopConfig, ToolLoopResult
     from neva.utils.observer import SimulationObserver
 
 
@@ -489,6 +490,24 @@ class AIAgent(ABC):
             output=str(output),
         )
 
+    def run_tool_loop(
+        self,
+        task: str,
+        *,
+        model: Optional[Callable[[str], str]] = None,
+        config: Optional["ToolLoopConfig"] = None,
+    ) -> "ToolLoopResult":
+        """Run a bounded model -> tool -> feedback loop for ``task``.
+
+        Every selected tool invocation is delegated back through call_tool(),
+        so schemas, permission checks, execution limits, and observer accounting
+        remain the single enforcement path.
+        """
+
+        from neva.tools.loop import run_tool_loop
+
+        return run_tool_loop(self, task, model=model, config=config)
+
     # ------------------------------------------------------------------
     # Memory utilities
     # ------------------------------------------------------------------
@@ -551,6 +570,27 @@ class AIAgent(ABC):
 
     def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
         self._llm_backend = backend
+
+    def generate_model_output(self, prompt: str) -> str:
+        """Generate from an already composed prompt without adding agent context.
+
+        Subclasses with built-in provider/model backends should override this
+        method. The base implementation supports agents configured with an
+        explicit llm_backend and preserves prompt validation plus caching.
+        """
+
+        validated_prompt = self.prompt_validator.validate(prompt)
+        if self.llm_backend is None:
+            raise AgentCommunicationError(
+                "Agent has no raw model backend; pass model= to run_tool_loop() "
+                "or override generate_model_output()."
+            )
+        cached = self._cache_lookup(validated_prompt)
+        if cached is not None:
+            return cached
+        response = self.llm_backend(validated_prompt)
+        self._cache_store(validated_prompt, response)
+        return response
 
     def prepare_prompt(self, message: str) -> str:
         """Compose a prompt enriched with agent attributes and tool context."""

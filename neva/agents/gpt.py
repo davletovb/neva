@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import threading
+from contextvars import ContextVar
 from time import perf_counter, sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
@@ -61,6 +62,7 @@ _CHAT_COMPLETION_URLS = {
 
 # ~6k tokens at 4 chars/token; leaves headroom for the current prompt and completion.
 _DEFAULT_MAX_CONTEXT_CHARS = 24000
+_RAW_PROMPT_MODE: ContextVar[bool] = ContextVar("neva_gpt_raw_prompt_mode", default=False)
 
 
 def _chat_completions_url(api_base: Optional[str], default_url: str) -> str:
@@ -696,7 +698,8 @@ class GPTAgent(AIAgent):
         The budget is measured on the provider-specific serialized request, not
         raw turn text. ConversationState itself is unbounded. Chat Completions
         and Anthropic drop a leading assistant turn so the request still starts
-        with a user message.
+        with a user message. Raw model-generation mode intentionally excludes
+        history because its caller already composed the complete bounded prompt.
         """
 
         if len(self._format_request([], prompt)) > self._max_context_chars:
@@ -704,6 +707,9 @@ class GPTAgent(AIAgent):
                 f"Current prompt is {len(prompt)} characters, which exceeds "
                 f"max_context_chars={self._max_context_chars}"
             )
+        if _RAW_PROMPT_MODE.get():
+            return []
+
         window: List[Any] = []
         for turn in reversed(self.conversation_state.turns):
             candidate = [turn, *window]
@@ -757,6 +763,22 @@ class GPTAgent(AIAgent):
 
     def _cache_store(self, prompt: str, response: str) -> None:
         super()._cache_store(self._scoped_key(prompt), response)
+
+    def generate_model_output(self, prompt: str) -> str:
+        """Generate from an already composed prompt without adding history/context."""
+
+        validated_prompt = self.prompt_validator.validate(prompt)
+        token = _RAW_PROMPT_MODE.set(True)
+        try:
+            cached = self._cache_lookup(validated_prompt)
+            if cached is not None:
+                return cached
+            backend = self.llm_backend or self._default_backend()
+            response = backend(validated_prompt)
+            self._cache_store(validated_prompt, response)
+            return response
+        finally:
+            _RAW_PROMPT_MODE.reset(token)
 
     def _respond_with_cancel(
         self,

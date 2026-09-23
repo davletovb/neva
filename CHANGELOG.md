@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Bounded model-driven tool orchestration: `ToolLoopConfig`,
+  `ToolLoopStep`, `ToolLoopResult`, `run_tool_loop()`, and
+  `AIAgent.run_tool_loop()` implement a strict JSON action protocol for
+  model-selected tools. Every selected tool is executed through the existing
+  `AIAgent.call_tool()` schema/permission/resource path; tool results and
+  protocol/tool errors are bounded and fed back for correction; prompt/tool
+  registry/model-output/feedback sizes and total steps are explicitly bounded;
+  unknown tools and malformed actions fail closed into feedback; and a loop
+  that never emits an explicit final action terminates at `max_steps`.
+  Default agent-driven execution uses a raw `generate_model_output()` hook so
+  the bounded loop prompt is not re-wrapped with agent memory/tool summaries;
+  GPTAgent retains provider admission/retry/spend/circuit/cache/telemetry
+  controls while excluding previous conversation history on that raw path.
 - Deterministic optional-integration coverage now runs in CI with real CPU
   PyTorch/Transformers, FAISS/NumPy, and the declared Anthropic SDK. A locally
   generated/saved tiny T5 model exercises real TransformerAgent weights without
