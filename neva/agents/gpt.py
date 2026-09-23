@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import threading
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import requests
@@ -327,7 +327,7 @@ class GPTAgent(AIAgent):
         cancel_event: Optional[threading.Event],
     ) -> None:
         if cancel_event is None:
-            threading.Event().wait(delay)
+            sleep(delay)
             return
         if cancel_event.wait(delay):
             raise RateLimiterCancelledError("LLM retry wait cancelled")
