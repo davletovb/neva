@@ -486,6 +486,12 @@ class ProviderResourceCoordinator:
         if self.state_path is None:
             overflow = False
             with self._condition:
+                known = (
+                    permit.owner in self._active
+                    or permit.owner in self._reservations
+                )
+                if not known:
+                    return
                 self._active.discard(permit.owner)
                 self._reservations.pop(permit.owner, None)
                 if actual_cost is not None and self.max_cost is not None:
@@ -501,6 +507,17 @@ class ProviderResourceCoordinator:
         overflow = False
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            lease_exists = connection.execute(
+                "SELECT 1 FROM provider_leases WHERE scope = ? AND owner = ?",
+                (self.scope, permit.owner),
+            ).fetchone()
+            reservation_exists = connection.execute(
+                "SELECT 1 FROM provider_reservations WHERE scope = ? AND owner = ?",
+                (self.scope, permit.owner),
+            ).fetchone()
+            if lease_exists is None and reservation_exists is None:
+                connection.commit()
+                return
             connection.execute(
                 "DELETE FROM provider_leases WHERE scope = ? AND owner = ?",
                 (self.scope, permit.owner),
