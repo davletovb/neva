@@ -136,9 +136,7 @@ class RateLimiter:
                 acquired_normally = self._lock_enter(cancel_event)
                 try:
                     if cancel_event is not None and cancel_event.is_set():
-                        raise RateLimiterCancelledError(
-                            "Rate limiter acquisition cancelled"
-                        )
+                        raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
                     is_head = bool(self._waiters and self._waiters[0][0] == ticket)
                     if is_head:
                         current = time.monotonic()
@@ -154,9 +152,7 @@ class RateLimiter:
                             if self._waiters:
                                 self._waiters[0][1].set()
                             return
-                        sleep_time = (1.0 - self._allowance) * (
-                            self._per / self._rate
-                        )
+                        sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
                         wake.clear()
                 finally:
                     self._lock_exit(acquired_normally)
