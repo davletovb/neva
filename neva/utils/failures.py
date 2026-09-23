@@ -14,7 +14,7 @@ import math
 import os
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
@@ -204,18 +204,22 @@ class FailureLog:
     def _load_process_lock(self) -> Iterator[None]:
         """Coordinate reads when possible without requiring directory write access."""
 
+        stack = ExitStack()
         try:
-            with self._process_lock():
-                yield
-                return
+            stack.enter_context(self._process_lock())
         except OSError as exc:
+            stack.close()
             if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
                 raise
             logger.debug(
                 "Reading failure log without process lock because lock storage is read-only",
                 exc_info=True,
             )
-        yield
+            yield
+            return
+
+        with stack:
+            yield
 
     @staticmethod
     def _encode_record(failure: FailureRecord) -> bytes:
