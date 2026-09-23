@@ -202,7 +202,7 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
 
 def test_surrogate_replacement_is_explicit_and_per_code_unit():
     lone = json.loads('"\\ud800"')
-    pair = "\\ud800\\udc00"
+    pair = "\ud800\udc00"
 
     lone_state = ConversationState("agent", max_turn_bytes=100)
     pair_state = ConversationState("agent", max_turn_bytes=100)
