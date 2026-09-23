@@ -15,12 +15,15 @@ from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Tup
 from neva.utils.exceptions import SpendBudgetConfigurationError, SpendBudgetExceededError
 
 
-def _estimate_token_count(text: str) -> int:
+def estimate_token_count(text: str) -> int:
     """Coarse token estimation that works without backend specific tooling."""
 
     if not text:
         return 0
     return max(1, len(text.split()))
+
+
+_estimate_token_count = estimate_token_count
 
 
 @dataclass
