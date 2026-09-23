@@ -306,8 +306,10 @@ treating checkpointed scheduler RNG state as sufficient reproducibility:
   current interpreter's hash seed cannot be changed retroactively.
 - Version-1 run manifests record exact caller-supplied prompts, environment and
   recovery configuration, scheduler type/order/paused/configuration plus RNG
-  state digest, agent type/provider/model, relevant generation/request settings,
-  tool names, prompt-validator ceiling, backend identity, cache policy/capacity
+  state digest and pending event queues, behavior-affecting public environment
+  configuration/state, agent type/provider/model, relevant generation/request
+  settings, initial conversation content/retention policy, agent attributes,
+  tool metadata, prompt-validator ceiling, backend identity, cache policy/capacity
   and initial cache-state fingerprint, selected dependency versions, Python/
   platform versions, seed application report, user metadata, and explicit
   reproducibility notes. API keys and cached prompt/response contents are not
@@ -325,8 +327,10 @@ treating checkpointed scheduler RNG state as sufficient reproducibility:
 - `AIAgent.replayable_backend()` defines the record/replay boundary.
   `GPTAgent` exposes either its custom backend or built-in provider backend;
   `TransformerAgent` exposes custom or local Transformer generation.
-  `ReplayTape.attach_recording(agents)` wraps those boundaries and serializes
-  calls into one deterministic total order. `attach_replay(agents, manifest=...)`
+  `ReplayTape.attach_recording(agents)` wraps future backend resolutions rather
+  than replacing GPT provider construction, preserving cooperative cancellation
+  while serializing calls into one deterministic total order.
+  `attach_replay(agents, manifest=...)`
   installs one shared `ReplayBackend` across a fresh agent set.
 - Replay records exact model prompts plus response or failure metadata and a
   prompt SHA-256. Replays validate exact prompt order/content, refuse changed
@@ -340,7 +344,9 @@ treating checkpointed scheduler RNG state as sufficient reproducibility:
   offline (wall-clock turn timestamps are intentionally not replayed).
   Additional tests cover global
   RNG/scheduler repetition, nested Composite seeding, custom agent seed hooks,
-  provider/model/generation/cache/dependency manifest fields, secret exclusion,
+  provider/model/generation/cache/dependency manifest fields, environment public
+  config/state, EventDriven pending order, initial conversation/agent attributes,
+  secret exclusion,
   cache-state fingerprints, built-in GPT HTTP record→offline replay without a
   second network call, manifest mismatch, prompt mismatch, exhaustion,
   unconsumed calls, recorded failures, tampering, and malformed persisted data.
