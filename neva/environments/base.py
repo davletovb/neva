@@ -116,9 +116,7 @@ class Environment:
             except SchedulingError as exc:
                 retry = recovery.should_retry(exc, attempt)
                 policy = (
-                    self.error_policy
-                    if recovery.escalation == "inherit"
-                    else recovery.escalation
+                    self.error_policy if recovery.escalation == "inherit" else recovery.escalation
                 )
                 action = "retry" if retry else policy
                 wrote = self._record_failure(
