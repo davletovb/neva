@@ -4,12 +4,7 @@ import pytest
 
 from neva.agents import TransformerAgent
 from neva.environments import Environment
-from neva.memory import (
-    AdaptiveConversationMemory,
-    MemoryBudget,
-    ShortTermMemory,
-    VectorStoreMemory,
-)
+from neva.memory import AdaptiveConversationMemory, MemoryBudget, ShortTermMemory, VectorStoreMemory
 from neva.schedulers import RoundRobinScheduler
 from neva.utils.state_management import SimulationSnapshot
 
