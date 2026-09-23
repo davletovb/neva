@@ -3,7 +3,6 @@ import threading
 import time
 
 import pytest
-import requests
 
 from neva.agents.gpt import GPTAgent
 from neva.utils.exceptions import SpendBudgetExceededError
