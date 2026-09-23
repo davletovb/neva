@@ -174,7 +174,6 @@ def test_adaptive_checkpoint_rejects_configuration_mismatch(replacement):
         restored.restore(snapshot)
 
 
-
 class _LockedEmbedder:
     def __init__(self):
         self.lock = threading.Lock()
@@ -321,7 +320,10 @@ def test_adaptive_without_embedder_roundtrips():
     assert memory.recall() == original_memory.recall()
 
 
-@pytest.mark.parametrize("original_has_budget, restored_has_budget", [(True, False), (False, True)])
+@pytest.mark.parametrize(
+    "original_has_budget, restored_has_budget",
+    [(True, False), (False, True)],
+)
 def test_adaptive_checkpoint_rejects_budget_presence_mismatch(
     original_has_budget, restored_has_budget
 ):
