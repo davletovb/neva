@@ -75,6 +75,27 @@ class _CheckpointLimitExceeded(ValueError):
     """Internal marker for an explicitly configured checkpoint resource ceiling."""
 
 
+def _json_key_text(key: object) -> str:
+    """Normalize a JSON mapping key the same way json.dumps/json.loads would."""
+
+    if isinstance(key, str):
+        return str.__str__(key)
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(int(key))
+    if isinstance(key, float):
+        numeric = float(key)
+        if not math.isfinite(numeric):
+            raise ValueError("Checkpoint contains a non-finite mapping key")
+        return str(numeric)
+    raise TypeError("Checkpoint mapping keys must be str, int, float, bool, or None")
+
+
 class _CheckpointGraphBudget:
     def __init__(self, limits: CheckpointLimits) -> None:
         self.limits = limits
@@ -102,24 +123,6 @@ class _CheckpointGraphBudget:
             and self.total_string_bytes > self.limits.max_total_string_bytes
         ):
             raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
-
-    @staticmethod
-    def _key_text(key: object) -> str:
-        if isinstance(key, str):
-            return key
-        if key is True:
-            return "true"
-        if key is False:
-            return "false"
-        if key is None:
-            return "null"
-        if type(key) is int:
-            return str(key)
-        if type(key) is float:
-            if not math.isfinite(key):
-                raise ValueError("Checkpoint contains a non-finite mapping key")
-            return str(key)
-        raise TypeError("Checkpoint mapping keys must be str, int, float, bool, or None")
 
     def walk(self, value: object, *, depth: int = 0, native_only: bool = False) -> None:
         if isinstance(value, str):
@@ -149,7 +152,7 @@ class _CheckpointGraphBudget:
             self._active.add(marker)
             try:
                 for key, item in value.items():
-                    self._check_string(self._key_text(key))
+                    self._check_string(_json_key_text(key))
                     self.walk(item, depth=container_depth, native_only=native_only)
             finally:
                 self._active.remove(marker)
@@ -395,7 +398,9 @@ class ConversationState:
     oversized newest message is truncated rather than immediately evicted.
 
     The supplied turn list is always copied. Existing ConversationTurn objects
-    retain their identity only when both byte ceilings are disabled.
+    retain their identity only when both byte ceilings are disabled. Because
+    turns remains a public mutable list for compatibility, direct edits are
+    reconciled on the next record_turn() or to_dict() call.
     """
 
     agent_name: str
@@ -403,7 +408,6 @@ class ConversationState:
     max_turns: Optional[int] = None
     max_turn_bytes: Optional[int] = None
     max_history_bytes: Optional[int] = None
-    _stored_message_bytes: int = field(default=0, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.max_turns is not None and (type(self.max_turns) is not int or self.max_turns <= 0):
@@ -425,7 +429,6 @@ class ConversationState:
                 )
                 for turn in self.turns
             ]
-        self._stored_message_bytes = sum(self._message_bytes(turn.message) for turn in self.turns)
         self._trim()
 
     @staticmethod
@@ -439,34 +442,33 @@ class ConversationState:
         return min(limits) if limits else None
 
     def _drop_prefix(self, count: int) -> None:
-        if count <= 0:
-            return
-        for turn in self.turns[:count]:
-            self._stored_message_bytes -= self._message_bytes(turn.message)
-        del self.turns[:count]
+        if count > 0:
+            del self.turns[:count]
 
     def _trim(self) -> None:
         if self.max_turns is not None:
             self._drop_prefix(max(0, len(self.turns) - self.max_turns))
 
-        if (
-            self.max_history_bytes is not None
-            and self._stored_message_bytes > self.max_history_bytes
-        ):
-            drop_count = 0
-            remaining_bytes = self._stored_message_bytes
-            while drop_count < len(self.turns) and remaining_bytes > self.max_history_bytes:
-                remaining_bytes -= self._message_bytes(self.turns[drop_count].message)
-                drop_count += 1
-            self._drop_prefix(drop_count)
+        if self.max_history_bytes is None:
+            return
+
+        retained_bytes = sum(self._message_bytes(turn.message) for turn in self.turns)
+        drop_count = 0
+        while drop_count < len(self.turns) and retained_bytes > self.max_history_bytes:
+            retained_bytes -= self._message_bytes(self.turns[drop_count].message)
+            drop_count += 1
+        self._drop_prefix(drop_count)
 
     def record_turn(self, speaker: str, message: str) -> None:
         stored = _truncate_utf8(message, self._effective_turn_byte_limit())
         self.turns.append(ConversationTurn(speaker=speaker, message=stored))
-        self._stored_message_bytes += self._message_bytes(stored)
         self._trim()
 
     def to_dict(self) -> Dict[str, object]:
+        # Reconcile any direct mutations of the public turns list before
+        # persistence so retention guarantees cannot be bypassed by a stale
+        # cached byte count.
+        self._trim()
         return {
             "agent_name": self.agent_name,
             "turns": [turn.to_dict() for turn in self.turns],
@@ -562,9 +564,6 @@ def create_snapshot(
     limits: Optional[CheckpointLimits] = None,
 ) -> SimulationSnapshot:
     environment_state = environment_state or {}
-    preflight = _CheckpointGraphBudget(limits) if limits is not None else None
-    if preflight is not None:
-        _validate_checkpoint_value(environment_state, limits, budget=preflight)
 
     agent_snapshot: Dict[str, Dict[str, object]] = {}
     if agent_states is None:
@@ -572,17 +571,18 @@ def create_snapshot(
     else:
         agent_iter = agent_states
     for state in agent_iter:
-        payload = state.to_dict()
-        if preflight is not None:
-            _validate_checkpoint_value(payload, limits, budget=preflight)
-        agent_snapshot[state.agent_name] = payload
+        agent_snapshot[state.agent_name] = state.to_dict()
 
+    # Assemble the source graph first, then validate it exactly once before the
+    # environment-state deepcopy. This keeps the pre-copy resource boundary
+    # without walking environment and agent state twice.
     snapshot = SimulationSnapshot(
         created_at=_utcnow_naive(),
-        environment_state=deepcopy(environment_state),
+        environment_state=environment_state,
         agent_states=agent_snapshot,
     )
     snapshot.validate_limits(limits)
+    snapshot.environment_state = deepcopy(environment_state)
     return snapshot
 
 
