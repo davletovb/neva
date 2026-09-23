@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from neva.agents import TransformerAgent
@@ -169,4 +171,174 @@ def test_adaptive_checkpoint_rejects_configuration_mismatch(replacement):
 
     restored = _environment(replacement)
     with pytest.raises(ValueError, match="adaptive memory|budget configuration"):
+        restored.restore(snapshot)
+
+
+
+class _LockedEmbedder:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.calls = []
+
+    def __call__(self, text):
+        with self.lock:
+            self.calls.append(text)
+        return _embed(text)
+
+
+class _LockedSummarizer:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.calls = []
+
+    def __call__(self, previous, record):
+        with self.lock:
+            self.calls.append(record.message)
+        return _summary(previous, record)
+
+
+def test_vector_restore_preserves_non_deepcopyable_embedder_identity():
+    original = _environment(VectorStoreMemory(_embed, top_k=2))
+    original.agents[0].memory.remember("user", "alpha")
+    snapshot = original.snapshot()
+
+    embedder = _LockedEmbedder()
+    restored_memory = VectorStoreMemory(embedder, top_k=2)
+    restored = _environment(restored_memory)
+
+    restored.restore(snapshot)
+
+    memory = restored.agents[0].memory
+    assert memory._embedder is embedder
+    memory.recall(query="alpha")
+    assert embedder.calls == ["alpha"]
+
+
+def test_adaptive_restore_preserves_callables_and_budget_identity():
+    original_memory = AdaptiveConversationMemory(
+        summarizer=_summary,
+        embedder=_embed,
+        short_term_capacity=2,
+        semantic_top_k=2,
+        initial_summary="seed",
+        budget=MemoryBudget(max_records=4, max_tokens=100, max_embeddings=3),
+    )
+    original_memory.remember("user", "alpha")
+    original_memory.remember("agent", "beta")
+    snapshot = _environment(original_memory).snapshot()
+
+    summarizer = _LockedSummarizer()
+    embedder = _LockedEmbedder()
+    budget = MemoryBudget(max_records=4, max_tokens=100, max_embeddings=3)
+    restored_memory = AdaptiveConversationMemory(
+        summarizer=summarizer,
+        embedder=embedder,
+        short_term_capacity=2,
+        semantic_top_k=2,
+        initial_summary="seed",
+        budget=budget,
+    )
+    restored = _environment(restored_memory)
+
+    restored.restore(snapshot)
+
+    memory = restored.agents[0].memory
+    assert memory._summarizer is summarizer
+    assert memory._summary._summarizer is summarizer
+    assert memory._embedder is embedder
+    assert memory._budget is budget
+    assert budget._embedding_calls == original_memory._budget._embedding_calls
+
+    memory.remember("user", "gamma")
+    assert summarizer.calls == ["gamma"]
+    assert embedder.calls == ["user: gamma"]
+    assert budget._embedding_calls == 3
+
+
+def test_shared_adaptive_budget_identity_survives_restore():
+    original_budget = MemoryBudget(max_records=4, max_tokens=100, max_embeddings=4)
+    original = Environment(RoundRobinScheduler())
+    for name in ("A", "B"):
+        memory = AdaptiveConversationMemory(
+            summarizer=_summary,
+            embedder=_embed,
+            budget=original_budget,
+        )
+        memory.remember("user", name)
+        agent = TransformerAgent(name=name, llm_backend=lambda _: "reply")
+        agent.set_memory(memory)
+        original.register_agent(agent)
+    snapshot = original.snapshot()
+
+    restored_budget = MemoryBudget(max_records=4, max_tokens=100, max_embeddings=4)
+    restored = Environment(RoundRobinScheduler())
+    for name in ("A", "B"):
+        memory = AdaptiveConversationMemory(
+            summarizer=_summary,
+            embedder=_embed,
+            budget=restored_budget,
+        )
+        agent = TransformerAgent(name=name, llm_backend=lambda _: "reply")
+        agent.set_memory(memory)
+        restored.register_agent(agent)
+
+    restored.restore(snapshot)
+
+    first_budget = restored.agents[0].memory._budget
+    second_budget = restored.agents[1].memory._budget
+    assert first_budget is restored_budget
+    assert second_budget is restored_budget
+    assert restored_budget._embedding_calls == original_budget._embedding_calls
+
+
+def test_adaptive_without_embedder_roundtrips():
+    original_memory = AdaptiveConversationMemory(
+        summarizer=_summary,
+        embedder=None,
+        short_term_capacity=2,
+        semantic_top_k=2,
+        initial_summary="seed",
+        budget=None,
+    )
+    original_memory.remember("user", "alpha")
+    snapshot = _environment(original_memory).snapshot()
+
+    restored_memory = AdaptiveConversationMemory(
+        summarizer=_summary,
+        embedder=None,
+        short_term_capacity=2,
+        semantic_top_k=2,
+        initial_summary="seed",
+        budget=None,
+    )
+    restored = _environment(restored_memory)
+    restored.restore(snapshot)
+
+    memory = restored.agents[0].memory
+    assert memory._embedder is None
+    assert memory._budget is None
+    assert list(memory.iter_history()) == list(original_memory.iter_history())
+    assert memory.recall() == original_memory.recall()
+
+
+@pytest.mark.parametrize("original_has_budget, restored_has_budget", [(True, False), (False, True)])
+def test_adaptive_checkpoint_rejects_budget_presence_mismatch(
+    original_has_budget, restored_has_budget
+):
+    original_memory = AdaptiveConversationMemory(
+        summarizer=_summary,
+        embedder=None,
+        budget=MemoryBudget(max_records=4) if original_has_budget else None,
+    )
+    original_memory.remember("user", "alpha")
+    snapshot = _environment(original_memory).snapshot()
+
+    restored_memory = AdaptiveConversationMemory(
+        summarizer=_summary,
+        embedder=None,
+        budget=MemoryBudget(max_records=4) if restored_has_budget else None,
+    )
+    restored = _environment(restored_memory)
+
+    with pytest.raises(ValueError, match="budget configuration"):
         restored.restore(snapshot)
