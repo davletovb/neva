@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Checkpoint/transcript resource envelopes: `CheckpointLimits` adds opt-in
   graph depth, node-count, per-string UTF-8 byte, and aggregate string-byte
   ceilings across checkpoint creation/save/load and environment snapshot/
-  restore. Limited loads preflight JSON nesting and string-token sizes before
-  UTF-8 decode/JSON parse. Runtime capture now validates and structurally clones
+  restore. Limited loads preflight JSON nesting and decoded UTF-8 string-token
+  sizes before UTF-8 decode/JSON parse, then release the serialized byte buffer
+  before object parsing. Runtime capture now validates and structurally clones
   JSON-native state instead of materialising a complete JSON string and parsed
   clone; runtime restore no longer deep-copies the entire checkpoint graph,
   staging only independently owned attributes/environment extras/memory state.
