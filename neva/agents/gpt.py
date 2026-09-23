@@ -6,8 +6,9 @@ import importlib
 import json
 import logging
 import math
-from time import perf_counter, sleep
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import threading
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -18,9 +19,22 @@ from neva.utils.exceptions import (
     BackendError,
     CircuitOpenError,
     ConfigurationError,
+    RateLimiterCancelledError,
     SpendBudgetExceededError,
 )
-from neva.utils.metrics import CostTracker, ResponseTimeTracker, SpendBudget, TokenUsageTracker
+from neva.utils.metrics import (
+    CostTracker,
+    ResponseTimeTracker,
+    SpendBudget,
+    SpendReservation,
+    TokenUsageTracker,
+    estimate_token_count,
+)
+from neva.utils.provider_resources import (
+    ProviderPermit,
+    ProviderResourceCoordinator,
+    shared_provider_resources,
+)
 from neva.utils.safety import CircuitBreaker, RateLimiter
 from neva.utils.telemetry import get_telemetry
 
@@ -154,6 +168,14 @@ class GPTAgent(AIAgent):
         token_tracker: Optional[TokenUsageTracker] = None,
         cost_tracker: Optional[CostTracker] = None,
         spend_budget: Optional[SpendBudget] = None,
+        provider_spend_limit: Optional[float] = None,
+        provider_scope: Optional[str] = None,
+        provider_coordination_path: Optional[str] = None,
+        provider_rate: Optional[int] = 60,
+        provider_rate_period: float = 60.0,
+        max_provider_concurrency: Optional[int] = 8,
+        share_provider_resources: bool = True,
+        billing_reconciler: Optional[Callable[[], float]] = None,
         max_retries: int = 3,
         retry_backoff: float = 1.5,
         response_time_tracker: Optional[ResponseTimeTracker] = None,
@@ -183,16 +205,54 @@ class GPTAgent(AIAgent):
                 )
             if not isinstance(spend_budget, SpendBudget):
                 raise ConfigurationError("spend_budget must be a SpendBudget instance")
+        if provider_spend_limit is not None and spend_budget is not None:
+            raise ConfigurationError(
+                "configure either spend_budget or provider_spend_limit, not both"
+            )
+        if provider_spend_limit is not None and llm_backend is not None:
+            raise ConfigurationError(
+                "provider_spend_limit requires the built-in provider backend"
+            )
+        if billing_reconciler is not None and not callable(billing_reconciler):
+            raise ConfigurationError("billing_reconciler must be callable")
+        if billing_reconciler is not None and spend_budget is None and provider_spend_limit is None:
+            raise ConfigurationError(
+                "billing_reconciler requires spend_budget or provider_spend_limit"
+            )
+        if not share_provider_resources and (
+            provider_spend_limit is not None
+            or provider_coordination_path is not None
+            or provider_scope is not None
+        ):
+            raise ConfigurationError(
+                "provider scope/spend/process coordination requires share_provider_resources=True"
+            )
         self.api_key = api_key
         self.provider = provider.lower()
         self.model = model or _DEFAULT_MODELS.get(self.provider, "gpt-4o-mini")
         self.api_base = api_base
-        self._rate_limiter = rate_limiter or RateLimiter(rate=60, per=60.0)
+        self._provider_resources: Optional[ProviderResourceCoordinator] = None
+        if llm_backend is None and share_provider_resources:
+            self._provider_resources = shared_provider_resources(
+                provider=self.provider,
+                api_key=api_key,
+                api_base=api_base,
+                provider_scope=provider_scope,
+                rate=None if rate_limiter is not None else provider_rate,
+                per=provider_rate_period,
+                max_concurrency=max_provider_concurrency,
+                max_cost=provider_spend_limit,
+                state_path=provider_coordination_path,
+            )
+        self._rate_limiter = rate_limiter
+        if llm_backend is None and not share_provider_resources and self._rate_limiter is None:
+            self._rate_limiter = RateLimiter(rate=60, per=60.0)
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
         self._cache = resolved_cache
         self._token_tracker = token_tracker or TokenUsageTracker()
         self._cost_tracker = cost_tracker or CostTracker()
         self._spend_budget = spend_budget
+        self._billing_reconciler = billing_reconciler
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -202,30 +262,119 @@ class GPTAgent(AIAgent):
         self._max_context_chars = max_context_chars
         self._last_provider_usage: Optional[Dict[str, Any]] = None
 
-    def _spend_preflight(self) -> None:
-        """Refuse a call the spend budget cannot afford before contacting the provider.
+    def _call_cost(self, *, prompt_tokens: int, response_tokens: int) -> float:
+        cost = self._cost_tracker.cost_for(
+            self.model,
+            prompt_tokens=prompt_tokens,
+            response_tokens=response_tokens,
+        )
+        if cost is None:
+            raise ConfigurationError(
+                f"Spend enforcement is enabled but model '{self.model}' has no "
+                "pricing entry; add pricing or disable the spend limit."
+            )
+        if not math.isfinite(cost) or cost < 0:
+            raise ConfigurationError(
+                "Spend enforcement is enabled but model pricing produced a "
+                "non-finite or negative cost."
+            )
+        return float(cost)
 
-        Runs after ``CircuitBreaker.allow()`` may have admitted a half-open
-        recovery probe: a refusal must release that probe, otherwise the
-        circuit can never probe again. Models without a pricing entry are
-        refused here, so the provider is never called for them.
-        """
+    def _reservation_cost(self, prompt: str) -> float:
+        if (
+            self._spend_budget is None
+            and (
+                self._provider_resources is None
+                or self._provider_resources.max_cost is None
+            )
+        ):
+            return 0.0
+        prompt_tokens = estimate_token_count(self._request_text(prompt))
+        return self._call_cost(
+            prompt_tokens=prompt_tokens,
+            response_tokens=self._max_output_tokens,
+        )
 
-        if self._spend_budget is None:
+    def _reconcile_billing(self) -> None:
+        if self._billing_reconciler is None:
             return
+        actual = self._billing_reconciler()
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, (int, float))
+            or not math.isfinite(actual)
+            or actual < 0
+        ):
+            raise ConfigurationError(
+                "billing_reconciler must return a finite non-negative spend total"
+            )
+        if self._spend_budget is not None:
+            self._spend_budget.reconcile(float(actual))
+        elif self._provider_resources is not None:
+            self._provider_resources.reconcile_spend(float(actual))
+
+    def _spend_preflight(self, prompt: str) -> float:
+        """Reconcile billing and calculate the worst-case reservation for a call."""
+
         try:
-            self._spend_budget.check()
-            if self.model not in self._cost_tracker.pricing_per_1k_tokens:
-                raise ConfigurationError(
-                    f"Spend budget is enabled but model '{self.model}' has no "
-                    "pricing entry; add pricing or remove the spend budget."
-                )
+            self._reconcile_billing()
+            reserve_cost = self._reservation_cost(prompt)
+            if self._spend_budget is not None:
+                self._spend_budget.check(reserve_cost)
+            return reserve_cost
         except (SpendBudgetExceededError, ConfigurationError):
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_rejected()
             raise
 
-    def _default_backend(self) -> LLMBackend:
+    @staticmethod
+    def _wait_retry(
+        delay: float,
+        cancel_event: Optional[threading.Event],
+    ) -> None:
+        if cancel_event is None:
+            threading.Event().wait(delay)
+            return
+        if cancel_event.wait(delay):
+            raise RateLimiterCancelledError("LLM retry wait cancelled")
+
+    def _release_attempt_resources(
+        self,
+        permit: Optional[ProviderPermit],
+        reservation: Optional[SpendReservation],
+        *,
+        actual_cost: Optional[float],
+    ) -> None:
+        error: Optional[Exception] = None
+        if reservation is not None and self._spend_budget is not None:
+            try:
+                if actual_cost is None:
+                    self._spend_budget.release(reservation)
+                else:
+                    self._spend_budget.settle(reservation, actual_cost)
+            except Exception as exc:
+                error = exc
+        if permit is not None and self._provider_resources is not None:
+            try:
+                self._provider_resources.release(
+                    permit,
+                    actual_cost=(
+                        actual_cost
+                        if self._provider_resources.max_cost is not None
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                if error is None:
+                    error = exc
+        if error is not None:
+            raise error
+
+    def _default_backend(
+        self,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> LLMBackend:
         if not self.api_key:
             raise ConfigurationError(
                 "No API key configured for GPTAgent. Provide `llm_backend` or set `api_key`."
@@ -240,20 +389,42 @@ class GPTAgent(AIAgent):
             last_error: Optional[Exception] = None
             while attempt <= self._max_retries:
                 attempt += 1
-                if self._circuit_breaker is not None:
-                    self._circuit_breaker.allow()
-                self._spend_preflight()
-                if self._rate_limiter is not None:
-                    self._rate_limiter.acquire()
-                # Re-check after any limiter wait so a budget exhausted while
-                # waiting is honoured before the provider call.
-                self._spend_preflight()
-                start = perf_counter()
+                permit: Optional[ProviderPermit] = None
+                reservation: Optional[SpendReservation] = None
+                resources_released = False
+                provider_succeeded = False
+                actual_cost: Optional[float] = None
                 try:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RateLimiterCancelledError("LLM call cancelled")
+                    if self._circuit_breaker is not None:
+                        self._circuit_breaker.allow()
+
+                    reserve_cost = self._spend_preflight(prompt)
+                    if self._rate_limiter is not None:
+                        self._rate_limiter.acquire(cancel_event=cancel_event)
+                    if self._provider_resources is not None:
+                        permit = self._provider_resources.acquire(
+                            reserve_cost=(
+                                reserve_cost
+                                if self._provider_resources.max_cost is not None
+                                else 0.0
+                            ),
+                            cancel_event=cancel_event,
+                        )
+                    if self._spend_budget is not None:
+                        reservation = self._spend_budget.reserve(reserve_cost)
+
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RateLimiterCancelledError("LLM call cancelled")
+
+                    start = perf_counter()
                     with self._response_time_tracker.track():
                         self._last_provider_usage = None
                         content = self._invoke_provider(prompt)
+                    provider_succeeded = True
                     duration = perf_counter() - start
+
                     prompt_tokens = response_tokens = total_tokens = 0
                     if self._token_tracker is not None:
                         prompt_tokens, response_tokens = self._token_tracker.record(
@@ -269,33 +440,32 @@ class GPTAgent(AIAgent):
                             prompt_tokens=prompt_tokens,
                             response_tokens=response_tokens,
                         )
-                    if self._spend_budget is not None and total_tokens:
-                        # Price this call's tokens in isolation so a tracker
-                        # mutated by other threads cannot skew the delta.
-                        call_tracker = CostTracker(
-                            pricing_per_1k_tokens=self._cost_tracker.pricing_per_1k_tokens
+                    if (
+                        self._spend_budget is not None
+                        or (
+                            self._provider_resources is not None
+                            and self._provider_resources.max_cost is not None
                         )
-                        call_tracker.add_usage(
-                            self.model,
-                            total_tokens,
+                    ):
+                        actual_cost = self._call_cost(
                             prompt_tokens=prompt_tokens,
                             response_tokens=response_tokens,
                         )
-                        call_cost = call_tracker.total_cost()
-                        if call_cost is None or not math.isfinite(call_cost):
-                            raise ConfigurationError(
-                                "Spend budget is enabled but the call's estimated cost "
-                                "is unknown or non-finite; check the pricing overrides."
-                            )
-                        self._spend_budget.consume(call_cost)
+                    self._release_attempt_resources(
+                        permit,
+                        reservation,
+                        actual_cost=actual_cost,
+                    )
+                    resources_released = True
+
                     self._cache_store(prompt, content)
                     self._logger.debug(
                         "llm_call",
                         extra={
                             "model": self.model,
                             "duration": duration,
-                            "prompt_tokens": locals().get("prompt_tokens", 0),
-                            "response_tokens": locals().get("response_tokens", 0),
+                            "prompt_tokens": prompt_tokens,
+                            "response_tokens": response_tokens,
                         },
                     )
                     telemetry = get_telemetry()
@@ -318,21 +488,45 @@ class GPTAgent(AIAgent):
                                 metadata={"attempt": attempt, "cache_hit": False},
                                 conversation_state=self.conversation_state,
                             )
-                        except Exception:  # pragma: no cover - telemetry must not break retries.
+                        except Exception:
                             self._logger.debug(
-                                "Failed to emit telemetry for LLM call", exc_info=True
+                                "Failed to emit telemetry for LLM call",
+                                exc_info=True,
                             )
                     if self._circuit_breaker is not None:
                         self._circuit_breaker.record_success()
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RateLimiterCancelledError(
+                            "LLM call cancelled after provider completion"
+                        )
                     return content
-                except Exception as exc:  # pragma: no cover - network error path.
+                except Exception as exc:
                     last_error = exc
+                    if not resources_released:
+                        try:
+                            self._release_attempt_resources(
+                                permit,
+                                reservation,
+                                actual_cost=(actual_cost if provider_succeeded else None),
+                            )
+                        except Exception as settlement_error:
+                            if provider_succeeded:
+                                exc = settlement_error
+                                last_error = exc
+
+                    if isinstance(exc, RateLimiterCancelledError):
+                        if self._circuit_breaker is not None:
+                            if provider_succeeded:
+                                self._circuit_breaker.record_success()
+                            else:
+                                self._circuit_breaker.record_rejected()
+                        raise
                     if isinstance(exc, (CircuitOpenError, SpendBudgetExceededError)):
                         if (
                             isinstance(exc, SpendBudgetExceededError)
+                            and provider_succeeded
                             and self._circuit_breaker is not None
                         ):
-                            # The provider call itself succeeded; complete the probe.
                             self._circuit_breaker.record_success()
                         raise
                     if isinstance(exc, ConfigurationError):
@@ -348,9 +542,10 @@ class GPTAgent(AIAgent):
                             self._circuit_breaker.allow()
                         sleep_time = min(30.0, self._retry_backoff**attempt)
                         self._logger.warning(
-                            "Retrying LLM call due to error", extra={"error": str(exc)}
+                            "Retrying LLM call due to error",
+                            extra={"error": str(exc)},
                         )
-                        sleep(sleep_time)
+                        self._wait_retry(sleep_time, cancel_event)
                         continue
                     if self._circuit_breaker is not None:
                         self._circuit_breaker.record_rejected()
@@ -568,14 +763,27 @@ class GPTAgent(AIAgent):
     def _cache_store(self, prompt: str, response: str) -> None:
         super()._cache_store(self._scoped_key(prompt), response)
 
-    def respond(self, message: str) -> str:
+    def _respond_with_cancel(
+        self,
+        message: str,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> str:
+        return self.respond(message, cancel_event=cancel_event)
+
+    def respond(
+        self,
+        message: str,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> str:
         prompt = self.prepare_prompt(message)
         validated_prompt = self.prompt_validator.validate(prompt)
         cached = self._cache_lookup(validated_prompt)
         if cached is not None:
             return cached
 
-        backend = self.llm_backend or self._default_backend()
+        backend = self.llm_backend or self._default_backend(cancel_event=cancel_event)
         response = backend(validated_prompt)
         self._cache_store(validated_prompt, response)
         return response
