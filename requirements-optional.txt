@@ -5,6 +5,7 @@
 wikipedia==1.4.0
 deep-translator==1.11.4
 transformers==4.35.2
+torch==2.2.2
 
 # mlops extra
 mlflow==2.9.1
