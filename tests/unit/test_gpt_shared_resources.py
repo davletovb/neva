@@ -233,7 +233,6 @@ def test_legacy_explicit_rate_limiter_disables_shared_rate_but_keeps_concurrency
     assert agent._provider_resources.max_concurrency == 3
 
 
-
 def test_async_cancel_during_inflight_call_settles_once_and_caches(monkeypatch):
     entered = threading.Event()
     release = threading.Event()
