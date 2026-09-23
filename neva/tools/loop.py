@@ -11,6 +11,7 @@ the enforcement boundary; prompt instructions are only orchestration hints.
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 from dataclasses import dataclass
@@ -121,10 +122,7 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
         return [_json_safe(item, depth=depth + 1) for item in value[:16]]
     if isinstance(value, Mapping):
         items = list(value.items())[:16]
-        return {
-            _clip(str(key), 80): _json_safe(item, depth=depth + 1)
-            for key, item in items
-        }
+        return {_clip(str(key), 80): _json_safe(item, depth=depth + 1) for key, item in items}
     try:
         return _clip(repr(value), 160)
     except Exception:
@@ -233,11 +231,28 @@ def _reject_json_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant {value!r} is not permitted")
 
 
+def _reject_duplicate_fields(pairs: Sequence[Tuple[str, Any]]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate JSON field {key!r} is not permitted")
+        payload[key] = value
+    return payload
+
+
 def _parse_action(raw: str) -> _ParsedAction:
     try:
-        payload = json.loads(raw, parse_constant=_reject_json_constant)
-    except (TypeError, ValueError) as exc:
+        payload = json.loads(
+            raw,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_fields,
+        )
+    except json.JSONDecodeError as exc:
         raise ValueError("model output must be one valid JSON object") from exc
+    except RecursionError as exc:
+        raise ValueError("model output JSON nesting is too deep") from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(str(exc)) from exc
 
     if not isinstance(payload, dict):
         raise ValueError("model output must be a JSON object")
@@ -335,8 +350,13 @@ def run_tool_loop(
         raise ToolLoopConfigurationError("task must be a non-empty string")
     if model is not None and not callable(model):
         raise ToolLoopConfigurationError("model must be callable")
+    if model is not None and (
+        inspect.iscoroutinefunction(model)
+        or inspect.iscoroutinefunction(getattr(model, "__call__", None))
+    ):
+        raise ToolLoopConfigurationError("model must be a synchronous callable")
 
-    model_call = model or agent.respond
+    model_call = agent.respond if model is None else model
     tools = _tool_descriptions(agent, active_config)
     feedback: List[str] = []
     steps: List[ToolLoopStep] = []
@@ -350,6 +370,21 @@ def run_tool_loop(
             config=active_config,
         )
         raw = model_call(prompt)
+
+        if inspect.isawaitable(raw):
+            close = getattr(raw, "close", None)
+            if callable(close):
+                close()
+            reason = "model callable returned an awaitable; model must be synchronous"
+            steps.append(
+                ToolLoopStep(
+                    index=index,
+                    model_output="<awaitable>",
+                    protocol_error=reason,
+                )
+            )
+            feedback.append(_clip(_protocol_error(reason), active_config.max_feedback_chars))
+            continue
 
         if not isinstance(raw, str):
             reason = "model callable must return a string"
