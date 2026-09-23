@@ -12,7 +12,14 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from neva.memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
+from neva.memory import (
+    AdaptiveConversationMemory,
+    CompositeMemory,
+    MemoryRecord,
+    ShortTermMemory,
+    SummaryMemory,
+    VectorStoreMemory,
+)
 from neva.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
 
 
@@ -37,6 +44,80 @@ def _load_records(records: Any) -> Any:
     ]
 
 
+def _record(record: MemoryRecord) -> Dict[str, Any]:
+    return _records([record])[0]
+
+
+def _load_record(record: Dict[str, Any]) -> MemoryRecord:
+    return _load_records([record])[0]
+
+
+def _capture_budget(budget: Any) -> Any:
+    if budget is None:
+        return None
+    return {
+        "max_records": budget.max_records,
+        "max_tokens": budget.max_tokens,
+        "max_embeddings": budget.max_embeddings,
+        "embedding_calls": budget._embedding_calls,
+    }
+
+
+def _validated_budget_embedding_calls(budget: Any, state: Any) -> Optional[int]:
+    if state is None:
+        if budget is not None:
+            raise ValueError("Checkpoint memory budget configuration does not match")
+        return None
+    if budget is None:
+        raise ValueError("Checkpoint memory budget configuration does not match")
+    configured = (budget.max_records, budget.max_tokens, budget.max_embeddings)
+    saved = (state["max_records"], state["max_tokens"], state["max_embeddings"])
+    if configured != saved:
+        raise ValueError("Checkpoint memory budget configuration does not match")
+    return int(state["embedding_calls"])
+
+
+def _memory_restore_memo(memory: Any) -> Dict[int, Any]:
+    """Preserve configured callable/resource identities during staging deepcopy."""
+
+    memo: Dict[int, Any] = {}
+
+    def preserve(value: Any) -> None:
+        if value is None:
+            return
+        if type(value) is SummaryMemory:
+            memo[id(value._summarizer)] = value._summarizer
+        elif type(value) is VectorStoreMemory:
+            memo[id(value._embedder)] = value._embedder
+        elif type(value) is AdaptiveConversationMemory:
+            memo[id(value._summarizer)] = value._summarizer
+            if value._embedder is not None:
+                memo[id(value._embedder)] = value._embedder
+            if value._budget is not None:
+                memo[id(value._budget)] = value._budget
+            preserve(value._summary)
+        elif type(value) is CompositeMemory:
+            for child in value._modules:
+                preserve(child)
+
+    preserve(memory)
+    return memo
+
+
+def _stage_budget_update(
+    updates: Dict[int, Any],
+    budget: Any,
+    embedding_calls: Optional[int],
+) -> None:
+    if budget is None or embedding_calls is None:
+        return
+    key = id(budget)
+    existing = updates.get(key)
+    if existing is not None and existing[1] != embedding_calls:
+        raise ValueError("Checkpoint shared memory budget state does not match")
+    updates[key] = (budget, embedding_calls)
+
+
 def _capture_memory(memory: Any) -> Any:
     if memory is None:
         return None
@@ -47,6 +128,42 @@ def _capture_memory(memory: Any) -> Any:
         state.update(summary=memory._summary, records=_records(memory._history))
     elif type(memory) is CompositeMemory:
         state["modules"] = [_capture_memory(m) for m in memory._modules]
+    elif type(memory) is VectorStoreMemory:
+        state.update(
+            top_k=memory._top_k,
+            counter=memory._counter,
+            vectors=[
+                {
+                    "index": index,
+                    "record": _record(record),
+                    "vector": list(vector),
+                }
+                for index, record, vector in memory._vectors
+            ],
+        )
+    elif type(memory) is AdaptiveConversationMemory:
+        state.update(
+            short_term_capacity=memory._short_term_capacity,
+            semantic_top_k=memory._semantic_top_k,
+            initial_summary=memory._initial_summary,
+            has_embedder=memory._embedder is not None,
+            id_counter=memory._id_counter,
+            history=[
+                {"id": record_id, "record": _record(record)}
+                for record_id, record in memory._history
+            ],
+            token_counts=[
+                {"id": record_id, "tokens": tokens}
+                for record_id, tokens in sorted(memory._token_counts.items())
+            ],
+            vector_cache=[
+                {"id": record_id, "vector": list(vector)}
+                for record_id, vector in sorted(memory._vector_cache.items())
+            ],
+            budget=_capture_budget(memory._budget),
+            short_term=_capture_memory(memory._short_term),
+            summary=_capture_memory(memory._summary),
+        )
     elif callable(getattr(memory, "checkpoint_state", None)):
         state["custom"] = memory.checkpoint_state()
     else:
@@ -54,7 +171,11 @@ def _capture_memory(memory: Any) -> Any:
     return state
 
 
-def _restore_memory(memory: Any, state: Any) -> None:
+def _restore_memory(
+    memory: Any,
+    state: Any,
+    budget_updates: Optional[Dict[int, Any]] = None,
+) -> None:
     if state is None:
         if memory is not None:
             raise ValueError("Checkpoint memory configuration does not match")
@@ -72,7 +193,59 @@ def _restore_memory(memory: Any, state: Any) -> None:
         if len(memory._modules) != len(state["modules"]):
             raise ValueError("Checkpoint memory modules do not match")
         for child, payload in zip(memory._modules, state["modules"]):
-            _restore_memory(child, payload)
+            _restore_memory(child, payload, budget_updates)
+    elif type(memory) is VectorStoreMemory:
+        if state["top_k"] != memory._top_k:
+            raise ValueError("Checkpoint vector memory configuration does not match")
+        memory._counter = int(state["counter"])
+        memory._vectors = [
+            (
+                int(item["index"]),
+                _load_record(item["record"]),
+                tuple(float(value) for value in item["vector"]),
+            )
+            for item in state["vectors"]
+        ]
+    elif type(memory) is AdaptiveConversationMemory:
+        configured = (
+            memory._short_term_capacity,
+            memory._semantic_top_k,
+            memory._initial_summary,
+            memory._embedder is not None,
+        )
+        saved = (
+            state["short_term_capacity"],
+            state["semantic_top_k"],
+            state["initial_summary"],
+            state["has_embedder"],
+        )
+        if configured != saved:
+            raise ValueError("Checkpoint adaptive memory configuration does not match")
+        embedding_calls = _validated_budget_embedding_calls(memory._budget, state["budget"])
+        if budget_updates is None:
+            if memory._budget is not None and embedding_calls is not None:
+                memory._budget._embedding_calls = embedding_calls
+        else:
+            _stage_budget_update(budget_updates, memory._budget, embedding_calls)
+        memory._id_counter = int(state["id_counter"])
+        memory._history = [
+            (int(item["id"]), _load_record(item["record"])) for item in state["history"]
+        ]
+        memory._token_counts = {
+            int(item["id"]): int(item["tokens"]) for item in state["token_counts"]
+        }
+        memory._vector_cache = {
+            int(item["id"]): tuple(float(value) for value in item["vector"])
+            for item in state["vector_cache"]
+        }
+        by_id = {record_id: record for record_id, record in memory._history}
+        memory._semantic_entries = [
+            (record_id, by_id[record_id], vector)
+            for record_id, vector in memory._vector_cache.items()
+            if record_id in by_id
+        ]
+        _restore_memory(memory._short_term, state["short_term"], budget_updates)
+        _restore_memory(memory._summary, state["summary"], budget_updates)
     elif callable(getattr(memory, "restore_checkpoint_state", None)):
         memory.restore_checkpoint_state(deepcopy(state["custom"]))
     else:
@@ -126,15 +299,18 @@ def restore_runtime(environment: Any, runtime: Optional[Dict[str, Any]]) -> None
     # Stage memory restoration so a mismatch cannot partially mutate live agents.
     memories = {}
     ids = {}
+    budget_updates: Dict[int, Any] = {}
     for name, agent in agents.items():
         payload = runtime["agents"][name]
         if payload["type"] != _type_name(agent):
             raise ValueError("Checkpoint agent type does not match")
         ids[name] = UUID(payload["id"])
-        memory = deepcopy(agent.memory)
-        _restore_memory(memory, payload["memory"])
+        memory = deepcopy(agent.memory, _memory_restore_memo(agent.memory))
+        _restore_memory(memory, payload["memory"], budget_updates)
         memories[name] = memory
     apply_scheduler()
+    for budget, embedding_calls in budget_updates.values():
+        budget._embedding_calls = embedding_calls
     for name, agent in agents.items():
         agent.id = ids[name]
         agent.attributes = runtime["agents"][name]["attributes"]
