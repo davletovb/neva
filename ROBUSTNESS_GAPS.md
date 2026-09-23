@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `94d72011` (PRs #49–#52, #54–#70 merged).
+Updated against `main` at `88815488` (PRs #49–#52, #54–#71 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -107,14 +107,59 @@ Boundary: this is a library-level execution boundary, not a universal OS/contain
 
 Regex prompt validation is input hygiene, not protection against prompt injection or unauthorized execution. Permission enforcement belongs to the tool guard path above.
 
-### 4. Checkpoint and transcript scalability — partial
+### 4. Checkpoint and transcript scalability — complete at the Neva persistence layer
 
-- Opt-in checkpoint file-size limits merged in PR #56 (`save_snapshot(..., max_bytes=N)`, `load_snapshot(..., max_bytes=N)`). PR #64 streams save serialization with incremental byte-limit enforcement into a sibling temporary file, then fsyncs and atomically installs it with `os.replace`, preserving the destination on overflow, serialization failure, staging-write failure, or replacement failure. The tradeoff is temporary disk usage on the destination filesystem roughly equal to the new checkpoint (while the old checkpoint may still exist). Remaining memory risks include the snapshot object graph, `create_snapshot()` deep copies, decoded loads, and temporary expansion of an individual JSON scalar. PR #65 adds a reproducible small/medium/large checkpoint benchmark for create/save/load wall time, peak Python allocations, and checkpoint bytes; hardware-specific benchmark runs still need to inform any persistence redesign.
-- Incremental/externalized persistence where justified by measured scale.
-- PR #67 adds explicit data-only checkpoint adapters for the remaining non-FAISS first-party memory modules (`VectorStoreMemory` and `AdaptiveConversationMemory`), including adaptive budget/summary/vector state without replaying embedders or summarizers. Restore preserves configured first-party callable and shared `MemoryBudget` identities while staging data separately; callable semantics (including custom token estimators) are not serialized and must be equivalently configured by the caller. Remaining hook-only scope is third-party/custom memory/scheduler implementations plus deferred `FaissVectorStoreMemory`/PR #53.
-- Conversation retention is implemented by merged PR #55 with optional `ConversationState(max_turns=N)`, preserved through serialization and restore. PR #66 adds an independent opt-in UTF-8 per-turn storage ceiling via `max_turn_bytes=N`; oversized stored messages are truncated with an explicit marker while the agent still returns the full live response. Both limits remain disabled by default and are distinct from request-history trimming.
+PR #72 closes the remaining library-level resource-envelope gaps without
+introducing a second persistence format:
 
-Deep-copy isolation may be expensive at scale. PR #65 now provides a benchmark harness for create/save/load scaling, but hardware-specific results still need to inform any redesign.
+- Existing exact serialized-file ceilings remain available through
+  `save_snapshot(..., max_bytes=N)` and `load_snapshot(..., max_bytes=N)`,
+  with streamed/atomic save staging from PR #64. `CheckpointLimits` now adds
+  opt-in in-memory graph ceilings for maximum nesting depth, node count,
+  individual serialized string/key UTF-8 bytes, and aggregate string/key UTF-8
+  bytes. Defaults remain unlimited for backward compatibility.
+- `create_snapshot(..., limits=...)` preflights live environment/conversation
+  payloads before the environment-state deepcopy, so callers can cap the graph
+  before duplication. `Environment.snapshot(limits=...)` applies the same
+  envelope to version-2 runtime state and validates the complete final snapshot.
+- Limited loads lexically preflight JSON nesting, node tokens, and raw string
+  token bytes before UTF-8 decode or `json.loads`; the parsed graph is checked
+  again before constructing `SimulationSnapshot`. This closes the previously
+  unbounded single-scalar/deep-structure path when callers opt into limits.
+  The stdlib parser still materialises decoded text, so this is a bounded
+  monolithic JSON parser rather than incremental object decoding.
+- Runtime capture no longer uses a full `json.dumps` + `json.loads` roundtrip.
+  Structural validation plus a JSON-shape-preserving clone keeps the previous
+  normalization contract (tuples become lists; JSON mapping keys become
+  strings) without the encoded full-document intermediate. Runtime restore no
+  longer `deepcopy()`s the entire saved runtime graph; it treats checkpoint
+  input as read-only and stages only attributes, environment extras, scheduler
+  state, and memory objects that must become independently owned.
+- First-party memory checkpoint adapters from PR #67 remain data-only and
+  preserve configured callable/`MemoryBudget` identities; custom/third-party
+  scheduler and memory implementations still require explicit checkpoint hooks.
+  Deferred FAISS/PR #53 remains outside this section rather than being silently
+  serialized.
+- Transcript retention now has three independent opt-in axes:
+  `max_turns`, per-message `max_turn_bytes`, and aggregate retained-message
+  `max_history_bytes`. The aggregate budget truncates one oversized newest
+  turn to the effective byte ceiling, then evicts oldest turns until the retained
+  UTF-8 message bytes fit. All policies survive serialization/restore; live
+  agent responses are unchanged.
+- The checkpoint scaling benchmark now reports
+  `peak_python_bytes / checkpoint_bytes` amplification per stage in addition
+  to elapsed time, peak Python allocations, and serialized bytes. This makes
+  workload-specific externalization decisions measurable without imposing an
+  arbitrary hardware-independent threshold.
+
+Boundary: graph/file limits are opt-in and constrain serialized/checkpoint data,
+not total process RSS or arbitrary custom-hook allocations. The checkpoint
+format intentionally remains one JSON document: the existing streamed save plus
+explicit graph/file ceilings bound the library path, while applications with
+benchmark evidence that very large blobs dominate their checkpoints should
+externalize those blobs in their own checkpoint hooks/storage rather than Neva
+inventing a mandatory second format. `tracemalloc` benchmark figures exclude
+OS page cache and destination/temp-file space.
 
 ### 5. Integration and coverage blind spots — partial
 
