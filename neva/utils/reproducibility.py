@@ -353,10 +353,7 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
         "max_turns": state.max_turns,
         "max_turn_bytes": state.max_turn_bytes,
         "max_history_bytes": state.max_history_bytes,
-        "turns": [
-            {"speaker": turn.speaker, "message": turn.message}
-            for turn in state.turns
-        ],
+        "turns": [{"speaker": turn.speaker, "message": turn.message} for turn in state.turns],
     }
     tools = [
         {
