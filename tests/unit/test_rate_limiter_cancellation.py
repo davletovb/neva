@@ -145,7 +145,6 @@ def test_waiting_acquire_is_cancelled_without_consuming_token(monkeypatch):
     assert limiter._allowance == 0
 
 
-
 def test_cancel_during_post_queue_lock_poll_removes_waiter():
     cancel = threading.Event()
     second_lock_poll = threading.Event()
