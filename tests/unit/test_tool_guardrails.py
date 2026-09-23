@@ -359,7 +359,6 @@ def test_per_tool_concurrency_quota_serializes_calls():
     assert tool.max_active == 1
 
 
-
 class TimeoutSlotTool(Tool):
     def __init__(self):
         super().__init__("slot", "Blocks the first invocation")
