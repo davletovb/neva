@@ -136,7 +136,11 @@ class Environment:
                     action=action,
                     record_written=wrote,
                     retry=retry,
-                    exhausted=not retry and recovery.max_retries > 0,
+                    exhausted=(
+                        not retry
+                        and attempt >= recovery.max_attempts
+                        and recovery.is_retryable(exc)
+                    ),
                     escalated=not retry,
                 )
                 if retry:
@@ -173,15 +177,17 @@ class Environment:
         scheduler = self.scheduler
         if scheduler is None:  # pragma: no cover - step()/replay_failure() guard this.
             return None
-        if context is None:
-            context = self.context()
 
         started = perf_counter()
         recovery = self.recovery_policy
+        resolved_context = context
+        response: Optional[str] = None
+
         for attempt in range(1, recovery.max_attempts + 1):
             try:
-                response = agent.step(context)
-                self.on_turn_complete(response)
+                if resolved_context is None:
+                    resolved_context = self.context()
+                response = agent.step(resolved_context)
             except Exception as exc:
                 retry = recovery.should_retry(exc, attempt)
                 inherited = self._effective_error_policy(agent)
@@ -190,7 +196,7 @@ class Environment:
                 wrote = self._record_failure(
                     agent_name=agent.name,
                     exc=exc,
-                    context=context,
+                    context=resolved_context,
                     policy=policy,
                     attempt=attempt,
                     max_attempts=recovery.max_attempts,
@@ -202,7 +208,11 @@ class Environment:
                     action=action,
                     record_written=wrote,
                     retry=retry,
-                    exhausted=not retry and recovery.max_retries > 0,
+                    exhausted=(
+                        not retry
+                        and attempt >= recovery.max_attempts
+                        and recovery.is_retryable(exc)
+                    ),
                     escalated=not retry,
                 )
                 if retry:
@@ -215,19 +225,48 @@ class Environment:
                 if policy == "return":
                     return self._effective_error_value(agent)
                 raise
+            break
 
-            if attempt > 1:
-                with self._recovery_lock:
-                    self._recovery.recoveries_succeeded += 1
-                    self._recovery.last_action = "recovered"
-            scheduler.record_metrics(
-                agent,
-                status="completed",
-                latency=perf_counter() - started,
-                response=response,
+        assert response is not None  # successful agent step before completion hook
+        try:
+            self.on_turn_complete(response)
+        except Exception as exc:
+            inherited = self._effective_error_policy(agent)
+            policy = inherited if recovery.escalation == "inherit" else recovery.escalation
+            wrote = self._record_failure(
+                agent_name=agent.name,
+                exc=exc,
+                context=resolved_context,
+                policy=policy,
+                attempt=attempt,
+                max_attempts=recovery.max_attempts,
+                action=policy,
             )
-            return response
-        return None  # pragma: no cover - loop always returns or raises.
+            self._note_recovery(
+                exc=exc,
+                agent_name=agent.name,
+                action=policy,
+                record_written=wrote,
+                retry=False,
+                exhausted=False,
+                escalated=True,
+            )
+            scheduler.record_metrics(agent, status="failed", error=repr(exc))
+            if policy == "return":
+                return self._effective_error_value(agent)
+            raise
+
+        if attempt > 1:
+            with self._recovery_lock:
+                self._recovery.recoveries_succeeded += 1
+                self._recovery.last_action = "recovered"
+        scheduler.record_metrics(
+            agent,
+            status="completed",
+            latency=perf_counter() - started,
+            response=response,
+        )
+        return response
 
     def _effective_error_policy(self, agent: AIAgent) -> str:
         overrides = getattr(self, "_agent_error_policies", {})
