@@ -139,7 +139,9 @@ class Tool(ABC):
                     "argument_schema must provide a validate(arguments) method"
                 )
             if inspect.iscoroutinefunction(validator):
-                raise ToolSchemaConfigurationError("argument_schema.validate must be synchronous")
+                raise ToolSchemaConfigurationError(
+                    "argument_schema.validate must be synchronous"
+                )
             try:
                 signature = inspect.signature(validator)
             except (TypeError, ValueError):
@@ -183,7 +185,9 @@ class Tool(ABC):
             return "custom schema reported a violation"
         return reason
 
-    def _evaluate_guard(self, call: ToolCall, guard: Optional["ToolGuard"]) -> Optional[str]:
+    def _evaluate_guard(
+        self, call: ToolCall, guard: Optional["ToolGuard"]
+    ) -> Optional[str]:
         if guard is None:
             return None
         try:
@@ -358,7 +362,12 @@ class AIAgent(ABC):
                 logger.exception("Tool guard evaluation failed for tool '%s'", call.name)
                 reason = f"tool guard evaluation for '{call.name}' failed"
             if reason is not None:
-                logger.warning("Tool '%s' denied for agent '%s': %s", call.name, self.name, reason)
+                logger.warning(
+                    "Tool '%s' denied for agent '%s': %s",
+                    call.name,
+                    self.name,
+                    reason,
+                )
                 return ToolResponse(
                     name=tool.name,
                     arguments=arguments,
@@ -411,7 +420,12 @@ class AIAgent(ABC):
         try:
             output = tool._execute(payload, additional_guards=tuple(guards))
         except ToolExecutionError as exc:
-            logger.warning("Tool '%s' failed for agent '%s': %s", tool.name, self.name, exc)
+            logger.warning(
+                "Tool '%s' failed for agent '%s': %s",
+                tool.name,
+                self.name,
+                exc,
+            )
             return ToolResponse(
                 name=tool.name,
                 arguments=arguments,
@@ -420,7 +434,9 @@ class AIAgent(ABC):
             )
         except Exception as exc:
             logger.exception(
-                "Tool '%s' raised an unexpected error for agent '%s'", tool.name, self.name
+                "Tool '%s' raised an unexpected error for agent '%s'",
+                tool.name,
+                self.name,
             )
             return ToolResponse(
                 name=tool.name,
