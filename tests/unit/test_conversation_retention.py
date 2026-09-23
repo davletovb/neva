@@ -231,7 +231,6 @@ def test_bounded_agent_history_normalizes_unpaired_surrogates_without_failing():
     assert len(stored.encode("utf-8")) <= 24
 
 
-
 @pytest.mark.parametrize("limit", [0, -1, True, 1.5, "64"])
 def test_invalid_history_byte_limit_rejected(limit):
     with pytest.raises(ValueError, match="max_history_bytes"):
