@@ -71,6 +71,10 @@ class CheckpointLimits:
                 raise ValueError(f"{name} must be a positive integer or None")
 
 
+class _CheckpointLimitExceeded(ValueError):
+    """Internal marker for an explicitly configured checkpoint resource ceiling."""
+
+
 class _CheckpointGraphBudget:
     def __init__(self, limits: CheckpointLimits) -> None:
         self.limits = limits
@@ -81,23 +85,23 @@ class _CheckpointGraphBudget:
     def _check_node(self) -> None:
         self.nodes += 1
         if self.limits.max_nodes is not None and self.nodes > self.limits.max_nodes:
-            raise ValueError("Checkpoint exceeds max_nodes")
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_nodes")
 
     def _check_depth(self, depth: int) -> None:
         if self.limits.max_depth is not None and depth > self.limits.max_depth:
-            raise ValueError("Checkpoint exceeds max_depth")
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_depth")
 
     def _check_string(self, value: str) -> None:
         self._check_node()
         size = len(value.encode("utf-8", errors="replace"))
         if self.limits.max_string_bytes is not None and size > self.limits.max_string_bytes:
-            raise ValueError("Checkpoint string exceeds max_string_bytes")
+            raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
         self.total_string_bytes += size
         if (
             self.limits.max_total_string_bytes is not None
             and self.total_string_bytes > self.limits.max_total_string_bytes
         ):
-            raise ValueError("Checkpoint exceeds max_total_string_bytes")
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
 
     @staticmethod
     def _key_text(key: object) -> str:
@@ -223,7 +227,7 @@ def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLim
         nonlocal nodes
         nodes += 1
         if limits.max_nodes is not None and nodes > limits.max_nodes:
-            raise ValueError("Checkpoint exceeds max_nodes")
+            raise _CheckpointLimitExceeded("Checkpoint exceeds max_nodes")
 
     while i < length:
         byte = raw[i]
@@ -252,20 +256,20 @@ def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLim
                 string_bytes += 1
                 i += 1
             if limits.max_string_bytes is not None and string_bytes > limits.max_string_bytes:
-                raise ValueError("Checkpoint string exceeds max_string_bytes")
+                raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
             total_string_bytes += string_bytes
             if (
                 limits.max_total_string_bytes is not None
                 and total_string_bytes > limits.max_total_string_bytes
             ):
-                raise ValueError("Checkpoint exceeds max_total_string_bytes")
+                raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
             i += 1
             continue
         if byte in (123, 91):
             add_node()
             depth += 1
             if limits.max_depth is not None and depth > limits.max_depth:
-                raise ValueError("Checkpoint exceeds max_depth")
+                raise _CheckpointLimitExceeded("Checkpoint exceeds max_depth")
             i += 1
             continue
         if byte in (125, 93):
@@ -371,17 +375,24 @@ class ConversationState:
         ]
         return min(limits) if limits else None
 
-    def _discard_oldest(self) -> None:
-        turn = self.turns.pop(0)
-        self._stored_message_bytes -= self._message_bytes(turn.message)
+    def _drop_prefix(self, count: int) -> None:
+        if count <= 0:
+            return
+        for turn in self.turns[:count]:
+            self._stored_message_bytes -= self._message_bytes(turn.message)
+        del self.turns[:count]
 
     def _trim(self) -> None:
         if self.max_turns is not None:
-            while len(self.turns) > self.max_turns:
-                self._discard_oldest()
-        if self.max_history_bytes is not None:
-            while self.turns and self._stored_message_bytes > self.max_history_bytes:
-                self._discard_oldest()
+            self._drop_prefix(max(0, len(self.turns) - self.max_turns))
+
+        if self.max_history_bytes is not None and self._stored_message_bytes > self.max_history_bytes:
+            drop_count = 0
+            remaining_bytes = self._stored_message_bytes
+            while drop_count < len(self.turns) and remaining_bytes > self.max_history_bytes:
+                remaining_bytes -= self._message_bytes(self.turns[drop_count].message)
+                drop_count += 1
+            self._drop_prefix(drop_count)
 
     def record_turn(self, speaker: str, message: str) -> None:
         stored = _truncate_utf8(message, self._effective_turn_byte_limit())
