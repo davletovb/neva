@@ -210,7 +210,12 @@ def _validate_checkpoint_value(
 
 
 def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLimits]) -> None:
-    """Reject oversized JSON structure/string tokens before UTF-8 decode/parse."""
+    """Reject oversized JSON structure/string tokens before UTF-8 decode/parse.
+
+    JSON escape sequences are charged by their decoded UTF-8 size so the same
+    CheckpointLimits envelope is symmetric between save and load. The scanner
+    never materialises a decoded string.
+    """
 
     if limits is None:
         return
@@ -229,6 +234,96 @@ def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLim
         if limits.max_nodes is not None and nodes > limits.max_nodes:
             raise _CheckpointLimitExceeded("Checkpoint exceeds max_nodes")
 
+    def decoded_codepoint_bytes(codepoint: int) -> int:
+        if 0xD800 <= codepoint <= 0xDFFF:
+            # json.loads can preserve lone surrogates; graph accounting encodes
+            # them with errors="replace", which is one '?' byte per code unit.
+            return 1
+        if codepoint <= 0x7F:
+            return 1
+        if codepoint <= 0x7FF:
+            return 2
+        return 3
+
+    def parse_hex_codepoint(offset: int) -> Optional[int]:
+        if offset + 4 > length:
+            return None
+        value = 0
+        for current in raw[offset : offset + 4]:
+            if 48 <= current <= 57:
+                digit = current - 48
+            elif 65 <= current <= 70:
+                digit = current - 55
+            elif 97 <= current <= 102:
+                digit = current - 87
+            else:
+                return None
+            value = (value << 4) | digit
+        return value
+
+    def scan_string(offset: int) -> int:
+        nonlocal total_string_bytes
+        string_bytes = 0
+        cursor = offset
+
+        def charge(amount: int) -> None:
+            nonlocal string_bytes
+            string_bytes += amount
+            if (
+                limits.max_string_bytes is not None
+                and string_bytes > limits.max_string_bytes
+            ):
+                raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
+            if (
+                limits.max_total_string_bytes is not None
+                and total_string_bytes + string_bytes > limits.max_total_string_bytes
+            ):
+                raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
+
+        while cursor < length:
+            current = raw[cursor]
+            if current == 34:
+                total_string_bytes += string_bytes
+                return cursor + 1
+
+            if current != 92:
+                # Raw non-ASCII JSON is UTF-8, so counting its bytes directly is
+                # exactly its decoded UTF-8 byte size.
+                charge(1)
+                cursor += 1
+                continue
+
+            if cursor + 1 >= length:
+                charge(1)
+                cursor += 1
+                continue
+
+            escape = raw[cursor + 1]
+            if escape != 117:  # quote, slash, backslash, b/f/n/r/t, or invalid escape
+                charge(1)
+                cursor += 2
+                continue
+
+            codepoint = parse_hex_codepoint(cursor + 2)
+            if codepoint is None:
+                charge(1)
+                cursor += min(6, length - cursor)
+                continue
+
+            if 0xD800 <= codepoint <= 0xDBFF and cursor + 12 <= length:
+                if raw[cursor + 6] == 92 and raw[cursor + 7] == 117:
+                    low = parse_hex_codepoint(cursor + 8)
+                    if low is not None and 0xDC00 <= low <= 0xDFFF:
+                        charge(4)
+                        cursor += 12
+                        continue
+
+            charge(decoded_codepoint_bytes(codepoint))
+            cursor += 6
+
+        total_string_bytes += string_bytes
+        return cursor
+
     while i < length:
         byte = raw[i]
         if byte in (9, 10, 13, 32, 44, 58):
@@ -236,34 +331,7 @@ def _preflight_json_bytes(raw: bytes | bytearray, limits: Optional[CheckpointLim
             continue
         if byte == 34:
             add_node()
-            i += 1
-            string_bytes = 0
-            escaped = False
-            while i < length:
-                current = raw[i]
-                if escaped:
-                    string_bytes += 1
-                    escaped = False
-                    i += 1
-                    continue
-                if current == 92:
-                    string_bytes += 1
-                    escaped = True
-                    i += 1
-                    continue
-                if current == 34:
-                    break
-                string_bytes += 1
-                i += 1
-            if limits.max_string_bytes is not None and string_bytes > limits.max_string_bytes:
-                raise _CheckpointLimitExceeded("Checkpoint string exceeds max_string_bytes")
-            total_string_bytes += string_bytes
-            if (
-                limits.max_total_string_bytes is not None
-                and total_string_bytes > limits.max_total_string_bytes
-            ):
-                raise _CheckpointLimitExceeded("Checkpoint exceeds max_total_string_bytes")
-            i += 1
+            i = scan_string(i + 1)
             continue
         if byte in (123, 91):
             add_node()
