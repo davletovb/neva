@@ -11,7 +11,6 @@ from neva.tools import ToolGuard, ToolLimits
 from neva.utils.exceptions import (
     ToolExecutionError,
     ToolGuardConfigurationError,
-    ToolResourceLimitError,
     ToolTimeoutError,
 )
 
@@ -355,7 +354,9 @@ def test_per_tool_concurrency_quota_serializes_calls():
     tool = ConcurrencyProbeTool()
     guard = ToolGuard(limits=ToolLimits(max_concurrency=1))
     with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(lambda value: guard.invoke(tool, value), ["a", "b", "c", "d"]))
+        results = list(
+            pool.map(lambda value: guard.invoke(tool, value), ["a", "b", "c", "d"])
+        )
     assert results == ["a", "b", "c", "d"]
     assert tool.max_active == 1
 
