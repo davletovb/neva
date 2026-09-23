@@ -125,50 +125,58 @@ class RateLimiter:
         finally:
             self._lock_exit(acquired_normally)
 
-        while True:
-            if cancel_event is not None and cancel_event.is_set():
+        admitted = False
+        try:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
+
+                sleep_time = 0.05
+                is_head = False
+                acquired_normally = self._lock_enter(cancel_event)
+                try:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RateLimiterCancelledError(
+                            "Rate limiter acquisition cancelled"
+                        )
+                    is_head = bool(self._waiters and self._waiters[0][0] == ticket)
+                    if is_head:
+                        current = time.monotonic()
+                        time_passed = current - self._last_check
+                        self._last_check = current
+                        self._allowance += time_passed * (self._rate / self._per)
+                        if self._allowance > self._rate:
+                            self._allowance = float(self._rate)
+                        if self._allowance >= 1.0:
+                            self._allowance -= 1.0
+                            self._waiters.pop(0)
+                            admitted = True
+                            if self._waiters:
+                                self._waiters[0][1].set()
+                            return
+                        sleep_time = (1.0 - self._allowance) * (
+                            self._per / self._rate
+                        )
+                        wake.clear()
+                finally:
+                    self._lock_exit(acquired_normally)
+
+                if is_head:
+                    if cancel_event is None:
+                        time.sleep(sleep_time)
+                    elif cancel_event.wait(sleep_time):
+                        continue
+                elif cancel_event is None:
+                    wake.wait(0.05)
+                elif cancel_event.wait(0.05):
+                    continue
+        finally:
+            if not admitted:
                 acquired_normally = self._lock_enter(None)
                 try:
                     self._remove_waiter(ticket)
                 finally:
                     self._lock_exit(acquired_normally)
-                raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
-
-            sleep_time = 0.05
-            is_head = False
-            acquired_normally = self._lock_enter(cancel_event)
-            try:
-                if cancel_event is not None and cancel_event.is_set():
-                    self._remove_waiter(ticket)
-                    raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
-                is_head = bool(self._waiters and self._waiters[0][0] == ticket)
-                if is_head:
-                    current = time.monotonic()
-                    time_passed = current - self._last_check
-                    self._last_check = current
-                    self._allowance += time_passed * (self._rate / self._per)
-                    if self._allowance > self._rate:
-                        self._allowance = float(self._rate)
-                    if self._allowance >= 1.0:
-                        self._allowance -= 1.0
-                        self._waiters.pop(0)
-                        if self._waiters:
-                            self._waiters[0][1].set()
-                        return
-                    sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
-                    wake.clear()
-            finally:
-                self._lock_exit(acquired_normally)
-
-            if is_head:
-                if cancel_event is None:
-                    time.sleep(sleep_time)
-                elif cancel_event.wait(sleep_time):
-                    continue
-            elif cancel_event is None:
-                wake.wait(0.05)
-            elif cancel_event.wait(0.05):
-                continue
 
 
 class CircuitBreaker:
