@@ -159,6 +159,7 @@ def test_cancel_during_post_queue_lock_poll_removes_waiter():
             self.calls += 1
             if self.calls == 2:
                 second_lock_poll.set()
+                cancel.wait(timeout=1)
                 return False
             return True
 
