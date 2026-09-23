@@ -105,18 +105,19 @@ class FailureLog:
 
     Raw context is dropped unless ``include_context=True`` (a write-side
     gate: ``load()`` returns whatever context the file already contains).
-    Appends are thread-safe within one instance; separate processes
-    appending the same path rely on O_APPEND semantics for small lines.
-    Optional size-based rotation is intentionally single-process: callers
-    using ``rotate_bytes`` must externally coordinate writers that share a
-    path. Rotated files use ``<path>.1``, ``<path>.2``, ... . ``load()`` reads
+    Appends, loads, and size-based rotation are serialized by a sibling
+    advisory lock file, so multiple processes using FailureLog coordinate the
+    same active/backup set instead of racing rotation. Rotated files use
+    ``<path>.1``, ``<path>.2``, ... . ``load()`` reads
     retained backups oldest-first only when the reader is also configured with
     rotation and a sufficient ``backup_count``; a default ``FailureLog(path)``
     intentionally reads only the active file.
 
-    ``rotate_bytes`` is a rotation threshold, not a per-record truncation
-    policy. A single record larger than the threshold is kept intact in an
-    otherwise empty active file so failure details are not silently discarded.
+    ``rotate_bytes`` controls file rotation. ``max_record_bytes`` is an
+    independent optional hard ceiling: oversized records first drop raw context
+    and then UTF-8-safe truncate the diagnostic message, marking
+    ``truncated=True``. If the structural metadata alone cannot fit, append
+    fails rather than writing an over-limit record.
     Records live in this external file and are not part of simulation
     checkpoints.
     """
