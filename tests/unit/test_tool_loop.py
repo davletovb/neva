@@ -264,6 +264,36 @@ def test_non_string_model_output_is_protocol_feedback():
     assert result.steps[0].protocol_error == "model callable must return a string"
 
 
+def test_non_string_model_output_never_calls_unbounded_repr():
+    class Hostile:
+        def __repr__(self):
+            raise AssertionError("repr must not be called")
+
+    agent = _agent()
+    model = ScriptedModel(Hostile(), _final("ok"))
+
+    result = run_tool_loop(agent, "recover", model=model)
+
+    assert result.succeeded()
+    assert result.steps[0].model_output == "<Hostile>"
+    assert result.steps[0].protocol_error == "model callable must return a string"
+
+
+def test_large_non_string_model_output_uses_constant_size_placeholder():
+    agent = _agent()
+    model = ScriptedModel(["token"] * 100_000, _final("ok"))
+
+    result = run_tool_loop(
+        agent,
+        "recover",
+        model=model,
+        config=ToolLoopConfig(max_model_output_chars=32),
+    )
+
+    assert result.succeeded()
+    assert result.steps[0].model_output == "<list>"
+
+
 def test_falsey_callable_model_is_still_used():
     class FalseyModel:
         def __bool__(self):
