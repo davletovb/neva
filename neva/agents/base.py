@@ -571,6 +571,27 @@ class AIAgent(ABC):
     def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
         self._llm_backend = backend
 
+    def generate_model_output(self, prompt: str) -> str:
+        """Generate from an already composed prompt without adding agent context.
+
+        Subclasses with built-in provider/model backends should override this
+        method. The base implementation supports agents configured with an
+        explicit llm_backend and preserves prompt validation plus caching.
+        """
+
+        validated_prompt = self.prompt_validator.validate(prompt)
+        if self.llm_backend is None:
+            raise AgentCommunicationError(
+                "Agent has no raw model backend; pass model= to run_tool_loop() "
+                "or override generate_model_output()."
+            )
+        cached = self._cache_lookup(validated_prompt)
+        if cached is not None:
+            return cached
+        response = self.llm_backend(validated_prompt)
+        self._cache_store(validated_prompt, response)
+        return response
+
     def prepare_prompt(self, message: str) -> str:
         """Compose a prompt enriched with agent attributes and tool context."""
 
