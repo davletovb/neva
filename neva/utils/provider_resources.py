@@ -18,7 +18,7 @@ import uuid
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 from neva.utils.exceptions import (
     ConfigurationError,
@@ -104,7 +104,7 @@ class ProviderResourceCoordinator:
         self._allowance = float(rate or 0)
         self._last_check = time.monotonic()
         self._spent = 0.0
-        self._reservations = {}  # type: Dict[str, float]
+        self._reservations = {}  # type: dict[str, float]
 
         if self.state_path is not None:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
