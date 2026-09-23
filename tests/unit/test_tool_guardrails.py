@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+import neva.tools.guard as guard_module
 from neva.agents import TransformerAgent
 from neva.agents.base import Tool, ToolCall
 from neva.tools import ToolGuard, ToolLimits
@@ -545,3 +546,22 @@ def test_concurrency_slot_entry_is_pruned_when_tool_is_collected():
     gc.collect()
     assert ref() is None
     assert guard._concurrency_slots == {}
+
+
+
+def test_memory_limit_application_failure_is_resource_error(monkeypatch):
+    class FakeResource:
+        RLIMIT_AS = 1
+        RLIM_INFINITY = -1
+
+        @staticmethod
+        def getrlimit(resource):
+            return (-1, -1)
+
+        @staticmethod
+        def setrlimit(resource, limits):
+            raise ValueError("platform rejected RLIMIT_AS")
+
+    monkeypatch.setattr(guard_module, "_resource", FakeResource)
+    with pytest.raises(ToolResourceLimitError, match="could not apply"):
+        guard_module._apply_process_memory_limit(1024)
