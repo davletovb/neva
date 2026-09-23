@@ -645,9 +645,7 @@ class ReplayTape:
 
     def _append_success(self, prompt: str, response: str) -> None:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        self._records.append(
-            ReplayRecord(prompt=prompt, prompt_sha256=digest, response=response)
-        )
+        self._records.append(ReplayRecord(prompt=prompt, prompt_sha256=digest, response=response))
 
     def _append_error(self, prompt: str, exc: Exception) -> None:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
