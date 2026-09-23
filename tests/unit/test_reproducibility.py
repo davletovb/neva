@@ -160,6 +160,32 @@ def test_manifest_fingerprint_changes_with_behavior_affecting_environment_config
     assert first_manifest.environment["public_config"]["description"] == "first-description"
 
 
+def test_manifest_captures_per_agent_failure_policy_without_uuid_identity():
+    env = BasicEnvironment("policies", "per-agent behavior", RandomScheduler())
+    agent = TransformerAgent(name="agent", llm_backend=_deterministic_backend)
+    env.register_agent(agent, error_policy="return", error_value="fallback")
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+
+    assert manifest.environment["agent_error_policies"] == [
+        {
+            "agent_index": 0,
+            "agent_name": "agent",
+            "policy": {"policy": "return", "value": "fallback"},
+        }
+    ]
+    assert str(agent.id) not in json.dumps(manifest.environment)
+
+
+def test_manifest_rejects_duplicate_agent_names():
+    env = BasicEnvironment("duplicates", "ambiguous identity", RandomScheduler())
+    env.register_agent(TransformerAgent(name="same", llm_backend=_deterministic_backend))
+    env.register_agent(TransformerAgent(name="same", llm_backend=_deterministic_backend))
+
+    with pytest.raises(ReproducibilityError, match="unique agent names"):
+        create_run_manifest(env, seed=1, dependencies=[])
+
+
 def test_manifest_fingerprint_changes_with_environment_state():
     first = _build_random_env()
     second = _build_random_env()
