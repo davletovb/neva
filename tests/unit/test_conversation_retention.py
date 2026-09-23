@@ -200,9 +200,9 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
     assert all(len(turn.message.encode("utf-8")) <= 24 for turn in agent.conversation_state.turns)
 
 
-def test_surrogate_replacement_is_explicit_and_per_code_point():
+def test_surrogate_replacement_is_explicit_and_per_code_unit():
     lone = json.loads('"\\ud800"')
-    pair = json.loads('"\\ud800\\udc00"')
+    pair = "\\ud800\\udc00"
 
     lone_state = ConversationState("agent", max_turn_bytes=100)
     pair_state = ConversationState("agent", max_turn_bytes=100)
