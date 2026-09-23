@@ -88,7 +88,7 @@ PR #70 completes the remaining library-level recovery gap:
 - Appends, reads, and rotation are coordinated across processes by a sibling advisory lock file, closing the multi-process rotation race while retaining fsync, torn-tail separation, tolerant loading, and bounded backup retention.
 - Circuit-breaker tests now cover concurrent half-open contention (exactly one recovery probe) and interrupted/rejected probe release so later recovery attempts cannot be permanently stranded.
 
-Boundary: recovery is synchronous and at-least-once at the turn level. If a custom agent or `on_turn_complete()` hook performs irreversible side effects before raising, an enabled retry can repeat those side effects; callers should scope `retry_on` to retry-safe failures or make side effects idempotent.
+Boundary: automatic retries apply only to context construction and agent execution before a successful turn completes. Once `agent.step()` succeeds, `on_turn_complete()` is not retried, preventing a hook failure from repeating a completed model/backend call. Agent execution itself is still at-least-once when retries are enabled, so callers should scope `retry_on` to retry-safe failures or make external side effects idempotent. Recovery policy/state counters are runtime-only and intentionally remain configured on the receiving environment across checkpoint restore rather than being serialized.
 
 ### 3. Tool schemas, permissions, and execution limits — mostly addressed
 
