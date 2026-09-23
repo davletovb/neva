@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from concurrent.futures import CancelledError
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional, Tuple, Type
 
@@ -52,6 +53,8 @@ class RecoveryPolicy:
         return self.max_retries + 1
 
     def should_retry(self, exc: BaseException, attempt: int) -> bool:
+        if isinstance(exc, CancelledError):
+            return False
         return attempt < self.max_attempts and isinstance(exc, self.retry_on)
 
     def delay_for(self, attempt: int) -> float:
