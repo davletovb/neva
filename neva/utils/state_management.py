@@ -43,7 +43,7 @@ _TRUNCATION_MARKER = "...[truncated]"
 def _truncate_utf8(message: str, max_bytes: Optional[int]) -> str:
     """Normalize and bound a stored message when a UTF-8 byte ceiling is configured.
 
-    Python's UTF-8 encoder uses ``?`` for each isolated surrogate when
+    Python's UTF-8 encoder uses ``?`` for each surrogate code unit when
     ``errors="replace"``. With no ceiling, the original string is returned
     byte-for-byte unchanged.
     """
