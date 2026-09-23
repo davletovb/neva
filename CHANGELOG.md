@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authoritative account-spend total while preserving in-flight reservations.
   Unpriced or non-finite model pricing still fails closed when spend
   enforcement is active.
+- Tool execution guardrails now cover direct calls as well as agent-mediated
+  calls. `Tool.use()` enforces declared schemas and an optional per-tool guard;
+  agent and tool guards compose without duplicate execution. `ToolLimits`
+  adds per-tool concurrency quotas plus opt-in process isolation for hard
+  timeouts, child-side output truncation before IPC, and optional
+  `resource.RLIMIT_AS` memory ceilings where supported. The legacy
+  thread-timeout behavior remains the compatibility default.
 - Tool-call guardrails: `AIAgent(tool_guard=ToolGuard(...))` (forwarded by
   `GPTAgent` and `TransformerAgent`) enforces code-level policy independent of
   prompt content — an allowlist, an approval hook called with each `ToolCall`,
