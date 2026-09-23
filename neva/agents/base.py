@@ -50,6 +50,7 @@ from neva.utils.telemetry import get_telemetry
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.environments.base import Environment
     from neva.tools.guard import ToolGuard
+    from neva.tools.loop import ToolLoopConfig, ToolLoopResult
     from neva.utils.observer import SimulationObserver
 
 
@@ -488,6 +489,24 @@ class AIAgent(ABC):
             arguments=arguments,
             output=str(output),
         )
+
+    def run_tool_loop(
+        self,
+        task: str,
+        *,
+        model: Optional[Callable[[str], str]] = None,
+        config: Optional["ToolLoopConfig"] = None,
+    ) -> "ToolLoopResult":
+        """Run a bounded model -> tool -> feedback loop for ``task``.
+
+        Every selected tool invocation is delegated back through call_tool(),
+        so schemas, permission checks, execution limits, and observer accounting
+        remain the single enforcement path.
+        """
+
+        from neva.tools.loop import run_tool_loop
+
+        return run_tool_loop(self, task, model=model, config=config)
 
     # ------------------------------------------------------------------
     # Memory utilities
