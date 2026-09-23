@@ -123,7 +123,7 @@ introducing a second persistence format:
   before duplication. `Environment.snapshot(limits=...)` applies the same
   envelope to version-2 runtime state and validates the complete final snapshot.
 - Limited loads lexically preflight JSON nesting, node tokens, and raw string
-  token bytes before UTF-8 decode or `json.loads`; the parsed graph is checked
+  tokens by their decoded UTF-8 size before full UTF-8 decode or `json.loads`; the parsed graph is checked
   again before constructing `SimulationSnapshot`. This closes the previously
   unbounded single-scalar/deep-structure path when callers opt into limits.
   The stdlib parser still materialises decoded text, so this is a bounded
