@@ -78,10 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Readers must opt into rotation with a sufficient `backup_count` to load
   retained generations oldest-first; a default reader loads only the active
   file. Retention pruning is performed once per configured log instance before
-  its first append, while rotations maintain the bound thereafter. Rotation is
-  single-process and the byte
-  value is a threshold rather than a per-record truncation rule, so an
-  oversized individual record is preserved intact. In addition,
+  its first append, while rotations maintain the bound thereafter. Append,
+  load, and rotation are coordinated across processes sharing the same path.
+  `rotate_bytes` remains a file-rotation threshold; the independent
+  `max_record_bytes` option supplies a strict per-record ceiling. In addition,
   `Environment.replay_failure(record)` re-dispatches a recorded turn through
   the normal turn path. Raw context is stored only when the log opts in with
   `include_context=True`. The log is external storage: it is preserved across
