@@ -108,8 +108,13 @@ class FaissVectorStoreMemory(MemoryModule):
         if vector.ndim != 1:
             raise MemoryConfigurationError(msg)
 
+        # Own a writable float32 buffer before optional in-place normalization.
+        # np.asarray can alias caller-owned/read-only arrays, whereas the
+        # historical tuple conversion always produced independent storage.
+        vector = self._np.array(vector, dtype="float32", copy=True)
+
         if self._normalize_embeddings:
-            # Normalize in-place for efficiency
+            # Normalize in-place on Neva-owned storage.
             vector_2d = vector.reshape(1, -1)
             self._faiss.normalize_L2(vector_2d)
             vector = vector_2d.reshape(-1)
