@@ -42,6 +42,19 @@ def test_composite_moving_agent_between_groups_detaches_old_group():
     assert "alpha" not in scheduler._group_order
 
 
+def test_composite_moving_paused_agent_propagates_pause_to_new_child():
+    scheduler = CompositeScheduler()
+    agent = StubAgent("paused-wanderer")
+    scheduler.add(agent, group="alpha")
+    scheduler.pause(agent)
+
+    scheduler.add(agent, group="beta")
+
+    assert scheduler.is_paused(agent)
+    assert scheduler._group_membership[agent] == "beta"
+    assert scheduler._group_schedulers["beta"].is_paused(agent)
+
+
 def test_composite_empty_group_raises_scheduling_error():
     scheduler = CompositeScheduler()
     with pytest.raises(SchedulingError, match="no groups"):
@@ -256,6 +269,120 @@ def test_composite_removal_calls_parent_and_child_hooks_once():
     replacement = StubAgent("replacement")
     scheduler.add(replacement)
     assert scheduler.get_next_agent() is replacement
+
+
+def test_composite_group_fairness_is_independent_of_group_size():
+    scheduler = CompositeScheduler()
+    alpha = [StubAgent(f"a{index}") for index in range(3)]
+    beta = [StubAgent("b0")]
+    gamma = [StubAgent(f"g{index}") for index in range(2)]
+
+    for agent in alpha:
+        scheduler.add(agent, group="alpha")
+    for agent in beta:
+        scheduler.add(agent, group="beta")
+    for agent in gamma:
+        scheduler.add(agent, group="gamma")
+
+    selected = [scheduler.get_next_agent().name for _ in range(18)]
+    groups = [name[0] for name in selected]
+
+    assert groups == ["a", "b", "g"] * 6
+    assert [name for name in selected if name.startswith("a")] == [
+        "a0",
+        "a1",
+        "a2",
+        "a0",
+        "a1",
+        "a2",
+    ]
+    assert [name for name in selected if name.startswith("g")] == [
+        "g0",
+        "g1",
+        "g0",
+        "g1",
+        "g0",
+        "g1",
+    ]
+
+
+def test_nested_composite_lifecycle_propagates_environment_pause_resume_and_termination():
+    inner = CompositeScheduler()
+    alpha = StubAgent("alpha")
+    beta = StubAgent("beta")
+    direct = StubAgent("direct")
+
+    outer = CompositeScheduler()
+    outer.add(alpha, group="nested", scheduler=inner)
+    outer.add(beta, group="nested", scheduler=inner)
+    outer.add(direct, group="direct")
+    env = StubEnvironment(outer)
+
+    assert inner.environment is env
+    assert inner._group_order == ["default"]
+    assert all(child.environment is env for child in inner._group_schedulers.values())
+    assert [outer.get_next_agent().name for _ in range(4)] == [
+        "alpha",
+        "direct",
+        "beta",
+        "direct",
+    ]
+
+    outer.pause(alpha)
+    assert outer.is_paused(alpha)
+    assert inner.is_paused(alpha)
+    assert inner._group_schedulers["default"].is_paused(alpha)
+    assert [outer.get_next_agent().name for _ in range(2)] == ["beta", "direct"]
+
+    outer.resume(alpha)
+    assert not outer.is_paused(alpha)
+    assert not inner.is_paused(alpha)
+    assert not inner._group_schedulers["default"].is_paused(alpha)
+    assert "alpha" in [outer.get_next_agent().name for _ in range(4)]
+
+    events = []
+    outer.register_termination_hook(lambda agent: events.append(("outer", agent.name)))
+    inner.register_termination_hook(lambda agent: events.append(("inner", agent.name)))
+    outer.terminate(alpha)
+
+    assert events == [("inner", "alpha"), ("outer", "alpha")]
+    assert alpha not in outer.agents
+    assert alpha not in inner.agents
+    assert inner._group_schedulers["default"].agents == [beta]
+    assert all(outer.get_next_agent() is not alpha for _ in range(6))
+
+
+def test_conditional_scheduler_round_robin_fairness_tracks_dynamic_eligibility():
+    scheduler = ConditionalScheduler()
+    allowed = {"a": False, "b": True, "c": True}
+    agents = [StubAgent(name) for name in ("a", "b", "c")]
+    for agent in agents:
+        scheduler.add(agent, condition=lambda current, allowed=allowed: allowed[current.name])
+
+    assert [scheduler.get_next_agent().name for _ in range(6)] == [
+        "b",
+        "c",
+        "b",
+        "c",
+        "b",
+        "c",
+    ]
+
+    allowed["a"] = True
+    assert [scheduler.get_next_agent().name for _ in range(6)] == [
+        "a",
+        "b",
+        "c",
+        "a",
+        "b",
+        "c",
+    ]
+
+    scheduler.pause(agents[1])
+    assert [scheduler.get_next_agent().name for _ in range(4)] == ["a", "c", "a", "c"]
+    scheduler.resume(agents[1])
+    scheduler.terminate(agents[2])
+    assert [scheduler.get_next_agent().name for _ in range(4)] == ["a", "b", "a", "b"]
 
 
 class StubAgent(AIAgent):

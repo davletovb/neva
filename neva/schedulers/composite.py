@@ -62,6 +62,26 @@ class CompositeScheduler(Scheduler):
 
         if group not in self._group_order:
             self._group_order.append(group)
+        if self.is_paused(agent):
+            group_scheduler.pause(agent)
+
+    def pause(self, agent: AIAgent) -> None:
+        """Pause an agent at both the composite and its current child scheduler."""
+
+        super().pause(agent)
+        group = self._group_membership.get(agent)
+        scheduler = self._group_schedulers.get(group) if group is not None else None
+        if scheduler is not None:
+            scheduler.pause(agent)
+
+    def resume(self, agent: AIAgent) -> None:
+        """Resume an agent at both the composite and its current child scheduler."""
+
+        super().resume(agent)
+        group = self._group_membership.get(agent)
+        scheduler = self._group_schedulers.get(group) if group is not None else None
+        if scheduler is not None:
+            scheduler.resume(agent)
 
     def get_next_agent(self) -> AIAgent:
         if not self._group_order:

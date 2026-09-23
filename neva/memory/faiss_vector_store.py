@@ -93,14 +93,28 @@ class FaissVectorStoreMemory(MemoryModule):
             MemoryConfigurationError: If embeddings are not 1D sequences.
         """
         embedding = self._embedder(text)
-        vector = self._np.asarray(tuple(float(x) for x in embedding), dtype="float32")
+        msg = "Embeddings must be one-dimensional sequences of floats"
+        try:
+            vector = self._np.asarray(embedding, dtype="float32")
+        except (TypeError, ValueError):
+            # NumPy does not materialize every generic iterable (for example,
+            # generators) directly. Preserve support for those while still
+            # validating array dimensionality before flattening/conversion.
+            try:
+                vector = self._np.asarray(tuple(embedding), dtype="float32")
+            except (TypeError, ValueError) as exc:
+                raise MemoryConfigurationError(msg) from exc
 
         if vector.ndim != 1:
-            msg = "Embeddings must be one-dimensional sequences of floats"
             raise MemoryConfigurationError(msg)
 
+        # Own a writable float32 buffer before optional in-place normalization.
+        # np.asarray can alias caller-owned/read-only arrays, whereas the
+        # historical tuple conversion always produced independent storage.
+        vector = self._np.array(vector, dtype="float32", copy=True)
+
         if self._normalize_embeddings:
-            # Normalize in-place for efficiency
+            # Normalize in-place on Neva-owned storage.
             vector_2d = vector.reshape(1, -1)
             self._faiss.normalize_L2(vector_2d)
             vector = vector_2d.reshape(-1)
@@ -202,8 +216,9 @@ class FaissVectorStoreMemory(MemoryModule):
         if not results:
             return ""
 
-        # Sort by score (desc) then by recency (desc)
-        results.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        # FAISS search already returns nearest neighbours in metric order.
+        # The default "Flat" factory uses L2 distance, where lower scores are
+        # better; re-sorting descending would invert semantic relevance.
         top_records = [record for _, _, record in results[:k]]
 
         return "\n".join(f"{r.speaker}: {r.message}" for r in top_records)

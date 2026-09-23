@@ -50,8 +50,10 @@ wikipedia = { version = "1.4.0", optional = true }
 "opentelemetry-sdk" = { version = "^1.23.0", optional = true }
 "deep-translator" = { version = "^1.11.4", optional = true }
 transformers = { version = "^4.35.2", optional = true }
+torch = { version = "^2.2.2", optional = true }
 mlflow = { version = "^2.9.1", optional = true }
 anthropic = { version = "^0.26.0", optional = true }
+httpx = { version = ">=0.23,<0.28", optional = true }
 "google-generativeai" = { version = "^0.3.2", optional = true }
 "faiss-cpu" = { version = "^1.7.4", optional = true }
 numpy = { version = "^1.26.4", optional = true }
@@ -70,18 +72,20 @@ sphinx = "7.2.6"
 types-requests = "2.31.0.7"
 
 [tool.poetry.extras]
-tools = ["wikipedia", "deep-translator", "transformers"]
+tools = ["wikipedia", "deep-translator", "transformers", "torch"]
 mlops = ["mlflow"]
-providers = ["openai", "anthropic", "google-generativeai"]
+providers = ["openai", "anthropic", "httpx", "google-generativeai"]
 observability = ["opentelemetry-api", "opentelemetry-sdk"]
 memory = ["faiss-cpu", "numpy"]
 all = [
     "wikipedia",
     "deep-translator",
     "transformers",
+    "torch",
     "mlflow",
     "openai",
     "anthropic",
+    "httpx",
     "google-generativeai",
     "opentelemetry-api",
     "opentelemetry-sdk",
@@ -123,7 +127,3 @@ files = ["neva"]
 [tool.bandit]
 skips = ["B101"]
 
-[tool.coverage.run]
-omit = [
-    "neva/memory/faiss_vector_store.py",
-]

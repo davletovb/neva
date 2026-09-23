@@ -2,10 +2,10 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `88815488` (PRs #49–#52, #54–#71 merged).
+Updated against `main` at `d7a7cac6` (PRs #49–#52, #54–#72 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
-- FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
+- FAISS PR #53 remains open/deferred, but PR #73 intentionally supersedes its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness/integration coverage. PR #53 should be rebased or retired after #73 lands.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
 ## Already implemented on merged main
@@ -173,14 +173,58 @@ externalize those blobs in their own checkpoint hooks/storage rather than Neva
 inventing a mandatory second format. `tracemalloc` benchmark figures exclude
 OS page cache and destination/temp-file space.
 
-### 5. Integration and coverage blind spots — partial
+### 5. Integration and coverage blind spots — complete for deterministic/local integrations
 
-- Tests with actual small transformer-model weights.
-- FAISS dependency-enabled CI; its implementation remains excluded from coverage and its local test is skipped.
-- Focused Composite/Conditional coverage is merged in PR #54: validation, group migration/removal, child unavailability, environment propagation, scheduler overrides, predicate errors/updates, pause filtering, and termination hooks. Deeper nested lifecycle and fairness testing remains open.
-- Connect/write timeout and additional malformed-response/SDK integration cases.
+PR #73 closes the remaining deterministic integration/coverage gaps without
+requiring live provider credentials or external model downloads:
 
-The two-agent loopback HTTP and actual read-timeout gap is covered by merged PR #52. TransformerAgent remains at 54%; the scheduler branch measures CompositeScheduler at 96% and ConditionalScheduler at 100% statement coverage. FAISS remains excluded on main while PR #53 is deferred.
+- A dedicated optional-integration CI job installs CPU PyTorch, Transformers,
+  FAISS/NumPy, and the declared Anthropic SDK on Python 3.11. The normal
+  Python 3.11–3.14 matrix remains lightweight; the optional job makes the
+  heavyweight paths mandatory rather than silently skipped.
+- `TransformerAgent` is exercised with an actual locally generated, saved, and
+  reloaded tiny T5 model. The test runs real `generate()` weights through the
+  agent path while using a minimal tensor tokenizer, so CI does not depend on
+  Hugging Face network availability. `torch` is now an explicit optional
+  dependency in the `tools`/`all` extras, matching the documented default
+  Transformer runtime.
+- The existing `FaissVectorStoreMemory` implementation is no longer globally
+  omitted from coverage. Dependency-enabled tests exercise construction,
+  semantic search, recent recall, clear/reuse, missing-dependency failures, and
+  a dedicated FAISS-module coverage gate of at least 80%. Review of the real
+  dependency path also fixed an ordering bug: FAISS already returns nearest
+  neighbours in metric order, so Neva no longer reverses L2 distances.
+  PR #53 remains separately deferred as a PR, but #73 intentionally overlaps
+  two of its test/coverage changes (removing the FAISS coverage omit and making
+  the missing-dependency test work when FAISS is installed). #73 targets the
+  FAISS implementation already present on main and adds broader correctness and
+  integration coverage; #53 should be rebased or retired after #73 lands.
+- Composite/Conditional scheduler coverage now includes group fairness
+  independent of group size, changing conditional eligibility, pause/resume
+  after condition changes, nested Composite schedulers, recursive environment
+  propagation, nested termination hooks, and lifecycle removal. This exposed
+  and fixed a Composite lifecycle bug: parent pause/resume is now propagated
+  to the current child scheduler, including nested composites, so a resumed
+  agent cannot remain stuck paused below the parent.
+- The real requests transport now has deterministic loopback tests for read
+  timeout (PR #52), connect timeout via a saturated Linux accept queue, and
+  request-body write timeout against a server that accepts but does not read.
+  All are verified through `GPTAgent` and bounded to one attempt when retries
+  are disabled.
+- Malformed HTTP integration cases cover invalid JSON, non-object JSON, and
+  wrong Chat Completions shapes. The provider path now rejects invalid/non-object
+  JSON with explicit `BackendError` diagnostics instead of leaking parser or
+  attribute errors.
+- SDK compatibility is exercised with the actual declared Anthropic package
+  against a local loopback `/v1/messages` endpoint, including SDK request
+  construction/object parsing and empty-content fail-closed behavior. No live
+  Anthropic credentials or network calls are used.
+
+Boundary: these tests establish deterministic compatibility with Neva's local
+transport/model/dependency contracts. They do not establish compatibility with
+every future third-party SDK release, every hardware backend, or live-provider
+service behavior. Live-provider smoke examples/credentials remain the separate
+section 9 concern, and provider context/token budgeting remains section 10.
 
 ### 6. Model-driven tool loop — not implemented
 
@@ -213,11 +257,14 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-1. Shared provider/spend budgets and durable failure records for unattended runs.
-2. Tool schemas, permissions, and limits before autonomous tool execution.
-3. Checkpoint/transcript resource ceilings and optional-integration/scheduler tests.
-4. Model-aware context limits and experiment manifests/replay.
-5. Bounded tool loops, streaming, and opt-in live-provider examples.
+Sections 1–5 are now implemented at the library/deterministic-integration layer.
+The remaining priorities are:
+
+1. Model-aware context/token budgeting and explicit output-token reservations.
+2. Reproducible experiment manifests, unified seeding, and deterministic offline replay.
+3. A bounded model-driven tool loop built on the completed tool guard/schema layer.
+4. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
+5. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
@@ -235,6 +282,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 - [x] Add durable failure records and replay control (PR #60).
 - [x] Tool-call guardrails (PR #61).
 - [x] Validated tool argument schemas (PR #62).
-- [ ] User decision on deferred FAISS PR #53.
+- [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of deferred PR #53.
+- [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
