@@ -126,6 +126,8 @@ class Tool(ABC):
     ) -> None:
         if self.__class__ is Tool:
             raise TypeError("Tool is a base class and must be subclassed")
+        if not callable(getattr(self, "_use_unchecked", None)):
+            raise TypeError(f"{type(self).__name__} must implement use(task)")
         self.name = name
         self.description = description
         self.capabilities: Sequence[str] = tuple(capabilities or ())
