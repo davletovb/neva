@@ -513,3 +513,41 @@ def test_rotated_log_can_be_reopened_with_same_policy(tmp_path):
     reopened = FailureLog(path, rotate_bytes=threshold, backup_count=1)
 
     assert [record.agent_name for record in reopened.load()] == ["a", "b"]
+
+
+
+def test_lower_backup_count_prunes_stale_generations_on_next_append(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    records = [make_record(agent_name=name) for name in ("a", "b", "c", "d", "e")]
+    threshold = encoded_record_size(records[0])
+    original = FailureLog(path, rotate_bytes=threshold, backup_count=3)
+    for record in records[:4]:
+        original.append(record)
+
+    assert (tmp_path / "failures.jsonl.3").exists()
+
+    reopened = FailureLog(path, rotate_bytes=10_000, backup_count=1)
+    reopened.append(records[4])
+
+    assert not (tmp_path / "failures.jsonl.2").exists()
+    assert not (tmp_path / "failures.jsonl.3").exists()
+    assert [record.agent_name for record in reopened.load()] == ["c", "d", "e"]
+
+
+def test_zero_backup_count_prunes_existing_generations_on_next_append(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    first = make_record(agent_name="a")
+    second = make_record(agent_name="b")
+    third = make_record(agent_name="c")
+    threshold = encoded_record_size(first)
+    original = FailureLog(path, rotate_bytes=threshold, backup_count=2)
+    original.append(first)
+    original.append(second)
+
+    assert (tmp_path / "failures.jsonl.1").exists()
+
+    reopened = FailureLog(path, rotate_bytes=10_000, backup_count=0)
+    reopened.append(third)
+
+    assert not (tmp_path / "failures.jsonl.1").exists()
+    assert [record.agent_name for record in reopened.load()] == ["b", "c"]
