@@ -424,7 +424,6 @@ def test_replay_nameless_record_validated_before_empty_environment():
         env.replay_failure(make_record(agent_name=None))
 
 
-
 @pytest.mark.parametrize("rotate_bytes", [0, -1, True, 1.5, "100"])
 def test_invalid_rotation_threshold_rejected(tmp_path, rotate_bytes):
     with pytest.raises(ValueError, match="rotate_bytes"):
@@ -439,6 +438,7 @@ def test_invalid_backup_count_rejected(tmp_path, backup_count):
             rotate_bytes=100,
             backup_count=backup_count,
         )
+
 
 def test_rotation_retains_records_and_loads_oldest_first(tmp_path):
     path = tmp_path / "failures.jsonl"
