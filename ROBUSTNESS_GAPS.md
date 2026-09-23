@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `17c96a4a` (PRs #49–#52, #54–#69 merged).
+Updated against `main` at `94d72011` (PRs #49–#52, #54–#70 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
@@ -90,14 +90,20 @@ PR #70 completes the remaining library-level recovery gap:
 
 Boundary: automatic retries apply only to context construction and agent execution before a successful turn completes. Once `agent.step()` succeeds, `on_turn_complete()` is not retried, preventing a hook failure from repeating a completed model/backend call. Agent execution itself is still at-least-once when retries are enabled, so callers should scope `retry_on` to retry-safe failures or make external side effects idempotent. Recovery policy/state counters are runtime-only and intentionally remain configured on the receiving environment across checkpoint restore rather than being serialized.
 
-### 3. Tool schemas, permissions, and execution limits — mostly addressed
+### 3. Tool schemas, permissions, and execution limits — complete at the Neva tool layer
 
-- Tool-call guardrails (PR #61): `ToolGuard`/`ToolLimits` consulted by `AIAgent.call_tool` — allowlist, approval hook called with each `ToolCall` (only an identity `True` permits; non-bool, awaitable, or raised-exception approvals deny), execution timeout, and output truncation — all independent of model instructions.
-- Validated argument schemas (PR #62, merged): tools declare `ArgumentSchema`/`ArgumentSpec` rules (type, required, min/max length, min/max value, choices; unknown keys rejected unless `allow_extra=True`); `call_tool` validates mapping arguments (a raw string counts as `{"input": ...}`) and fails closed before execution.
-- PR #63 adds schemas to the built-in calculator, Wikipedia, summarizer, and translator tools. They share the normalizer's alias constant and preserve `input`/`task`/`query`/`text`, metadata-bearing calls, and single-string mappings. Mapping shapes that previously fell through to JSON serialization and reached the tool as JSON text are now rejected before execution.
-- Remaining: per-tool resource quotas beyond time and returned-string size (a timed-out tool keeps its daemon thread until it returns, and truncation does not bound peak output memory); direct `Tool.use` calls (as in the shipped examples) bypass both guardrails and schema validation.
+PR #71 closes the remaining library-level execution gap while preserving the existing API:
 
-Regex prompt validation is input hygiene, not protection against prompt injection or unauthorized execution. Narrow math bounds and corrected README wording do not close this gap.
+- Direct `Tool.use()` now routes through the base tool execution wrapper. Declared argument schemas are enforced before the implementation body, so a direct call can no longer bypass schema validation. Tools can also carry their own `ToolGuard` via `set_tool_guard()`; that policy applies to direct calls as well as agent-mediated calls.
+- `AIAgent.call_tool()` composes its agent guard with any tool-level guard. Both permission checks run before execution, their execution ceilings are combined fail-closed (the stricter timeout/output/memory ceiling wins), and each guard's per-tool concurrency quota is acquired without running the tool twice.
+- `ToolLimits(max_concurrency=N)` bounds simultaneous executions of a given tool object for each guard instance.
+- The historical thread timeout remains the compatibility default. `ToolLimits(timeout=..., isolate_process=True)` adds an opt-in hard timeout: the tool runs in a child process and an over-time worker is terminated (and killed if necessary), avoiding the abandoned daemon-thread problem for callers that need a hard boundary.
+- In isolated mode, `max_output_chars` is applied in the child before IPC so the parent does not materialise an unbounded returned string. Optional `max_memory_bytes` adds an address-space ceiling using `resource.RLIMIT_AS` where that facility is available; unsupported platforms reject the setting rather than pretending to enforce it.
+- Tests cover direct-call schema and permission enforcement, composition of agent/tool limits, hard process timeout cleanup, isolated output bounding, concurrency quotas, and invalid resource configurations.
+
+Boundary: this is a library-level execution boundary, not a universal OS/container sandbox. The default thread timeout still cannot forcibly stop arbitrary synchronous code. Process isolation must be explicitly enabled for hard termination; on spawn-only platforms the tool and configured callables must be picklable. `RLIMIT_AS` memory enforcement is platform-dependent, and tools still inherit the child process's filesystem/network credentials unless the application supplies a stronger external sandbox.
+
+Regex prompt validation is input hygiene, not protection against prompt injection or unauthorized execution. Permission enforcement belongs to the tool guard path above.
 
 ### 4. Checkpoint and transcript scalability — partial
 
