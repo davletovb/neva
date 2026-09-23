@@ -265,3 +265,49 @@ def test_sqlite_scope_configuration_mismatch_fails_closed(tmp_path):
             max_cost=1.0,
             state_path=path,
         )
+
+
+
+def test_cancelled_sqlite_waiter_does_not_block_queue(tmp_path):
+    path = tmp_path / "provider.sqlite3"
+    coordinator = ProviderResourceCoordinator(
+        scope="cancel-sqlite",
+        rate=None,
+        max_concurrency=1,
+        state_path=path,
+        poll_interval=0.01,
+        lease_ttl=10.0,
+    )
+    first = coordinator.acquire()
+    cancel = threading.Event()
+    outcome = []
+
+    def cancelled_waiter():
+        try:
+            coordinator.acquire(cancel_event=cancel)
+        except RateLimiterCancelledError:
+            outcome.append("cancelled")
+
+    worker = threading.Thread(target=cancelled_waiter)
+    worker.start()
+    time.sleep(0.05)
+    cancel.set()
+    worker.join(timeout=2)
+    coordinator.release(first)
+
+    assert not worker.is_alive()
+    assert outcome == ["cancelled"]
+
+    acquired = []
+
+    def next_waiter():
+        permit = coordinator.acquire()
+        acquired.append(True)
+        coordinator.release(permit)
+
+    next_worker = threading.Thread(target=next_waiter)
+    next_worker.start()
+    next_worker.join(timeout=2)
+
+    assert not next_worker.is_alive()
+    assert acquired == [True]
