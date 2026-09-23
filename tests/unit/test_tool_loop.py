@@ -294,6 +294,7 @@ def test_returned_awaitable_becomes_bounded_protocol_feedback():
         def __call__(self, prompt):
             self.calls += 1
             if self.calls == 1:
+
                 async def later():
                     return _final("late")
 
