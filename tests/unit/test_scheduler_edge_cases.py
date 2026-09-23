@@ -298,8 +298,6 @@ def test_nested_composite_lifecycle_propagates_environment_pause_resume_and_term
     alpha = StubAgent("alpha")
     beta = StubAgent("beta")
     direct = StubAgent("direct")
-    inner.add(alpha, group="inner-alpha")
-    inner.add(beta, group="inner-beta")
 
     outer = CompositeScheduler()
     outer.add(alpha, group="nested", scheduler=inner)
@@ -308,6 +306,7 @@ def test_nested_composite_lifecycle_propagates_environment_pause_resume_and_term
     env = StubEnvironment(outer)
 
     assert inner.environment is env
+    assert inner._group_order == ["default"]
     assert all(child.environment is env for child in inner._group_schedulers.values())
     assert [outer.get_next_agent().name for _ in range(4)] == [
         "alpha",
@@ -319,13 +318,13 @@ def test_nested_composite_lifecycle_propagates_environment_pause_resume_and_term
     outer.pause(alpha)
     assert outer.is_paused(alpha)
     assert inner.is_paused(alpha)
-    assert inner._group_schedulers["inner-alpha"].is_paused(alpha)
+    assert inner._group_schedulers["default"].is_paused(alpha)
     assert [outer.get_next_agent().name for _ in range(2)] == ["beta", "direct"]
 
     outer.resume(alpha)
     assert not outer.is_paused(alpha)
     assert not inner.is_paused(alpha)
-    assert not inner._group_schedulers["inner-alpha"].is_paused(alpha)
+    assert not inner._group_schedulers["default"].is_paused(alpha)
     assert "alpha" in [outer.get_next_agent().name for _ in range(4)]
 
     events = []
@@ -336,7 +335,7 @@ def test_nested_composite_lifecycle_propagates_environment_pause_resume_and_term
     assert events == [("inner", "alpha"), ("outer", "alpha")]
     assert alpha not in outer.agents
     assert alpha not in inner.agents
-    assert "inner-alpha" not in inner._group_schedulers
+    assert inner._group_schedulers["default"].agents == [beta]
     assert all(outer.get_next_agent() is not alpha for _ in range(6))
 
 
