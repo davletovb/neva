@@ -152,6 +152,90 @@ def test_manifest_marks_builtin_live_provider_as_not_exactly_reproducible():
     )
 
 
+def test_cache_policy_fingerprints_initial_lru_state_without_exposing_values():
+    env = BasicEnvironment("cache", "state", RandomScheduler())
+    cache = LLMCache(max_size=3)
+    cache.set("secret prompt", "secret response")
+    agent = TransformerAgent(name="cached", llm_backend=_deterministic_backend, cache=cache)
+    env.register_agent(agent)
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+    policy = manifest.agents[0]["cache"]
+
+    assert policy["initial_entries"] == 1
+    assert len(policy["state_sha256"]) == 64
+    assert "secret prompt" not in json.dumps(policy)
+    assert "secret response" not in json.dumps(policy)
+
+
+def test_provider_backed_gpt_can_record_then_replay_offline(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "live-recorded-response"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }
+
+    def fake_post(url, *, headers, json, timeout):
+        calls.append(json)
+        return Response()
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+
+    recording_env = BasicEnvironment("provider", "record once", RandomScheduler())
+    recording_agent = GPTAgent(
+        name="provider-agent",
+        api_key="test-key",
+        provider="openai",
+        model="gpt-test",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    recording_env.register_agent(recording_agent)
+    manifest = prepare_reproducible_run(
+        recording_env,
+        seed=88,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+    tape.attach_recording(recording_env.agents)
+
+    assert recording_env.step() == "live-recorded-response"
+    assert len(calls) == 1
+    assert len(tape.records) == 1
+
+    replay_env = BasicEnvironment("provider", "record once", RandomScheduler())
+    replay_agent = GPTAgent(
+        name="provider-agent",
+        api_key="different-key-not-used",
+        provider="openai",
+        model="gpt-test",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    replay_env.register_agent(replay_agent)
+    replay_manifest = prepare_reproducible_run(
+        replay_env,
+        seed=88,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    assert replay_manifest.fingerprint() == manifest.fingerprint()
+
+    replay = tape.attach_replay(replay_env.agents, manifest=replay_manifest)
+    assert replay_env.step() == "live-recorded-response"
+    replay.assert_consumed()
+    assert len(calls) == 1
+
+
 def test_manifest_round_trip_and_fingerprint_ignore_creation_time(tmp_path):
     env = _build_random_env()
     first = prepare_reproducible_run(
@@ -198,9 +282,7 @@ def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
         optional_libraries=False,
     )
     tape = ReplayTape.for_manifest(recording_manifest)
-    recorder = tape.recording_backend(_deterministic_backend)
-    for agent in recording_env.agents:
-        agent.set_llm_backend(recorder)
+    tape.attach_recording(recording_env.agents)
 
     recorded_outputs = [recording_env.step() for _ in range(12)]
     recorded_turns = {
@@ -224,9 +306,10 @@ def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
     assert replay_manifest.fingerprint() == recording_manifest.fingerprint()
 
     loaded_tape = ReplayTape.load(tape_path)
-    replay = loaded_tape.replay_backend(manifest=RunManifest.load(manifest_path))
-    for agent in replay_env.agents:
-        agent.set_llm_backend(replay)
+    replay = loaded_tape.attach_replay(
+        replay_env.agents,
+        manifest=RunManifest.load(manifest_path),
+    )
 
     replayed_outputs = [replay_env.step() for _ in range(12)]
     replayed_turns = {
@@ -302,6 +385,32 @@ def test_recorded_backend_failure_replays_as_recorded_error():
     replay = tape.replay_backend()
     with pytest.raises(RecordedReplayError, match=r"ValueError: bad:oops"):
         replay("oops")
+
+
+def test_manifest_and_tape_loaders_fail_closed_on_bad_shapes():
+    with pytest.raises(ReproducibilityError, match="manifest"):
+        RunManifest.from_dict({"version": 1, "created_at": "now", "seed": 1, "agents": 7})
+
+    with pytest.raises(ReproducibilityError, match="records"):
+        ReplayTape.from_dict({"version": 1, "records": ["not-an-object"]})
+
+    prompt = "x"
+    digest = __import__("hashlib").sha256(prompt.encode()).hexdigest()
+    with pytest.raises(ReproducibilityError, match="both response and error"):
+        ReplayTape.from_dict(
+            {
+                "version": 1,
+                "records": [
+                    {
+                        "prompt": prompt,
+                        "prompt_sha256": digest,
+                        "response": "ok",
+                        "error_type": "ValueError",
+                        "error_message": "bad",
+                    }
+                ],
+            }
+        )
 
 
 def test_replay_tape_detects_tampered_prompt_digest():
