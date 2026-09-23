@@ -252,14 +252,12 @@ class ProviderResourceCoordinator:
                         now = time.monotonic()
                         rate_wait = self._refill_local(now)
                         concurrency_available = (
-                            self.max_concurrency is None
-                            or len(self._active) < self.max_concurrency
+                            self.max_concurrency is None or len(self._active) < self.max_concurrency
                         )
                         reserved_total = sum(self._reservations.values())
                         if (
                             self.max_cost is not None
-                            and self._spent + reserved_total + reserve_cost
-                            > self.max_cost + _EPSILON
+                            and self._spent + reserved_total + reserve_cost > self.max_cost + _EPSILON
                         ):
                             raise SpendBudgetExceededError(
                                 "provider spend reservation exceeds remaining shared budget"
@@ -274,10 +272,7 @@ class ProviderResourceCoordinator:
                             self._queue.pop(0)
                             admitted = True
                             self._condition.notify_all()
-                            return ProviderPermit(
-                                owner=owner,
-                                reserved_cost=reserve_cost,
-                            )
+                            return ProviderPermit(owner=owner, reserved_cost=reserve_cost)
                         if not rate_available:
                             wait_for = max(0.001, rate_wait)
                 self._wait(cancel_event, wait_for)
