@@ -174,11 +174,14 @@ python -m benchmarks.checkpoint_scaling --profile standard --repeat 3 \
 
 The standard profile runs three increasing deterministic conversation sizes. Use
 `--profile quick --repeat 1` for a smoke run. Results include checkpoint bytes,
-wall-clock milliseconds from an untraced pass and peak Python allocations from
-a separate `tracemalloc` pass for `create_snapshot`, `save_snapshot`, and
-`load_snapshot`. Each stage therefore executes twice per sample. The benchmark
-has no performance pass/fail threshold: compare runs on equivalent hardware and
-use `--workdir` to measure the filesystem that will hold real checkpoints.
+wall-clock milliseconds from an untraced pass, peak Python allocations from a
+separate `tracemalloc` pass for `create_snapshot`, `save_snapshot`, and
+`load_snapshot`, and each stage's peak-Python-allocation / serialized-byte
+amplification ratio. Each stage therefore executes twice per sample. Use the
+ratio to identify workloads where application-specific externalization of large
+payloads may be worthwhile. The benchmark has no performance pass/fail
+threshold: compare runs on equivalent hardware and use `--workdir` to measure
+the filesystem that will hold real checkpoints.
 `--git-sha` records a local revision explicitly (otherwise `GITHUB_SHA` is
 used when available). `tracemalloc` does not include OS page cache or
 temporary/destination file space.
@@ -316,12 +319,20 @@ scheduler = create_scheduler("my_scheduler")
 - **Stateful Agents**: Built-in conversation state tracking and snapshot/restore
   helpers let you persist simulations mid-run and resume them later. Stored
   history is unlimited by default, or can be bounded explicitly with
-  `ConversationState(max_turns=..., max_turn_bytes=...)`. When a byte ceiling
-  is configured, every stored message is normalized to valid UTF-8 (each
-  surrogate code unit becomes `?`); messages over the ceiling are then safely
-  truncated with a `...[truncated]` marker. The live response returned by the
-  agent remains unchanged. Live providers receive
-  a recent-turn window as chat messages, not the full stored transcript.
+  `ConversationState(max_turns=..., max_turn_bytes=..., max_history_bytes=...)`.
+  `max_turn_bytes` bounds each stored message; `max_history_bytes` bounds the
+  aggregate UTF-8 bytes of retained messages and evicts oldest turns as needed.
+  A single newest message larger than either byte ceiling is safely truncated
+  with a `...[truncated]` marker, while the live response returned by the agent
+  remains unchanged. Live providers receive a recent-turn window as chat
+  messages, not the full stored transcript. Checkpoint callers can additionally
+  opt into `CheckpointLimits(max_depth=..., max_nodes=...,
+  max_string_bytes=..., max_total_string_bytes=...)` on
+  `Environment.snapshot()/restore()` and `create/save/load_snapshot()`.
+  Loads preflight structure and JSON string-token size before UTF-8 decode and
+  parsing; `max_bytes=` remains the separate exact serialized-file ceiling.
+  These are resource ceilings for the existing monolithic JSON checkpoint
+  format, not an OS memory limit or a streaming JSON parser.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
