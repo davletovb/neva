@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network downloads; FAISS has a dedicated >=80% module coverage gate; and a
   local Anthropic /v1/messages server exercises actual SDK request/response
   objects without live credentials. The tools extra now explicitly includes
-  torch.
+  torch. The providers extra constrains httpx below 0.28 to keep the declared
+  Anthropic 0.26 client compatible with its HTTP client constructor.
 - Provider transport integration now covers deterministic loopback connect,
   read, and request-body write timeouts plus invalid JSON, non-object JSON, and
   malformed Chat Completions payloads. Invalid/non-object provider JSON fails
