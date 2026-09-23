@@ -324,15 +324,18 @@ scheduler = create_scheduler("my_scheduler")
   aggregate UTF-8 bytes of retained messages and evicts oldest turns as needed.
   A single newest message larger than either byte ceiling is safely truncated
   with a `...[truncated]` marker, while the live response returned by the agent
-  remains unchanged. Live providers receive a recent-turn window as chat
-  messages, not the full stored transcript. Checkpoint callers can additionally
+  remains unchanged. Direct edits to the public `turns` list are reconciled on
+  the next `record_turn()` or serialization call so aggregate accounting cannot
+  stay stale. Live providers receive a recent-turn window as chat messages, not
+  the full stored transcript. Checkpoint callers can additionally
   opt into `CheckpointLimits(max_depth=..., max_nodes=...,
   max_string_bytes=..., max_total_string_bytes=...)` on
   `Environment.snapshot()/restore()` and `create/save/load_snapshot()`.
   Loads preflight structure and JSON string-token size before UTF-8 decode and
   parsing; `max_bytes=` remains the separate exact serialized-file ceiling.
-  These are resource ceilings for the existing monolithic JSON checkpoint
-  format, not an OS memory limit or a streaming JSON parser.
+  Limit violations raise `ValueError` with the violated ceiling named in the
+  message. These are resource ceilings for the existing monolithic JSON
+  checkpoint format, not an OS memory limit or a streaming JSON parser.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
