@@ -210,9 +210,7 @@ class GPTAgent(AIAgent):
                 "configure either spend_budget or provider_spend_limit, not both"
             )
         if provider_spend_limit is not None and llm_backend is not None:
-            raise ConfigurationError(
-                "provider_spend_limit requires the built-in provider backend"
-            )
+            raise ConfigurationError("provider_spend_limit requires the built-in provider backend")
         if billing_reconciler is not None and not callable(billing_reconciler):
             raise ConfigurationError("billing_reconciler must be callable")
         if billing_reconciler is not None and spend_budget is None and provider_spend_limit is None:
@@ -281,12 +279,8 @@ class GPTAgent(AIAgent):
         return float(cost)
 
     def _reservation_cost(self, prompt: str) -> float:
-        if (
-            self._spend_budget is None
-            and (
-                self._provider_resources is None
-                or self._provider_resources.max_cost is None
-            )
+        if self._spend_budget is None and (
+            self._provider_resources is None or self._provider_resources.max_cost is None
         ):
             return 0.0
         prompt_tokens = estimate_token_count(self._request_text(prompt))
@@ -359,9 +353,7 @@ class GPTAgent(AIAgent):
                 self._provider_resources.release(
                     permit,
                     actual_cost=(
-                        actual_cost
-                        if self._provider_resources.max_cost is not None
-                        else None
+                        actual_cost if self._provider_resources.max_cost is not None else None
                     ),
                 )
             except Exception as exc:
@@ -440,12 +432,9 @@ class GPTAgent(AIAgent):
                             prompt_tokens=prompt_tokens,
                             response_tokens=response_tokens,
                         )
-                    if (
-                        self._spend_budget is not None
-                        or (
-                            self._provider_resources is not None
-                            and self._provider_resources.max_cost is not None
-                        )
+                    if self._spend_budget is not None or (
+                        self._provider_resources is not None
+                        and self._provider_resources.max_cost is not None
                     ):
                         actual_cost = self._call_cost(
                             prompt_tokens=prompt_tokens,
