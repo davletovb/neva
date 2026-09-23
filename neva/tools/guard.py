@@ -15,7 +15,17 @@ import multiprocessing
 import threading
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterable,
+    Iterator,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from neva.utils.exceptions import (
     ToolExecutionError,
@@ -97,13 +107,18 @@ def _isolated_tool_worker(
             try:
                 connection.send(("error", exc))
             except Exception:
-                _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
+                _send_worker_message(
+                    connection, ("error_text", type(exc).__name__, str(exc))
+                )
             return
         _send_worker_message(connection, ("value", text))
     except BaseException as exc:
-        _send_worker_message(connection, ("error_text", type(exc).__name__, str(exc)))
+        _send_worker_message(
+            connection, ("error_text", type(exc).__name__, str(exc))
+        )
     finally:
         connection.close()
+
 
 @dataclass(frozen=True)
 class ToolLimits:
@@ -127,7 +142,9 @@ class ToolLimits:
 
     def __post_init__(self) -> None:
         if self.timeout is not None:
-            invalid = isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float))
+            invalid = isinstance(self.timeout, bool) or not isinstance(
+                self.timeout, (int, float)
+            )
             if not invalid:
                 try:
                     invalid = (
@@ -150,7 +167,9 @@ class ToolLimits:
                 or not isinstance(self.max_output_chars, int)
                 or self.max_output_chars <= 0
             ):
-                raise ToolGuardConfigurationError("max_output_chars must be a positive integer")
+                raise ToolGuardConfigurationError(
+                    "max_output_chars must be a positive integer"
+                )
 
         if self.max_concurrency is not None:
             if (
@@ -158,7 +177,9 @@ class ToolLimits:
                 or not isinstance(self.max_concurrency, int)
                 or self.max_concurrency <= 0
             ):
-                raise ToolGuardConfigurationError("max_concurrency must be a positive integer")
+                raise ToolGuardConfigurationError(
+                    "max_concurrency must be a positive integer"
+                )
 
         if not isinstance(self.isolate_process, bool):
             raise ToolGuardConfigurationError("isolate_process must be a bool")
@@ -173,7 +194,9 @@ class ToolLimits:
                 or not isinstance(self.max_memory_bytes, int)
                 or self.max_memory_bytes <= 0
             ):
-                raise ToolGuardConfigurationError("max_memory_bytes must be a positive integer")
+                raise ToolGuardConfigurationError(
+                    "max_memory_bytes must be a positive integer"
+                )
             if not self.isolate_process:
                 raise ToolGuardConfigurationError(
                     "max_memory_bytes requires isolate_process=True"
@@ -208,7 +231,9 @@ class ToolGuard:
                 ) from exc
             for name in iterator:
                 if not isinstance(name, str):
-                    raise ToolGuardConfigurationError("allowed_tools must contain only strings")
+                    raise ToolGuardConfigurationError(
+                        "allowed_tools must contain only strings"
+                    )
                 names.append(name)
             self.allowed_tools: Optional[FrozenSet[str]] = frozenset(names)
         else:
@@ -231,7 +256,9 @@ class ToolGuard:
             try:
                 approved = self.approve(call)
             except Exception:
-                logger.debug("Approval check for tool '%s' raised", call.name, exc_info=True)
+                logger.debug(
+                    "Approval check for tool '%s' raised", call.name, exc_info=True
+                )
                 return f"approval check for tool '{call.name}' failed"
             if inspect.isawaitable(approved):
                 close = getattr(approved, "close", None)
