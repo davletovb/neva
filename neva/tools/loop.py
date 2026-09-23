@@ -339,8 +339,10 @@ def run_tool_loop(
     correct them on a later step. An explicit final action terminates
     successfully; otherwise the loop stops after max_steps.
 
-    If model is omitted, agent.respond is used. Supplying a callable is useful
-    for provider-native wrappers or deterministic/offline tests.
+    If model is omitted, agent.generate_model_output is used so the already
+    composed bounded loop prompt is not wrapped in agent context a second time.
+    Supplying a callable is useful for provider-native wrappers or deterministic
+    offline tests.
     """
 
     active_config = ToolLoopConfig() if config is None else config
@@ -356,7 +358,7 @@ def run_tool_loop(
     ):
         raise ToolLoopConfigurationError("model must be a synchronous callable")
 
-    model_call = agent.respond if model is None else model
+    model_call = agent.generate_model_output if model is None else model
     tools = _tool_descriptions(agent, active_config)
     feedback: List[str] = []
     steps: List[ToolLoopStep] = []
