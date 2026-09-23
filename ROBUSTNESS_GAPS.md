@@ -290,13 +290,71 @@ in code-level tool schemas/guards, not in prompt instructions. The generic
 returns; provider-native generation/token limits must still be configured at
 the provider layer. Streaming/backpressure remains section 8.
 
-### 7. Reproducible experiments — not implemented as a complete system
+### 7. Reproducible experiments — complete at the Neva experiment boundary
 
-- Run manifests with provider/model identifiers, prompts, generation settings, dependency versions, seeds, scheduler configuration, and cache policy.
-- Unified seeding and deterministic offline replay.
-- Documented limits of live-provider reproducibility.
+PR #75 adds a single manifest/seeding/offline-replay workflow rather than
+treating checkpointed scheduler RNG state as sufficient reproducibility:
 
-Checkpointed scheduler RNG state alone does not establish reproducibility.
+- `prepare_reproducible_run(environment, seed=..., prompts=...)` applies one
+  validated seed and immediately captures a `RunManifest`.
+  `seed_everything(...)` / `Environment.seed(...)` seed the process-global
+  Python RNG, optional NumPy/PyTorch RNGs, Neva-owned random schedulers
+  recursively (including nested Composite groups), and explicit custom
+  agent/scheduler `set_seed` hooks. Nested scheduler streams receive stable
+  path-derived seeds rather than sharing one correlated stream. The operation
+  also sets `PYTHONHASHSEED` for child/future processes and records that the
+  current interpreter's hash seed cannot be changed retroactively.
+- Version-1 run manifests record exact caller-supplied prompts, environment and
+  recovery configuration, scheduler type/order/paused/configuration plus RNG
+  state digest, agent type/provider/model, relevant generation/request settings,
+  tool names, prompt-validator ceiling, backend identity, cache policy/capacity
+  and initial cache-state fingerprint, selected dependency versions, Python/
+  platform versions, seed application report, user metadata, and explicit
+  reproducibility notes. API keys and cached prompt/response contents are not
+  serialized.
+- Built-in scheduler capture covers round-robin/conditional indexes, queue/
+  priority/weight state, condition callable identities, Composite membership/
+  group order/recursive child schedulers, and random RNG-state digests. Custom
+  schedulers can expose `reproducibility_config()` for additional JSON-safe
+  configuration; callable identity remains descriptive rather than a guarantee
+  that arbitrary code is reconstructible.
+- `RunManifest.save/load` uses atomic JSON replacement and a canonical
+  compatibility fingerprint that excludes only `created_at`. Replay tapes can
+  bind to that fingerprint so changed seeds/config/dependencies/prompts are
+  rejected before replay.
+- `AIAgent.replayable_backend()` defines the record/replay boundary.
+  `GPTAgent` exposes either its custom backend or built-in provider backend;
+  `TransformerAgent` exposes custom or local Transformer generation.
+  `ReplayTape.attach_recording(agents)` wraps those boundaries and serializes
+  calls into one deterministic total order. `attach_replay(agents, manifest=...)`
+  installs one shared `ReplayBackend` across a fresh agent set.
+- Replay records exact model prompts plus response or failure metadata and a
+  prompt SHA-256. Replays validate exact prompt order/content, refuse changed
+  manifests and tampered digests, fail on extra/exhausted calls, expose
+  `assert_consumed()` for missing calls, and surface recorded failures as
+  `RecordedReplayError`. Manifest/tape JSON loaders validate their shapes
+  rather than leaking incidental parser/container errors.
+- End-to-end tests construct two independent RandomScheduler environments,
+  apply the same seed, record a model run, persist/load manifest+tape, and
+  reproduce the same outputs/transcripts offline. Additional tests cover global
+  RNG/scheduler repetition, nested Composite seeding, custom agent seed hooks,
+  provider/model/generation/cache/dependency manifest fields, secret exclusion,
+  cache-state fingerprints, built-in GPT HTTP record→offline replay without a
+  second network call, manifest mismatch, prompt mismatch, exhaustion,
+  unconsumed calls, recorded failures, tampering, and malformed persisted data.
+
+Boundary: reproducibility here is exact at the recorded Neva model boundary,
+not a claim that live providers are deterministic. Provider-side model
+revisions, routing, sampling/runtime implementations, hidden service state, and
+API behavior may change independently. NumPy/PyTorch seeding does not by itself
+guarantee deterministic hardware kernels; applications requiring that guarantee
+must configure the framework/hardware-specific deterministic settings.
+`PYTHONHASHSEED` only affects a process at interpreter startup. Recording
+serializes concurrent model-boundary calls to establish an exact order, so it
+can change timing/concurrency relative to an unrecorded live run. Manifests
+contain caller-supplied prompt strings and replay tapes contain exact model
+prompts/responses; both artifacts may contain sensitive data and should be
+protected accordingly.
 
 ### 8. Streaming — not implemented
 
@@ -317,13 +375,12 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-Sections 1–6 are now implemented at their documented library/orchestration boundaries.
+Sections 1–7 are now implemented at their documented library/orchestration/experiment boundaries.
 The remaining priorities are:
 
 1. Model-aware context/token budgeting and explicit output-token reservations.
-2. Reproducible experiment manifests, unified seeding, and deterministic offline replay.
-3. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
-4. Opt-in live-provider examples with explicit credential/cost/limit guidance.
+2. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
+3. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
@@ -344,5 +401,6 @@ The remaining priorities are:
 - [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of deferred PR #53.
 - [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 - [x] Complete bounded model-driven tool orchestration with schema/guard feedback and termination limits (PR #74).
+- [x] Complete run manifests, unified seeding, and deterministic offline model-boundary replay (PR #75).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
