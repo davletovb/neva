@@ -1,9 +1,9 @@
 import gc
 import logging
 import sys
-import weakref
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
