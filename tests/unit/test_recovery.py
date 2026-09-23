@@ -214,6 +214,21 @@ def test_deliberate_cancellation_is_never_retried():
     assert state["escalations"] == 1
 
 
+def test_failure_log_writes_physical_jsonl_newlines(tmp_path):
+    path = tmp_path / "failures.jsonl"
+    log = FailureLog(path, fsync=False)
+    log.append(_record("alice"))
+    log.append(_record("bob"))
+
+    raw = path.read_bytes()
+    assert raw.endswith(b"\n")
+    assert len(raw.splitlines()) == 2
+    assert [json.loads(line)["agent_name"] for line in raw.splitlines()] == [
+        "alice",
+        "bob",
+    ]
+
+
 def test_failure_log_enforces_utf8_record_ceiling(tmp_path):
     path = tmp_path / "failures.jsonl"
     baseline = _record("alice", message="", context=None)
