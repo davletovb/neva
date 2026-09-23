@@ -244,9 +244,7 @@ class ProviderResourceCoordinator:
                 wait_for = self.poll_interval
                 with self._condition:
                     if cancel_event is not None and cancel_event.is_set():
-                        raise RateLimiterCancelledError(
-                            "Provider resource acquisition cancelled"
-                        )
+                        raise RateLimiterCancelledError("Provider resource acquisition cancelled")
 
                     if self._queue and self._queue[0] == owner:
                         now = time.monotonic()
