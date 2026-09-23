@@ -12,13 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `seed_everything()`, `prepare_reproducible_run()`, and
   `Environment.seed()`. Manifests record explicit prompts, provider/model and
   generation settings, dependency/runtime versions, recursively captured
-  scheduler configuration, cache policy/initial-state fingerprint, seed
-  application, metadata, and live-provider reproducibility caveats. Unified
+  scheduler configuration (including pending event queues), behavior-affecting
+  environment config/state, initial conversation/agent prompt inputs, cache
+  policy/initial-state fingerprint, seed application, metadata, and live-provider
+  reproducibility caveats. Unified
   seeding covers Python plus optional NumPy/PyTorch RNGs, nested Neva scheduler
   RNGs, and custom agent/scheduler `set_seed` hooks. Agents expose a
   `replayable_backend()` boundary so real provider-backed GPT agents, local
   Transformers, and custom backends can be recorded without private
-  monkey-patching. Offline tapes serialize model-boundary calls, persist
+  monkey-patching; recording wraps future backend resolution so GPT cooperative
+  cancellation remains intact. Offline tapes serialize model-boundary calls, persist
   atomically, bind optionally to a manifest fingerprint, validate exact prompt
   order/content, and fail closed on mismatched/exhausted/unconsumed/tampered
   replay data or recorded failures.
