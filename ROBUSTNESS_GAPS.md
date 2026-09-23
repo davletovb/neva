@@ -226,9 +226,53 @@ every future third-party SDK release, every hardware backend, or live-provider
 service behavior. Live-provider smoke examples/credentials remain the separate
 section 9 concern, and provider context/token budgeting remains section 10.
 
-### 6. Model-driven tool loop — not implemented
+### 6. Model-driven tool loop — complete at the Neva orchestration layer
 
-Structured tool selection, validation, permission checks, execution, result feedback, and termination need a bounded integrated loop. Existing programmatic tool calls are not that loop.
+PR #74 adds one bounded model/tool/feedback loop on top of the completed tool
+schema and guard layer:
+
+- `run_tool_loop(agent, task, ...)` and `AIAgent.run_tool_loop(...)` accept
+  either an explicit model callable or, by default, the agent's normal
+  `respond()` path. The model protocol is deliberately small and
+  provider-neutral: each turn must be exactly one JSON object selecting either
+  `{"action":"tool","name":...,"arguments":...}` or
+  `{"action":"final","output":...}`.
+- Registered tool metadata is advertised in structured form, including
+  descriptions/capabilities and declarative `ArgumentSchema` field
+  requirements/bounds where available. Duplicate tool names fail before a
+  model call, and `max_tools` bounds the advertised registry.
+- Model-selected calls never execute tools directly. Every call is converted to
+  `ToolCall` and routed through `AIAgent.call_tool()`, preserving the
+  section-3 enforcement path for agent/tool allowlists, synchronous approval,
+  argument schemas, per-tool concurrency, timeout/output/memory limits, process
+  isolation, observer usage accounting, and normalized tool errors.
+- Unknown tools, schema violations, permission denials, execution failures, and
+  malformed/oversized model actions become bounded feedback records rather than
+  bypasses or unbounded retry loops. The model can correct the action on a later
+  step; each model turn consumes the same global step budget.
+- `ToolLoopConfig` explicitly bounds model turns/tool calls
+  (`max_steps`), advertised tools, retained/parsed model-output characters,
+  each feedback record, and orchestration-prompt characters. Old feedback is
+  dropped first when needed to keep a later prompt within its envelope. If the
+  task/tool metadata alone cannot fit, the loop fails before calling the model.
+- An explicit `final` action terminates successfully. A model that never
+  finalizes stops at `max_steps` with a non-success `ToolLoopResult`; there
+  is no implicit unbounded agentic loop.
+- Tests cover successful tool→feedback→final execution, schema correction,
+  agent- and tool-level permission denial, unknown tools, malformed JSON/action
+  shapes, non-string and oversized model outputs, bounded tool feedback,
+  prompt/tool-registry limits, duplicate tool names, schema metadata
+  advertisement, direct finalization, and max-step exhaustion.
+
+Boundary: this is a generic text-JSON orchestration layer, not provider-native
+function calling and not a security sandbox. A provider/model may still ignore
+the requested JSON protocol; those failures are bounded and fed back rather
+than trusted. Tool outputs are labelled untrusted data but can still influence
+model behavior. Authorization and execution safety therefore continue to live
+in code-level tool schemas/guards, not in prompt instructions. The generic
+`max_model_output_chars` limit bounds retained/parsing work after a model call
+returns; provider-native generation/token limits must still be configured at
+the provider layer. Streaming/backpressure remains section 8.
 
 ### 7. Reproducible experiments — not implemented as a complete system
 
@@ -262,9 +306,8 @@ The remaining priorities are:
 
 1. Model-aware context/token budgeting and explicit output-token reservations.
 2. Reproducible experiment manifests, unified seeding, and deterministic offline replay.
-3. A bounded model-driven tool loop built on the completed tool guard/schema layer.
-4. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
-5. Opt-in live-provider examples with explicit credential/cost/limit guidance.
+3. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
+4. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
