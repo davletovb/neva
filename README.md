@@ -433,7 +433,12 @@ scheduler = create_scheduler("my_scheduler")
   schema failures, and permission denials are returned to the model as bounded
   feedback so it can correct itself on a later step. `ToolLoopConfig` bounds
   model turns/tool calls, advertised tools, retained model output, each feedback
-  record, and orchestration prompt size; hitting `max_steps` returns a
+  record, and orchestration prompt size. Tool advertisement is budget-aware:
+  rich schema metadata is used when it fits, then compact descriptions, then
+  name-only entries, without silently dropping registered tool names. On the
+  default agent model path, `max_prompt_chars` may not exceed the agent's own
+  prompt-validator ceiling; incompatible limits fail before the model call.
+  Hitting `max_steps` returns a
   non-success `ToolLoopResult` instead of looping indefinitely. When no
   explicit model callable is supplied, the loop uses the agent's
   `generate_model_output()` hook: this sends the already composed bounded loop
