@@ -232,8 +232,14 @@ PR #74 adds one bounded model/tool/feedback loop on top of the completed tool
 schema and guard layer:
 
 - `run_tool_loop(agent, task, ...)` and `AIAgent.run_tool_loop(...)` accept
-  either an explicit model callable or, by default, the agent's normal
-  `respond()` path. The model protocol is deliberately small and
+  either an explicit synchronous model callable or, by default, the agent's
+  `generate_model_output()` raw-generation hook. That hook consumes the
+  already composed bounded loop prompt without `prepare_prompt()` adding
+  memory/tool summaries a second time. TransformerAgent and GPTAgent preserve
+  their normal `respond()` behavior outside the loop; GPTAgent's raw path
+  still uses its provider admission/retry/spend/circuit/cache/telemetry stack
+  while excluding previous conversation history. The model protocol is
+  deliberately small and
   provider-neutral: each turn must be exactly one JSON object selecting either
   `{"action":"tool","name":...,"arguments":...}` or
   `{"action":"final","output":...}`.
@@ -259,8 +265,10 @@ schema and guard layer:
   finalizes stops at `max_steps` with a non-success `ToolLoopResult`; there
   is no implicit unbounded agentic loop.
 - Tests cover successful tool→feedback→final execution, schema correction,
-  agent- and tool-level permission denial, unknown tools, malformed JSON/action
-  shapes, non-string and oversized model outputs, bounded tool feedback,
+  agent- and tool-level permission denial, unknown tools, malformed/duplicate
+  JSON fields/action shapes, synchronous-model enforcement, non-string,
+  awaitable, and oversized model outputs, raw Transformer/GPT default model
+  paths without context re-wrapping, bounded tool feedback,
   prompt/tool-registry limits, duplicate tool names, schema metadata
   advertisement, direct finalization, and max-step exhaustion.
 
@@ -301,7 +309,7 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-Sections 1–5 are now implemented at the library/deterministic-integration layer.
+Sections 1–6 are now implemented at their documented library/orchestration boundaries.
 The remaining priorities are:
 
 1. Model-aware context/token budgeting and explicit output-token reservations.
@@ -327,5 +335,6 @@ The remaining priorities are:
 - [x] Validated tool argument schemas (PR #62).
 - [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of deferred PR #53.
 - [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
+- [x] Complete bounded model-driven tool orchestration with schema/guard feedback and termination limits (PR #74).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
