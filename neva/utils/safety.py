@@ -51,7 +51,17 @@ class PromptValidator:
 
 
 class RateLimiter:
-    """Simple token bucket rate limiter to guard API usage."""
+    """FIFO token-bucket limiter with cooperative cancellation.
+
+    The limiter is thread-safe and loop-agnostic. Waiters are admitted in FIFO
+    order. Token sleeps happen outside the mutex, and normal threading.Lock
+    acquisition is polled so a cancellation event can interrupt a waiter even
+    while another thread briefly owns the lock.
+
+    This class is process-local. GPTAgent uses ProviderResourceCoordinator by
+    default for automatic provider/account sharing and optional SQLite-backed
+    cross-process coordination.
+    """
 
     def __init__(self, rate: int, per: float = 60.0) -> None:
         if rate <= 0:
@@ -63,48 +73,104 @@ class RateLimiter:
         self._allowance = float(rate)
         self._last_check = time.monotonic()
         self._lock = threading.Lock()
+        self._next_ticket = 0
+        self._waiters = []  # type: list[tuple[int, threading.Event]]
+
+    def _lock_enter(self, cancel_event: Optional[threading.Event]) -> bool:
+        acquire = getattr(self._lock, "acquire", None)
+        if not callable(acquire):
+            self._lock.__enter__()
+            return False
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
+            try:
+                acquired = acquire(timeout=0.05)
+            except TypeError:
+                acquire()
+                acquired = True
+            if acquired:
+                return True
+
+    def _lock_exit(self, acquired_normally: bool) -> None:
+        if acquired_normally:
+            self._lock.release()
+        else:
+            self._lock.__exit__(None, None, None)
+
+    def _remove_waiter(self, ticket: int) -> None:
+        for index, (candidate, _) in enumerate(self._waiters):
+            if candidate == ticket:
+                self._waiters.pop(index)
+                break
+        if self._waiters:
+            self._waiters[0][1].set()
 
     def acquire(self, *, cancel_event: Optional[threading.Event] = None) -> None:
-        """Block until one token is available, optionally allowing cancellation.
+        """Block until one token is available, preserving FIFO waiter order."""
 
-        A set cancel_event raises ``RateLimiterCancelledError`` without
-        consuming a token. Token waits use Event.wait outside the lock. Lock
-        acquisition itself is not interruptible; cancellation is checked again
-        after acquiring it. Cancellation racing with token admission may lose
-        that race and does not revoke a token already granted: a caller that
-        can be cancelled should re-check ``cancel_event.is_set()`` after
-        acquire() returns before proceeding.
-
-        ``RateLimiterCancelledError`` inherits Exception and is distinct
-        from asyncio.CancelledError. Callers with broad retry handlers should
-        catch and re-raise this cancellation before handling other exceptions.
-
-        Limits apply to this instance only; pass the same limiter to share a
-        request-rate budget. This does not cancel in-flight provider calls or
-        automatically propagate cancellation from agents or asyncio tasks.
-        """
         if cancel_event is not None and cancel_event.is_set():
             raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
 
-        while True:
-            sleep_time = 0.0
-            with self._lock:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
-                current = time.monotonic()
-                time_passed = current - self._last_check
-                self._last_check = current
-                self._allowance += time_passed * (self._rate / self._per)
-                if self._allowance > self._rate:
-                    self._allowance = float(self._rate)
-                if self._allowance >= 1.0:
-                    self._allowance -= 1.0
-                    return
-                sleep_time = (1.0 - self._allowance) * (self._per / self._rate)
-            if cancel_event is None:
-                time.sleep(sleep_time)
-            elif cancel_event.wait(sleep_time):
+        acquired_normally = self._lock_enter(cancel_event)
+        try:
+            if cancel_event is not None and cancel_event.is_set():
                 raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
+            ticket = self._next_ticket
+            self._next_ticket += 1
+            wake = threading.Event()
+            self._waiters.append((ticket, wake))
+            if self._waiters[0][0] == ticket:
+                wake.set()
+        finally:
+            self._lock_exit(acquired_normally)
+
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                acquired_normally = self._lock_enter(None)
+                try:
+                    self._remove_waiter(ticket)
+                finally:
+                    self._lock_exit(acquired_normally)
+                raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
+
+            sleep_time = 0.05
+            is_head = False
+            acquired_normally = self._lock_enter(cancel_event)
+            try:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._remove_waiter(ticket)
+                    raise RateLimiterCancelledError("Rate limiter acquisition cancelled")
+                is_head = bool(self._waiters and self._waiters[0][0] == ticket)
+                if is_head:
+                    current = time.monotonic()
+                    time_passed = current - self._last_check
+                    self._last_check = current
+                    self._allowance += time_passed * (self._rate / self._per)
+                    if self._allowance > self._rate:
+                        self._allowance = float(self._rate)
+                    if self._allowance >= 1.0:
+                        self._allowance -= 1.0
+                        self._waiters.pop(0)
+                        if self._waiters:
+                            self._waiters[0][1].set()
+                        return
+                    sleep_time = (1.0 - self._allowance) * (
+                        self._per / self._rate
+                    )
+                    wake.clear()
+            finally:
+                self._lock_exit(acquired_normally)
+
+            if is_head:
+                if cancel_event is None:
+                    time.sleep(sleep_time)
+                elif cancel_event.wait(sleep_time):
+                    continue
+            elif cancel_event is None:
+                wake.wait(0.05)
+            elif cancel_event.wait(0.05):
+                continue
 
 
 class CircuitBreaker:
