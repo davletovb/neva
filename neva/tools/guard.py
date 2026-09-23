@@ -25,9 +25,11 @@ from neva.utils.exceptions import (
 )
 
 try:  # pragma: no cover - unavailable on Windows.
-    import resource as _resource
+    import resource as _resource_module
 except ImportError:  # pragma: no cover - platform dependent.
-    _resource = None
+    _resource_module = None  # type: ignore[assignment]
+
+_resource: Any = _resource_module
 
 __all__ = ["ToolGuard", "ToolLimits"]
 
@@ -314,7 +316,7 @@ class ToolGuard:
 
         methods = multiprocessing.get_all_start_methods()
         method = "fork" if "fork" in methods else "spawn"
-        context = multiprocessing.get_context(method)
+        context: Any = multiprocessing.get_context(method)
         receiver, sender = context.Pipe(duplex=False)
         process = context.Process(
             target=_isolated_tool_worker,
