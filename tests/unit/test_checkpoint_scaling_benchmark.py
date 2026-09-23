@@ -32,6 +32,7 @@ def test_run_case_reports_checkpoint_stage_metrics_and_cleans_files(tmp_path):
     for stage in ("create_snapshot", "save_snapshot", "load_snapshot"):
         assert result["stages"][stage]["median_ms"] >= 0
         assert result["stages"][stage]["median_peak_python_bytes"] >= 0
+        assert result["stages"][stage]["median_peak_to_checkpoint_ratio"] >= 0
 
 
 def test_run_benchmark_includes_machine_and_measurement_metadata(tmp_path):
@@ -56,6 +57,7 @@ def test_run_benchmark_includes_machine_and_measurement_metadata(tmp_path):
     assert result["git_sha"] == "deadbeef"
     assert "untraced" in result["measurement_notes"]["elapsed"]
     assert "separate tracemalloc pass" in result["measurement_notes"]["memory"]
+    assert "serialized checkpoint bytes" in result["measurement_notes"]["amplification"]
     assert result["measurement_notes"]["thresholds"] == (
         "none; compare results on equivalent hardware"
     )
