@@ -408,19 +408,34 @@ class RunManifest:
         version = payload.get("version", _MANIFEST_VERSION)
         if version != _MANIFEST_VERSION:
             raise ReproducibilityError(f"unsupported manifest version: {version}")
+        try:
+            prompts = _normalize_prompts(dict(payload.get("prompts", {})))
+            environment = dict(payload.get("environment", {}))
+            agents = list(payload.get("agents", []))
+            dependencies = dict(payload.get("dependencies", {}))
+            runtime = dict(payload.get("runtime", {}))
+            seed_report = dict(payload.get("seed_report", {}))
+            metadata = dict(payload.get("metadata", {}))
+            reproducibility = dict(payload.get("reproducibility", {}))
+            created_at = str(payload["created_at"])
+            seed = _validate_seed(payload["seed"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ReproducibilityError("manifest has an invalid shape") from exc
+        if not all(isinstance(agent, Mapping) for agent in agents):
+            raise ReproducibilityError("manifest agents must be JSON objects")
         return cls(
             version=version,
-            created_at=str(payload["created_at"]),
-            seed=_validate_seed(payload["seed"]),
-            prompts=deepcopy(dict(payload.get("prompts", {}))),
-            environment=deepcopy(dict(payload.get("environment", {}))),
+            created_at=created_at,
+            seed=seed,
+            prompts=deepcopy(prompts),
+            environment=deepcopy(environment),
             scheduler=deepcopy(payload.get("scheduler")),
-            agents=deepcopy(list(payload.get("agents", []))),
-            dependencies=deepcopy(dict(payload.get("dependencies", {}))),
-            runtime=deepcopy(dict(payload.get("runtime", {}))),
-            seed_report=deepcopy(dict(payload.get("seed_report", {}))),
-            metadata=deepcopy(dict(payload.get("metadata", {}))),
-            reproducibility=deepcopy(dict(payload.get("reproducibility", {}))),
+            agents=deepcopy(agents),
+            dependencies=deepcopy(dependencies),
+            runtime=deepcopy(runtime),
+            seed_report=deepcopy(seed_report),
+            metadata=deepcopy(metadata),
+            reproducibility=deepcopy(reproducibility),
         )
 
     def compatibility_payload(self) -> Dict[str, Any]:
@@ -479,7 +494,7 @@ def create_run_manifest(
             "routing, sampling/runtime implementations, and service state are outside Neva control"
         )
 
-    dependency_names = tuple(dependencies or _DEFAULT_DEPENDENCIES)
+    dependency_names = tuple(_DEFAULT_DEPENDENCIES if dependencies is None else dependencies)
     report = seed_report or SeedReport(
         seed=seed,
         scheduler_seeds={},
@@ -563,6 +578,8 @@ class ReplayRecord:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ReplayRecord":
+        if not isinstance(payload, Mapping):
+            raise ReproducibilityError("replay record must be a JSON object")
         prompt = payload.get("prompt")
         if not isinstance(prompt, str):
             raise ReproducibilityError("replay record prompt must be a string")
@@ -572,18 +589,22 @@ class ReplayRecord:
         response = payload.get("response")
         if response is not None and not isinstance(response, str):
             raise ReproducibilityError("replay record response must be a string or null")
+        error_type = payload.get("error_type")
+        error_message = payload.get("error_message")
+        if error_type is not None and not isinstance(error_type, str):
+            raise ReproducibilityError("replay record error_type must be a string or null")
+        if error_message is not None and not isinstance(error_message, str):
+            raise ReproducibilityError("replay record error_message must be a string or null")
+        if response is not None and error_type is not None:
+            raise ReproducibilityError("replay record cannot contain both response and error")
+        if response is None and error_type is None:
+            raise ReproducibilityError("replay record must contain a response or error")
         return cls(
             prompt=prompt,
             prompt_sha256=digest,
             response=response,
-            error_type=(
-                str(payload["error_type"]) if payload.get("error_type") is not None else None
-            ),
-            error_message=(
-                str(payload["error_message"])
-                if payload.get("error_message") is not None
-                else None
-            ),
+            error_type=error_type,
+            error_message=error_message,
         )
 
 
@@ -679,6 +700,8 @@ class ReplayTape:
         records_payload = payload.get("records", [])
         if not isinstance(records_payload, list):
             raise ReproducibilityError("replay tape records must be a list")
+        if not all(isinstance(item, Mapping) for item in records_payload):
+            raise ReproducibilityError("replay tape records must contain JSON objects")
         records = [ReplayRecord.from_dict(item) for item in records_payload]
         fingerprint = payload.get("manifest_fingerprint")
         if fingerprint is not None and not isinstance(fingerprint, str):
