@@ -342,6 +342,35 @@ scheduler = create_scheduler("my_scheduler")
   Limit violations raise `ValueError` with the violated ceiling named in the
   message. These are resource ceilings for the existing monolithic JSON
   checkpoint format, not an OS memory limit or a streaming JSON parser.
+- **Reproducible experiments**: `neva.utils.reproducibility` provides one
+  run-manifest/seeding/offline-replay workflow. Call
+  `prepare_reproducible_run(environment, seed=..., prompts=...)` before the
+  run to seed Python, optional NumPy/PyTorch runtimes, Neva scheduler RNGs
+  (including nested Composite schedulers), and custom `set_seed` hooks, then
+  capture exact prompt inputs, provider/model identifiers, generation settings,
+  dependency/runtime versions, scheduler configuration, cache policy plus an
+  initial cache-state fingerprint, and the seed report. `environment.seed(...)`
+  is the seeding-only convenience API. `ReplayTape.for_manifest(manifest)`
+  can attach recording to agents with `tape.attach_recording(env.agents)`;
+  save the manifest/tape, construct a fresh equivalently configured environment,
+  seed/capture its manifest, then use
+  `tape.attach_replay(env.agents, manifest=manifest)`. Replay validates exact
+  prompt order/content and refuses manifest, prompt, exhaustion, or unconsumed
+  call mismatches. Recording serializes model-boundary calls intentionally so
+  the tape has one deterministic total order. Replay of recorded model failures
+  raises `RecordedReplayError` with the recorded exception type/message rather
+  than recreating an arbitrary provider exception class.
+  This does **not** make live providers deterministic: server-side model
+  revisions, routing, sampling/runtime implementations, hidden service state,
+  and provider-side changes remain outside Neva's control. PyTorch/CUDA kernels
+  can also be nondeterministic unless the application configures the relevant
+  deterministic-algorithm settings. `PYTHONHASHSEED` is set for child/future
+  processes but cannot change hash randomization of the already-running Python
+  interpreter. Exact replay is guaranteed only at the recorded
+  prompt→response/error model boundary with matching local configuration.
+  Manifests contain the prompt strings supplied by the caller, and replay tapes
+  contain exact model prompts/responses, so treat both files as potentially
+  sensitive data.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
