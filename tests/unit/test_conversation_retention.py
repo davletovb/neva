@@ -93,6 +93,18 @@ def test_turn_byte_limit_preserves_default_and_truncates_opt_in_history():
     assert len(bounded.turns[0].message.encode("utf-8")) <= 20
 
 
+def test_turn_byte_limit_preserves_exact_fit_and_truncates_one_byte_over():
+    exact = ConversationState("agent", max_turn_bytes=20)
+    over = ConversationState("agent", max_turn_bytes=20)
+
+    exact.record_turn("user", "x" * 20)
+    over.record_turn("user", "x" * 21)
+
+    assert exact.turns[0].message == "x" * 20
+    assert over.turns[0].message.endswith("...[truncated]")
+    assert len(over.turns[0].message.encode("utf-8")) <= 20
+
+
 def test_turn_byte_limit_is_utf8_safe():
     state = ConversationState("agent", max_turn_bytes=18)
     state.record_turn("user", "🙂🙂🙂🙂🙂🙂🙂🙂")
@@ -121,6 +133,13 @@ def test_serialization_preserves_turn_byte_limit_and_legacy_payloads():
     assert restored.turns[0].message == state.turns[0].message
     legacy = ConversationState.from_dict({"agent_name": "old", "turns": []})
     assert legacy.max_turn_bytes is None
+
+
+def test_unlimited_constructor_preserves_supplied_turn_identity():
+    original_turn = ConversationTurn("user", "unchanged")
+    state = ConversationState("agent", turns=[original_turn])
+
+    assert state.turns[0] is original_turn
 
 
 def test_constructor_bounds_supplied_turns_without_mutating_source():
@@ -179,6 +198,19 @@ def test_environment_checkpoint_keeps_turn_byte_policy():
     assert agent.conversation_state.max_turns == 4
     assert agent.conversation_state.max_turn_bytes == 24
     assert all(len(turn.message.encode("utf-8")) <= 24 for turn in agent.conversation_state.turns)
+
+
+def test_surrogate_replacement_is_explicit_and_per_code_point():
+    lone = json.loads('"\\ud800"')
+    pair = json.loads('"\\ud800\\udc00"')
+
+    lone_state = ConversationState("agent", max_turn_bytes=100)
+    pair_state = ConversationState("agent", max_turn_bytes=100)
+    lone_state.record_turn("user", lone)
+    pair_state.record_turn("user", pair)
+
+    assert lone_state.turns[0].message == "?"
+    assert pair_state.turns[0].message == "??"
 
 
 def test_bounded_agent_history_normalizes_unpaired_surrogates_without_failing():
