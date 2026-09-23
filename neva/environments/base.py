@@ -135,7 +135,8 @@ class Environment:
                     record_written=wrote,
                     retry=retry,
                     exhausted=(
-                        not retry
+                        recovery.max_retries > 0
+                        and not retry
                         and attempt >= recovery.max_attempts
                         and recovery.is_retryable(exc)
                     ),
@@ -179,7 +180,7 @@ class Environment:
         started = perf_counter()
         recovery = self.recovery_policy
         resolved_context = context
-        response: Optional[str] = None
+        response = ""
 
         for attempt in range(1, recovery.max_attempts + 1):
             try:
@@ -225,7 +226,6 @@ class Environment:
                 raise
             break
 
-        assert response is not None  # successful agent step before completion hook
         try:
             self.on_turn_complete(response)
         except Exception as exc:
