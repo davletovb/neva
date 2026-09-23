@@ -10,14 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Checkpoints now natively preserve `VectorStoreMemory` and `AdaptiveConversationMemory` state without custom hooks. Vector records/cached embeddings and adaptive history, summary/short-term views, token counts, and memory-budget embedding usage are restored data-only; incompatible structural configurations fail closed and configured embedder/summarizer callables plus `MemoryBudget` instances are preserved by identity rather than deep-copied. Callables are not serialized or replayed; callers remain responsible for supplying semantically equivalent summarizer/embedder/token-estimator configuration when restoring a checkpoint.
 - `ConversationState(max_turn_bytes=N)` adds an opt-in UTF-8 byte ceiling for each stored turn. Oversized stored messages are truncated safely with a `...[truncated]` marker, the setting survives serialization/restore, and the default remains unlimited; agent calls still return the full live response.
 - A repository-local checkpoint scaling benchmark (`python -m benchmarks.checkpoint_scaling`) measures deterministic small/medium/large workloads across snapshot creation, streamed save, and load. It reports checkpoint bytes, untraced wall-clock time, and peak Python allocations from a separate `tracemalloc` pass with raw samples and medians; no hardware-dependent pass/fail threshold is imposed. The CLI can target a real checkpoint filesystem with `--workdir` and record a local revision with `--git-sha`.
-- `SpendBudget` enforces a thread-safe hard ceiling on estimated spend.
-  `GPTAgent(spend_budget=...)` refuses models without a pricing entry before
-  contacting the provider, consumes each call's estimated cost after token
-  accounting (clamping recorded spend to the ceiling), and rejects non-finite
-  pricing or costs instead of silently disabling the guard; exceeding the
-  ceiling raises `SpendBudgetExceededError`. Share one instance across agents
-  for a common budget — amounts are estimates, not live billing, and there is
-  no account- or process-wide coordination.
+- Shared provider/account resource coordination for built-in `GPTAgent`
+  backends: same-account agents automatically share FIFO request-rate and
+  concurrency admission in-process (60 requests/minute and 8 concurrent calls
+  by default). A shared SQLite `provider_coordination_path` or
+  `NEVA_PROVIDER_COORDINATION_DB` extends the same rate, concurrency, and
+  optional `provider_spend_limit` across processes, with expiring leases for
+  crash recovery and fail-closed configuration mismatches.
+- `SpendBudget` now supports atomic reserve/settle/release semantics. GPT
+  calls reserve worst-case estimated input plus configured output-token spend
+  before provider admission and settle against provider-reported/estimated
+  actual usage, preventing concurrent pre-check oversubscription. Optional
+  `billing_reconciler=` hooks can replace completed estimates with an
+  authoritative account-spend total while preserving in-flight reservations.
+  Unpriced or non-finite model pricing still fails closed when spend
+  enforcement is active.
 - Tool-call guardrails: `AIAgent(tool_guard=ToolGuard(...))` (forwarded by
   `GPTAgent` and `TransformerAgent`) enforces code-level policy independent of
   prompt content — an allowlist, an approval hook called with each `ToolCall`,
@@ -65,11 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the normal turn path. Raw context is stored only when the log opts in with
   `include_context=True`. The log is external storage: it is preserved across
   checkpoint restore rather than serialized into snapshots.
-- `RateLimiter.acquire(cancel_event=...)` supports cooperative cancellation of
-  token waits using a threading Event; cancellation raises
-  `RateLimiterCancelledError` (a `concurrent.futures.CancelledError` subclass).
-  Lock waits and provider calls are not interrupted, and callers must pass the
-  event explicitly.
+- `RateLimiter` now provides FIFO token admission, sleeps outside its mutex,
+  and polls normal mutex acquisition for cooperative cancellation. Base async
+  agent calls automatically propagate asyncio cancellation through a
+  threading Event into GPT provider admission and retry backoff; synchronous
+  third-party provider calls themselves remain governed by their request
+  timeout and cannot be forcibly killed by Python.
 - Packaging metadata for distribution: project URLs, keywords, and trove
   classifiers in `pyproject.toml`.
 - PEP 561 `py.typed` marker so downstream projects consume Neva's type hints.
@@ -101,8 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_context_chars` (default 24,000) measured on the serialized provider
   request; a current prompt that cannot fit raises `ConfigurationError`.
   `ConversationState` itself is unchanged.
-- README describes input hygiene, per-instance rate limits, and thread-safety
-  boundaries instead of calling them "robust safety rails".
+- README describes input hygiene, shared provider/account rate/concurrency/spend
+  controls, their SQLite cross-process option, and remaining transport/thread-
+  safety boundaries instead of calling them "robust safety rails".
 - `CostTracker` default prices cover `gpt-4o-mini`, `grok-4.5`,
   `claude-3-5-sonnet-latest`, and `gemini-1.5-flash` (USD per 1k tokens,
   list prices as of 2026-09). Override `pricing_per_1k_tokens` for billing.
