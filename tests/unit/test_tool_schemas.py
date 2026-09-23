@@ -459,3 +459,16 @@ def test_schema_failure_returns_failed_response_when_validate_raises():
     assert not response.succeeded()
     assert "schema" in response.error
     assert tool.calls == []
+
+
+def test_direct_tool_use_validates_schema_before_body():
+    tool = SchemaTool(schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=3)}))
+    with pytest.raises(Exception, match="invalid arguments"):
+        tool.use("too long")
+    assert tool.calls == []
+
+
+def test_direct_tool_use_accepts_schema_valid_input():
+    tool = SchemaTool(schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=10)}))
+    assert tool.use("hello") == "echo:hello"
+    assert tool.calls == ["hello"]
