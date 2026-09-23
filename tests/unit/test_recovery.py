@@ -345,7 +345,6 @@ def test_recovery_policy_rejects_invalid_configuration(kwargs):
         RecoveryPolicy(**kwargs)
 
 
-
 def test_context_failure_stays_inside_recovery_dispatch(tmp_path):
     class FlakyContextEnvironment(Environment):
         def __init__(self, *args, **kwargs):
