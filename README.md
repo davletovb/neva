@@ -326,19 +326,25 @@ scheduler = create_scheduler("my_scheduler")
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
   stripped of control characters, with a small regex denylist (`<script`,
-  `DROP TABLE`). `RateLimiter` is a per-instance token bucket (pass the same
-  object to share a provider budget); token waits can be cancelled
-  cooperatively by passing a `threading.Event` to
-  `acquire(cancel_event=...)`. `CircuitBreaker` fails fast after
-  consecutive retryable failures (pass the same object to share a provider
-  circuit). HTTP retries cover 429/5xx, not authorization failures. Default
+  `DROP TABLE`). Built-in `GPTAgent` providers automatically share one
+  provider/account FIFO admission scope inside a process (60 requests/minute
+  and 8 concurrent calls by default; both configurable). Set
+  `provider_coordination_path=` or `NEVA_PROVIDER_COORDINATION_DB` to share
+  the same rate, concurrency, and optional `provider_spend_limit` across
+  processes through SQLite. Explicit legacy `RateLimiter` instances remain
+  supported; they are FIFO and cooperatively cancellable. Async agent
+  cancellation automatically reaches Neva-owned admission waits and retry
+  backoff, though an already-running synchronous provider call is governed by
+  its request timeout and cannot be forcibly killed by Python.
+  `CircuitBreaker` fails fast after consecutive retryable failures. Default
   `CostTracker` prices cover gpt-4o-mini, grok-4.5, and the other built-in
-  models; override them for billing. An optional `SpendBudget` (share one
-  instance across agents) enforces a hard ceiling on *estimated* spend:
-  `GPTAgent(spend_budget=...)` refuses calls once exhausted or when the model
-  has no pricing entry, rejects non-finite pricing, and clamps recorded spend
-  to the ceiling. Estimates are not live billing and the budget is
-  per-instance, not account-wide. Failed turns can be persisted durably with
+  models; override them for billing. `SpendBudget` supports atomic
+  reserve/settle/release semantics so concurrent calls cannot oversubscribe a
+  local ceiling, while `provider_spend_limit=` applies the same reservation
+  model to the shared provider/account scope. An optional
+  `billing_reconciler=` can reconcile completed estimates with an
+  authoritative account-spend total. Unpriced models still fail closed when
+  spend enforcement is enabled. Failed turns can be persisted durably with
   `Environment(failure_log=FailureLog(path))` (`neva.utils.failures`): handled
   failures (both policies, plus scheduler-selection failures) are appended as
   JSON lines. Long-running single-process jobs can opt into retention with
@@ -371,8 +377,9 @@ scheduler = create_scheduler("my_scheduler")
   tool when validation fails. Both guardrails and schema validation apply to
   `call_tool`; direct `Tool.use` calls bypass them.
 - **Concurrency**: Observer APIs and `LLMCache` are lock-protected. Agent,
-  environment, and memory objects are not generally thread-safe. Default rate
-  limits do not span agents or processes.
+  environment, and memory objects are not generally thread-safe. Built-in
+  provider calls share account-scoped rate/concurrency admission in-process;
+  processes coordinate when they share the configured SQLite coordination DB.
 - **Intuitive Interfaces**: Simple interfaces for agent creation and management.
 - **Environment Simulation**: Simulate environments for agent interactions and collaborations.
 
