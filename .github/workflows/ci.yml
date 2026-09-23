@@ -68,7 +68,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest
+        run: timeout 90s pytest -vv
 
       - name: Upload coverage reports
         if: matrix.python-version == '3.14'
