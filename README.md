@@ -360,8 +360,13 @@ scheduler = create_scheduler("my_scheduler")
   strict UTF-8 record ceiling by dropping raw context first and then truncating
   the diagnostic message with an explicit marker. `replay_failure(record)`
   re-dispatches a recorded turn; raw context is stored only with
-  `include_context=True`. Recovery is at-least-once: retry-safe failures should
-  be selected when agents or completion hooks have irreversible side effects.
+  `include_context=True`. Automatic retries cover context construction and
+  agent execution only; after `agent.step()` succeeds, completion-hook failures
+  are escalated without rerunning the completed agent call. Agent execution is
+  still at-least-once when retries are enabled, so retry-safe failures or
+  idempotent external side effects are recommended. Recovery policy/state are
+  runtime-only and remain configured on the receiving environment across
+  checkpoint restore rather than being serialized.
   Telemetry omits raw prompts and
   completions unless `include_content=True`. This is not protection against
   prompt injection, unauthorized tool use, or account-wide overspend. Tools
