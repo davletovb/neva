@@ -42,6 +42,19 @@ def test_composite_moving_agent_between_groups_detaches_old_group():
     assert "alpha" not in scheduler._group_order
 
 
+def test_composite_moving_paused_agent_propagates_pause_to_new_child():
+    scheduler = CompositeScheduler()
+    agent = StubAgent("paused-wanderer")
+    scheduler.add(agent, group="alpha")
+    scheduler.pause(agent)
+
+    scheduler.add(agent, group="beta")
+
+    assert scheduler.is_paused(agent)
+    assert scheduler._group_membership[agent] == "beta"
+    assert scheduler._group_schedulers["beta"].is_paused(agent)
+
+
 def test_composite_empty_group_raises_scheduling_error():
     scheduler = CompositeScheduler()
     with pytest.raises(SchedulingError, match="no groups"):
