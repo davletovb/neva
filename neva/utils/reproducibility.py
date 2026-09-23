@@ -682,10 +682,13 @@ class ReplayTape:
         return _record
 
     def attach_recording(self, agents: Iterable["AIAgent"]) -> None:
-        """Install recording wrappers around each agent's current model boundary."""
+        """Install recording wrappers after every agent boundary validates."""
 
-        for agent in agents:
-            agent.set_llm_backend(self.recording_backend(agent.replayable_backend()))
+        agent_list = list(agents)
+        backends = [agent.replayable_backend() for agent in agent_list]
+        wrappers = [self.recording_backend(backend) for backend in backends]
+        for agent, wrapper in zip(agent_list, wrappers):
+            agent.set_llm_backend(wrapper)
 
     def attach_replay(
         self,
