@@ -131,11 +131,14 @@ introducing a second persistence format:
   monolithic JSON parser rather than incremental object decoding.
 - Runtime capture no longer uses a full `json.dumps` + `json.loads` roundtrip.
   Structural validation plus a JSON-shape-preserving clone keeps the previous
-  normalization contract (tuples become lists; JSON mapping keys become
-  strings) without the encoded full-document intermediate. Runtime restore no
-  longer `deepcopy()`s the entire saved runtime graph; it treats checkpoint
-  input as read-only and stages only attributes, environment extras, scheduler
-  state, and memory objects that must become independently owned.
+  normalization contract (tuples become lists; numeric/string subclasses become
+  plain JSON values; accepted mapping keys become strings) without the encoded
+  full-document intermediate. Runtime restore no longer `deepcopy()`s the
+  entire saved runtime graph; it treats checkpoint input as read-only and
+  stages only attributes, environment extras, scheduler state, and memory
+  objects that must become independently owned. Restored memory-record metadata
+  is deep-copied independently so mutating live metadata cannot mutate the saved
+  snapshot used for rollback.
 - First-party memory checkpoint adapters from PR #67 remain data-only and
   preserve configured callable/`MemoryBudget` identities; custom/third-party
   scheduler and memory implementations still require explicit checkpoint hooks.
@@ -145,8 +148,16 @@ introducing a second persistence format:
   `max_turns`, per-message `max_turn_bytes`, and aggregate retained-message
   `max_history_bytes`. The aggregate budget truncates one oversized newest
   turn to the effective byte ceiling, then evicts oldest turns until the retained
-  UTF-8 message bytes fit. All policies survive serialization/restore; live
-  agent responses are unchanged.
+  UTF-8 message bytes fit. Because `turns` remains mutable for compatibility,
+  direct list/message edits are reconciled on the next `record_turn()` or
+  serialization call rather than relying on a stale cached byte total. All
+  policies survive serialization/restore; live agent responses are unchanged.
+- Limit validation avoids redundant walks where correctness permits:
+  `create_snapshot` validates its assembled source graph once before deepcopy,
+  and `Environment.restore` validates the complete snapshot once before
+  calling runtime restore. Snapshot creation still performs a final combined
+  validation after runtime capture so node/string totals are enforced across
+  environment, conversations, and runtime state together.
 - The checkpoint scaling benchmark now reports
   `peak_python_bytes / checkpoint_bytes` amplification per stage in addition
   to elapsed time, peak Python allocations, and serialized bytes. This makes
