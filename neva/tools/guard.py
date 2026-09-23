@@ -13,15 +13,14 @@ import logging
 import math
 import multiprocessing
 import threading
-from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from time import monotonic
 from typing import (
     Any,
     Callable,
     Dict,
     FrozenSet,
     Iterable,
-    Iterator,
     Optional,
     Sequence,
     Tuple,
@@ -289,24 +288,18 @@ class ToolGuard:
                 self._concurrency_slots[key] = slot
             return slot
 
-    @contextmanager
-    def _execution_slot(self, tool: Any) -> Iterator[None]:
-        slot = self._slot_for(tool)
-        if slot is not None:
-            slot.acquire()
-        try:
-            yield
-        finally:
-            if slot is not None:
-                slot.release()
-
     def invoke(self, tool: Any, payload: str) -> str:
         """Run one tool implementation under this guard's execution limits."""
 
         return _execute_with_guards(tool, payload, (self,))
 
     @staticmethod
-    def _invoke_with_timeout(tool: Any, payload: str, timeout: float) -> Any:
+    def _invoke_with_timeout(
+        tool: Any,
+        payload: str,
+        timeout: float,
+        on_finish: Optional[Callable[[], None]] = None,
+    ) -> Any:
         outcome: Dict[str, Any] = {}
 
         def runner() -> None:
@@ -314,18 +307,27 @@ class ToolGuard:
                 outcome["value"] = _raw_tool_use(tool, payload)
             except BaseException as exc:
                 outcome["error"] = exc
+            finally:
+                if on_finish is not None:
+                    on_finish()
 
         worker = threading.Thread(
             target=runner,
             name=f"neva-tool-{getattr(tool, 'name', 'tool')}",
             daemon=True,
         )
-        worker.start()
+        try:
+            worker.start()
+        except BaseException:
+            if on_finish is not None:
+                on_finish()
+            raise
         worker.join(timeout)
         if worker.is_alive():
             raise ToolTimeoutError(
                 f"tool '{tool.name}' exceeded the {timeout:g}s execution limit; "
-                "its daemon worker thread is not forcibly stopped and may still be running"
+                "its daemon worker thread is not forcibly stopped and retains its "
+                "concurrency slot until it actually returns"
             )
         if "error" in outcome:
             raise outcome["error"]
@@ -352,6 +354,22 @@ class ToolGuard:
             ),
             name=f"neva-tool-process-{getattr(tool, 'name', 'tool')}",
         )
+        receive_outcome: Dict[str, Any] = {}
+
+        def receive_result() -> None:
+            try:
+                receive_outcome["message"] = receiver.recv()
+            except EOFError:
+                receive_outcome["eof"] = True
+            except BaseException as exc:
+                receive_outcome["error"] = exc
+
+        reader = threading.Thread(
+            target=receive_result,
+            name=f"neva-tool-result-{getattr(tool, 'name', 'tool')}",
+            daemon=True,
+        )
+        deadline = monotonic() + timeout
         try:
             try:
                 process.start()
@@ -363,7 +381,8 @@ class ToolGuard:
             finally:
                 sender.close()
 
-            process.join(timeout)
+            reader.start()
+            process.join(max(0.0, deadline - monotonic()))
             if process.is_alive():
                 process.terminate()
                 process.join()
@@ -375,8 +394,20 @@ class ToolGuard:
                     "its isolated worker process was terminated"
                 )
 
-            if receiver.poll():
-                message = receiver.recv()
+            reader.join(max(0.0, deadline - monotonic()))
+            if reader.is_alive():
+                raise ToolTimeoutError(
+                    f"tool '{tool.name}' exceeded the {timeout:g}s hard execution limit "
+                    "while returning its isolated result"
+                )
+
+            if "error" in receive_outcome:
+                raise ToolExecutionError(
+                    f"could not receive isolated result from tool '{tool.name}'"
+                ) from receive_outcome["error"]
+
+            message = receive_outcome.get("message")
+            if message is not None:
                 kind = message[0]
                 if kind == "value":
                     return str(message[1])
@@ -428,6 +459,11 @@ def _combined_limits(guards: Sequence[ToolGuard]) -> ToolLimits:
     )
 
 
+def _release_slots(slots: Sequence[threading.BoundedSemaphore]) -> None:
+    for slot in reversed(slots):
+        slot.release()
+
+
 def _execute_with_guards(
     tool: Any,
     payload: str,
@@ -440,14 +476,30 @@ def _execute_with_guards(
         return str(_raw_tool_use(tool, payload))
 
     limits = _combined_limits(ordered_guards)
-    with ExitStack() as stack:
-        for guard in ordered_guards:
-            stack.enter_context(guard._execution_slot(tool))
+    slots = []
+    for guard in ordered_guards:
+        slot = guard._slot_for(tool)
+        if slot is not None:
+            slot.acquire()
+            slots.append(slot)
 
-        if limits.isolate_process:
+    if limits.isolate_process:
+        try:
             return ToolGuard._invoke_in_process(tool, payload, limits)
-        if limits.timeout is None:
-            output = _raw_tool_use(tool, payload)
-        else:
-            output = ToolGuard._invoke_with_timeout(tool, payload, limits.timeout)
+        finally:
+            _release_slots(slots)
+
+    if limits.timeout is not None:
+        return ToolGuard._invoke_with_timeout(
+            tool,
+            payload,
+            limits.timeout,
+            on_finish=lambda: _release_slots(slots),
+        )
+
+    try:
+        output = _raw_tool_use(tool, payload)
         return _truncate_output(output, limits.max_output_chars)
+    finally:
+        _release_slots(slots)
+
