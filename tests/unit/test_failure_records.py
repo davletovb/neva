@@ -552,7 +552,6 @@ def test_zero_backup_count_prunes_existing_generations_on_next_append(tmp_path):
     assert [record.agent_name for record in reopened.load()] == ["b", "c"]
 
 
-
 def test_default_reader_does_not_implicitly_load_rotated_backups(tmp_path):
     path = tmp_path / "failures.jsonl"
     first = make_record(agent_name="a")
