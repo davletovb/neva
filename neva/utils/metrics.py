@@ -137,10 +137,8 @@ class CostTracker:
         cost = 0.0
         for model, tokens in self.usage.items():
             prompt_tokens, response_tokens = self.split_usage.get(model, (0, 0))
-            if tokens and prompt_tokens + response_tokens not in {0, tokens}:
+            if tokens and prompt_tokens + response_tokens != tokens:
                 return None
-            if prompt_tokens + response_tokens == 0:
-                prompt_tokens, response_tokens = tokens, 0
             call_cost = self.cost_for(
                 model,
                 prompt_tokens=prompt_tokens,
