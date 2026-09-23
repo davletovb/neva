@@ -5,7 +5,7 @@
 Updated against `main` at `d7a7cac6` (PRs #49–#52, #54–#72 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
-- FAISS PR #53 is explicitly deferred for user evaluation; none of its changes are included in this branch.
+- FAISS PR #53 remains open/deferred, but PR #73 intentionally supersedes its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness/integration coverage. PR #53 should be rebased or retired after #73 lands.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
 ## Already implemented on merged main
@@ -194,8 +194,11 @@ requiring live provider credentials or external model downloads:
   a dedicated FAISS-module coverage gate of at least 80%. Review of the real
   dependency path also fixed an ordering bug: FAISS already returns nearest
   neighbours in metric order, so Neva no longer reverses L2 distances.
-  Deferred PR #53 remains deferred; this coverage work targets the FAISS
-  implementation already present on main and does not silently adopt that PR.
+  PR #53 remains separately deferred as a PR, but #73 intentionally overlaps
+  two of its test/coverage changes (removing the FAISS coverage omit and making
+  the missing-dependency test work when FAISS is installed). #73 targets the
+  FAISS implementation already present on main and adds broader correctness and
+  integration coverage; #53 should be rebased or retired after #73 lands.
 - Composite/Conditional scheduler coverage now includes group fairness
   independent of group size, changing conditional eligibility, pause/resume
   after condition changes, nested Composite schedulers, recursive environment
@@ -279,7 +282,7 @@ The remaining priorities are:
 - [x] Add durable failure records and replay control (PR #60).
 - [x] Tool-call guardrails (PR #61).
 - [x] Validated tool argument schemas (PR #62).
-- [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #53 remains separately deferred.
+- [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of deferred PR #53.
 - [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
