@@ -286,7 +286,7 @@ def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
 
     recorded_outputs = [recording_env.step() for _ in range(12)]
     recorded_turns = {
-        agent.name: [turn.to_dict() for turn in agent.conversation_state.turns]
+        agent.name: [(turn.speaker, turn.message) for turn in agent.conversation_state.turns]
         for agent in recording_env.agents
     }
 
@@ -313,7 +313,7 @@ def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
 
     replayed_outputs = [replay_env.step() for _ in range(12)]
     replayed_turns = {
-        agent.name: [turn.to_dict() for turn in agent.conversation_state.turns]
+        agent.name: [(turn.speaker, turn.message) for turn in agent.conversation_state.turns]
         for agent in replay_env.agents
     }
     replay.assert_consumed()
