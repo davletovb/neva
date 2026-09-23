@@ -85,6 +85,14 @@ class FailureLog:
     gate: ``load()`` returns whatever context the file already contains).
     Appends are thread-safe within one instance; separate processes
     appending the same path rely on O_APPEND semantics for small lines.
+    Optional size-based rotation is intentionally single-process: callers
+    using ``rotate_bytes`` must externally coordinate writers that share a
+    path. Rotated files use ``<path>.1``, ``<path>.2``, ... and ``load()``
+    reads retained backups oldest-first before the active file.
+
+    ``rotate_bytes`` is a rotation threshold, not a per-record truncation
+    policy. A single record larger than the threshold is kept intact in an
+    otherwise empty active file so failure details are not silently discarded.
     Records live in this external file and are not part of simulation
     checkpoints.
     """
@@ -95,16 +103,56 @@ class FailureLog:
         *,
         include_context: bool = False,
         fsync: bool = True,
+        rotate_bytes: Optional[int] = None,
+        backup_count: int = 3,
     ) -> None:
         if not isinstance(path, (str, os.PathLike)):
             raise ValueError("path must be a string or path-like object")
         candidate = Path(path)
         if candidate.exists() and candidate.is_dir():
             raise ValueError("path must point to a file, not a directory")
+        if rotate_bytes is not None and (
+            type(rotate_bytes) is not int or rotate_bytes <= 0
+        ):
+            raise ValueError("rotate_bytes must be a positive integer or None")
+        if type(backup_count) is not int or backup_count < 0:
+            raise ValueError("backup_count must be a non-negative integer")
         self.path = candidate
         self.include_context = bool(include_context)
         self.fsync = bool(fsync)
+        self.rotate_bytes = rotate_bytes
+        self.backup_count = backup_count
         self._lock = threading.Lock()
+
+    def _rotated_path(self, index: int) -> Path:
+        return self.path.with_name(f"{self.path.name}.{index}")
+
+    def _rotate(self) -> None:
+        if not self.path.exists():
+            return
+        if self.backup_count == 0:
+            self.path.unlink()
+            return
+
+        oldest = self._rotated_path(self.backup_count)
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(self.backup_count - 1, 0, -1):
+            source = self._rotated_path(index)
+            if source.exists():
+                os.replace(source, self._rotated_path(index + 1))
+        os.replace(self.path, self._rotated_path(1))
+
+    def _retained_paths(self) -> List[Path]:
+        paths: List[Path] = []
+        if self.rotate_bytes is not None:
+            for index in range(self.backup_count, 0, -1):
+                candidate = self._rotated_path(index)
+                if candidate.exists():
+                    paths.append(candidate)
+        if self.path.exists():
+            paths.append(self.path)
+        return paths
 
     def append(self, failure: FailureRecord) -> None:
         """Durably append one failure record."""
@@ -113,16 +161,30 @@ class FailureLog:
             raise TypeError("failure must be a FailureRecord")
         if not self.include_context and failure.context is not None:
             failure = replace(failure, context=None)
-        line = json.dumps(failure.to_dict(), sort_keys=True) + "\n"
+        encoded = (json.dumps(failure.to_dict(), sort_keys=True) + "\n").encode("utf-8")
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a+b") as handle:
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() > 0:
-                    handle.seek(-1, os.SEEK_END)
-                    if handle.read(1) != b"\n":
-                        handle.write(b"\n")
-                handle.write(line.encode("utf-8"))
+
+            separator = b""
+            current_size = self.path.stat().st_size if self.path.exists() else 0
+            if current_size > 0:
+                with self.path.open("rb") as existing:
+                    existing.seek(-1, os.SEEK_END)
+                    if existing.read(1) != b"\n":
+                        separator = b"\n"
+
+            if (
+                self.rotate_bytes is not None
+                and current_size > 0
+                and current_size + len(separator) + len(encoded) > self.rotate_bytes
+            ):
+                self._rotate()
+                separator = b""
+
+            with self.path.open("ab") as handle:
+                if separator:
+                    handle.write(separator)
+                handle.write(encoded)
                 handle.flush()
                 if self.fsync:
                     os.fsync(handle.fileno())
@@ -132,20 +194,27 @@ class FailureLog:
 
         records: List[FailureRecord] = []
         with self._lock:
-            if not self.path.exists():
-                return records
-            with self.path.open("rb") as handle:
-                for number, raw in enumerate(handle, start=1):
-                    try:
-                        line = raw.decode("utf-8").strip()
-                    except UnicodeDecodeError:
-                        logger.warning("Skipping undecodable failure record at line %d", number)
-                        continue
-                    if not line:
-                        continue
-                    try:
-                        records.append(FailureRecord.from_dict(json.loads(line)))
-                    except (ValueError, KeyError, TypeError):
-                        logger.warning("Skipping malformed failure record at line %d", number)
-                        continue
+            for source in self._retained_paths():
+                with source.open("rb") as handle:
+                    for number, raw in enumerate(handle, start=1):
+                        try:
+                            line = raw.decode("utf-8").strip()
+                        except UnicodeDecodeError:
+                            logger.warning(
+                                "Skipping undecodable failure record at %s line %d",
+                                source,
+                                number,
+                            )
+                            continue
+                        if not line:
+                            continue
+                        try:
+                            records.append(FailureRecord.from_dict(json.loads(line)))
+                        except (ValueError, KeyError, TypeError):
+                            logger.warning(
+                                "Skipping malformed failure record at %s line %d",
+                                source,
+                                number,
+                            )
+                            continue
         return records
