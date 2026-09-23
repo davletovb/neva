@@ -285,6 +285,7 @@ class AIAgent(ABC):
         self.tool_guard: Optional["ToolGuard"] = tool_guard
         self.attributes: Dict[str, str] = {}
         self._llm_backend = llm_backend
+        self._model_backend_wrapper: Optional[Callable[[LLMBackend], LLMBackend]] = None
         self._memory: Optional[MemoryModule] = None
         self._cache = cache
         self._prompt_validator = prompt_validator or PromptValidator()
@@ -571,6 +572,20 @@ class AIAgent(ABC):
     def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
         self._llm_backend = backend
 
+    def set_model_backend_wrapper(
+        self,
+        wrapper: Optional[Callable[[LLMBackend], LLMBackend]],
+    ) -> None:
+        """Wrap future model-boundary resolutions without replacing the backend."""
+
+        if wrapper is not None and not callable(wrapper):
+            raise AgentCommunicationError("model backend wrapper must be callable or None")
+        self._model_backend_wrapper = wrapper
+
+    def _wrap_model_backend(self, backend: LLMBackend) -> LLMBackend:
+        wrapper = self._model_backend_wrapper
+        return wrapper(backend) if wrapper is not None else backend
+
     def replayable_backend(
         self,
         *,
@@ -584,7 +599,7 @@ class AIAgent(ABC):
                 "Agent has no replayable model backend; configure llm_backend "
                 "or override replayable_backend()."
             )
-        return self.llm_backend
+        return self._wrap_model_backend(self.llm_backend)
 
     def generate_model_output(self, prompt: str) -> str:
         """Generate from an already composed prompt without adding agent context.
