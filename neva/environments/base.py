@@ -151,6 +151,10 @@ class Environment:
 
         if agent is None:
             return None
+        if attempt > 1:
+            with self._recovery_lock:
+                self._recovery.recoveries_succeeded += 1
+                self._recovery.last_action = "recovered"
         telemetry = get_telemetry()
         if telemetry is not None:
             try:
