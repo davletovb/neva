@@ -343,7 +343,6 @@ def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
     assert calls == []
 
 
-
 def test_shared_provider_budget_refusal_releases_half_open_probe(monkeypatch):
     from neva.agents.gpt import GPTAgent
     from neva.utils.provider_resources import _clear_provider_resource_registry_for_tests
