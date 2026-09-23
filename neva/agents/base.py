@@ -112,6 +112,10 @@ class Tool(ABC):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         implementation = cls.__dict__.get("use")
+        if implementation is None:
+            inherited = getattr(cls, "use", None)
+            if inherited is not Tool.use:
+                implementation = inherited
         if implementation is not None and implementation is not Tool.use:
             setattr(cls, "_use_unchecked", implementation)
             setattr(cls, "use", Tool.use)
