@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
+from time import perf_counter
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -400,6 +401,8 @@ class AIAgent(ABC):
                 error=f"could not normalise arguments for tool '{call.name}'",
             )
 
+        observer = self._resolve_observer()
+        started = perf_counter()
         try:
             output = tool._execute(payload, additional_guards=tuple(guards))
         except ToolExecutionError as exc:
@@ -420,6 +423,13 @@ class AIAgent(ABC):
                 output="",
                 error=str(exc),
             )
+        finally:
+            if observer is not None:
+                observer.record_tool_usage(
+                    self,
+                    tool,
+                    duration=perf_counter() - started,
+                )
 
         return ToolResponse(
             name=tool.name,
