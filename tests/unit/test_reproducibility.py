@@ -8,7 +8,12 @@ from neva.agents.base import AIAgent
 from neva.environments import BasicEnvironment, Environment
 from neva.schedulers import CompositeScheduler, RandomScheduler
 from neva.utils.caching import LLMCache
-from neva.utils.exceptions import RecordedReplayError, ReplayMismatchError, ReproducibilityError
+from neva.utils.exceptions import (
+    AgentCommunicationError,
+    RecordedReplayError,
+    ReplayMismatchError,
+    ReproducibilityError,
+)
 from neva.utils.reproducibility import (
     ReplayRecord,
     ReplayTape,
@@ -270,6 +275,20 @@ def test_manifest_rejects_invalid_prompt_shapes(prompts):
     env = _build_random_env()
     with pytest.raises(ReproducibilityError, match="prompt"):
         create_run_manifest(env, seed=1, prompts=prompts, dependencies=[])
+
+
+def test_attach_recording_is_atomic_when_one_agent_has_no_backend():
+    good_backend = _deterministic_backend
+    good = TransformerAgent(name="good", llm_backend=good_backend)
+    bad = SeedAwareAgent("bad")
+    tape = ReplayTape()
+
+    with pytest.raises(AgentCommunicationError, match="replayable model backend"):
+        tape.attach_recording([good, bad])
+
+    assert good.llm_backend is good_backend
+    assert bad.llm_backend is None
+    assert tape.records == ()
 
 
 def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
