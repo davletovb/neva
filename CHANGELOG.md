@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   staging only independently owned attributes/environment extras/memory state.
   `ConversationState(max_history_bytes=N)` independently bounds aggregate
   retained message bytes and composes with `max_turns` and
-  `max_turn_bytes`. The checkpoint benchmark now reports peak-Python-memory
+  `max_turn_bytes`; direct public-list edits are reconciled on the next record
+  or serialization operation. The checkpoint benchmark now reports peak-Python-memory
   amplification relative to serialized checkpoint bytes.
 - Durable automatic recovery: `RecoveryPolicy` adds opt-in bounded retries,
   exponential backoff, retry exception filtering, and final escalation for
