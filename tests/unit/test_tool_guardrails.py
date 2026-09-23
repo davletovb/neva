@@ -433,3 +433,19 @@ def test_agent_and_tool_guards_both_apply():
     assert response.output.startswith("r" * 5)
     assert "truncated" in response.output
     assert tool.calls == ["go"]
+
+
+
+def test_inherited_mixin_use_is_wrapped_by_tool_guard():
+    class UseMixin:
+        def use(self, task):
+            return f"mixin:{task}"
+
+    class MixedTool(UseMixin, Tool):
+        def __init__(self):
+            super().__init__("mixed", "Uses an inherited mixin implementation")
+
+    tool = MixedTool()
+    tool.set_tool_guard(ToolGuard(allowed_tools={"other"}))
+    with pytest.raises(ToolExecutionError, match="not permitted"):
+        tool.use("blocked")
