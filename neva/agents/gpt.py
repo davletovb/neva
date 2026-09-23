@@ -451,12 +451,14 @@ class GPTAgent(AIAgent):
                             prompt_tokens=prompt_tokens,
                             response_tokens=response_tokens,
                         )
-                    self._release_attempt_resources(
-                        permit,
-                        reservation,
-                        actual_cost=actual_cost,
-                    )
-                    resources_released = True
+                    try:
+                        self._release_attempt_resources(
+                            permit,
+                            reservation,
+                            actual_cost=actual_cost,
+                        )
+                    finally:
+                        resources_released = True
 
                     self._cache_store(prompt, content)
                     self._logger.debug(
