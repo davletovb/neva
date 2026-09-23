@@ -341,3 +341,72 @@ def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
     with pytest.raises(SpendBudgetExceededError):
         agent.respond("ping")
     assert calls == []
+
+
+
+def test_shared_provider_budget_refusal_releases_half_open_probe(monkeypatch):
+    from neva.agents.gpt import GPTAgent
+    from neva.utils.provider_resources import _clear_provider_resource_registry_for_tests
+
+    _clear_provider_resource_registry_for_tests()
+    calls = []
+    _patch_provider(
+        monkeypatch,
+        usage={"prompt_tokens": 1, "completion_tokens": 1},
+        calls=calls,
+    )
+    breaker = _half_open_breaker()
+    agent = GPTAgent(
+        api_key="half-open-shared-budget",
+        provider="openai",
+        max_retries=0,
+        circuit_breaker=breaker,
+        provider_rate=None,
+        provider_spend_limit=0.0001,
+    )
+
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+    with pytest.raises(SpendBudgetExceededError):
+        agent.respond("ping")
+
+    assert calls == []
+    _clear_provider_resource_registry_for_tests()
+
+
+def test_local_reservation_refusal_releases_half_open_probe(monkeypatch):
+    from neva.agents.gpt import GPTAgent
+
+    calls = []
+    _patch_provider(
+        monkeypatch,
+        usage={"prompt_tokens": 1, "completion_tokens": 1},
+        calls=calls,
+    )
+    breaker = _half_open_breaker()
+    budget = SpendBudget(max_cost=1.0)
+    original_reserve = budget.reserve
+
+    reserve_calls = []
+
+    def refuse_after_preflight(cost):
+        reserve_calls.append(cost)
+        raise SpendBudgetExceededError("reservation refused")
+
+    budget.reserve = refuse_after_preflight
+    agent = GPTAgent(
+        api_key="half-open-local-budget",
+        provider="openai",
+        max_retries=0,
+        circuit_breaker=breaker,
+        spend_budget=budget,
+    )
+
+    with pytest.raises(SpendBudgetExceededError, match="reservation refused"):
+        agent.respond("ping")
+    with pytest.raises(SpendBudgetExceededError, match="reservation refused"):
+        agent.respond("ping")
+
+    assert len(reserve_calls) == 2
+    assert calls == []
+    budget.reserve = original_reserve
