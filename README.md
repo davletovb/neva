@@ -348,7 +348,8 @@ scheduler = create_scheduler("my_scheduler")
   run to seed Python, optional NumPy/PyTorch runtimes, Neva scheduler RNGs
   (including nested Composite schedulers), and custom `set_seed` hooks, then
   capture exact prompt inputs, behavior-affecting public environment configuration/state,
-  provider/model identifiers, generation settings, initial conversation state,
+  provider/model identifiers plus configured provider endpoint, generation settings,
+  full prompt-validator regex policy, initial conversation and built-in memory state,
   agent attributes/tool metadata, dependency/runtime versions, scheduler configuration
   (including pending event queues), cache policy plus an initial cache-state fingerprint,
   and the seed report. `environment.seed(...)`
