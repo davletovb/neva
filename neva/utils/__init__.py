@@ -10,6 +10,7 @@ metrics = _import_module(".metrics", __name__)
 observer = _import_module(".observer", __name__)
 provider_resources = _import_module(".provider_resources", __name__)
 recovery = _import_module(".recovery", __name__)
+reproducibility = _import_module(".reproducibility", __name__)
 safety = _import_module(".safety", __name__)
 state_management = _import_module(".state_management", __name__)
 telemetry = _import_module(".telemetry", __name__)
@@ -23,6 +24,7 @@ __all__ = [
     "observer",
     "provider_resources",
     "recovery",
+    "reproducibility",
     "safety",
     "state_management",
     "telemetry",
