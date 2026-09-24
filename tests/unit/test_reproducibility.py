@@ -124,7 +124,7 @@ def test_seed_everything_repeats_global_random_and_scheduler_sequence():
     assert selected_one == selected_two
     assert report_one.scheduler_seeds == report_two.scheduler_seeds
     assert report_one.optional_libraries == {"numpy": "skipped", "torch": "skipped"}
-    assert "child-processes" in report_one.python_hash_seed
+    assert report_one.python_hash_seed.startswith("unchanged-")
 
 
 def test_environment_seed_reaches_nested_composite_scheduler_and_agent_hook():
