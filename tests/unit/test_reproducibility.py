@@ -1,14 +1,17 @@
 import json
+import os
 import random
 import threading
+from datetime import datetime, timezone
 
 import pytest
 
 from neva.agents import GPTAgent, TransformerAgent
-from neva.agents.base import AIAgent
+from neva.agents.base import AIAgent, Tool
 from neva.environments import BasicEnvironment, Environment
 from neva.memory import ShortTermMemory
 from neva.schedulers import CompositeScheduler, EventDrivenScheduler, RandomScheduler
+from neva.tools import ArgumentSchema, ArgumentSpec, ToolGuard, ToolLimits
 from neva.utils.caching import LLMCache
 from neva.utils.exceptions import (
     AgentCommunicationError,
@@ -25,6 +28,20 @@ from neva.utils.reproducibility import (
     seed_everything,
 )
 from neva.utils.safety import PromptValidator
+
+
+class ManifestTool(Tool):
+    def __init__(self, *, schema=None, guard=None):
+        super().__init__(
+            "manifest-tool",
+            "Manifest test tool",
+            capabilities=("test",),
+            argument_schema=schema,
+            tool_guard=guard,
+        )
+
+    def use(self, task):
+        return task
 
 
 class SeedAwareAgent(AIAgent):
@@ -54,6 +71,42 @@ def _build_random_env(backend=_deterministic_backend):
 def test_seed_everything_rejects_invalid_seed(bad_seed):
     with pytest.raises(ReproducibilityError, match="seed"):
         seed_everything(bad_seed, optional_libraries=False)
+
+
+def test_child_hash_seed_is_opt_in(monkeypatch):
+    monkeypatch.delenv("PYTHONHASHSEED", raising=False)
+
+    report = seed_everything(123, optional_libraries=False)
+
+    assert "PYTHONHASHSEED" not in os.environ
+    assert report.python_hash_seed == "unchanged-for-child-processes"
+
+    report = seed_everything(
+        123,
+        optional_libraries=False,
+        set_child_hash_seed=True,
+    )
+
+    assert os.environ["PYTHONHASHSEED"] == "123"
+    assert report.python_hash_seed.startswith("set-to-123-for-child-processes")
+
+
+def test_seed_does_not_replace_unknown_custom_rng_type():
+    class CustomScheduler:
+        def __init__(self):
+            self._rng = object()
+
+    scheduler = CustomScheduler()
+    original = scheduler._rng
+
+    report = seed_everything(
+        99,
+        scheduler=scheduler,
+        optional_libraries=False,
+    )
+
+    assert scheduler._rng is original
+    assert report.scheduler_seeds == {}
 
 
 def test_seed_everything_repeats_global_random_and_scheduler_sequence():
@@ -162,6 +215,51 @@ def test_manifest_fingerprint_captures_builtin_memory_state_without_timestamps()
     assert state["capacity"] == 3
     assert state["records"][0]["message"] == "same"
     assert "timestamp" not in json.dumps(state)
+
+
+def test_memory_metadata_is_normalized_for_manifest_fingerprints(tmp_path):
+    memory = ShortTermMemory(capacity=2)
+    memory.remember(
+        "user",
+        "metadata",
+        metadata={
+            "when": datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc),
+            "tags": {"b", "a"},
+        },
+    )
+    env = BasicEnvironment("memory", "metadata", RandomScheduler())
+    env.register_agent(
+        TransformerAgent(
+            name="agent",
+            llm_backend=_deterministic_backend,
+            memory=memory,
+        )
+    )
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+    manifest.fingerprint()
+    path = tmp_path / "memory-manifest.json"
+    manifest.save(path)
+
+    metadata = manifest.agents[0]["memory"]["state"]["records"][0]["metadata"]
+    assert metadata["when"]["isoformat"] == "2026-01-02T03:04:00+00:00"
+    assert metadata["tags"] == ["a", "b"]
+    assert path.exists()
+
+
+def test_json_native_mapping_preserves_distinct_non_string_and_string_keys():
+    env = _build_random_env()
+    manifest = create_run_manifest(
+        env,
+        seed=1,
+        dependencies=[],
+        metadata={1: "integer", "1": "string"},
+    )
+
+    entries = manifest.metadata["__neva_mapping_entries__"]
+    assert len(entries) == 2
+    assert [1, "integer"] in entries
+    assert ["1", "string"] in entries
 
 
 def test_manifest_fingerprint_captures_full_prompt_validator_policy():
@@ -335,6 +433,33 @@ def test_event_scheduler_pending_queue_changes_manifest_fingerprint():
     assert first_manifest.fingerprint() != second_manifest.fingerprint()
 
 
+def test_manifest_fingerprint_captures_tool_schema_and_guard_policy():
+    def build(max_length, allowed):
+        env = BasicEnvironment("tools", "policy", RandomScheduler())
+        agent = TransformerAgent(name="agent", llm_backend=_deterministic_backend)
+        agent.register_tool(
+            ManifestTool(
+                schema=ArgumentSchema(
+                    {"input": ArgumentSpec(type=str, max_length=max_length)}
+                ),
+                guard=ToolGuard(
+                    allowed_tools={allowed},
+                    limits=ToolLimits(max_output_chars=100),
+                ),
+            )
+        )
+        env.register_agent(agent)
+        return env
+
+    first = create_run_manifest(build(5, "manifest-tool"), seed=1, dependencies=[])
+    second = create_run_manifest(build(10, "other"), seed=1, dependencies=[])
+
+    assert first.fingerprint() != second.fingerprint()
+    tool = first.agents[0]["tools"][0]
+    assert tool["argument_schema"]["fields"]["input"]["max_length"] == 5
+    assert tool["tool_guard"]["allowed_tools"] == ["manifest-tool"]
+
+
 def test_manifest_marks_builtin_live_provider_as_not_exactly_reproducible():
     env = BasicEnvironment("live", "provider caveat", RandomScheduler())
     agent = GPTAgent(
@@ -394,6 +519,48 @@ def test_recording_preserves_gpt_cancellation_aware_backend_resolution(monkeypat
     assert agent.replayable_backend(cancel_event=cancel_event)("prompt") == "ok"
     assert seen[-1] is cancel_event
     assert tape.records[0].response == "ok"
+
+
+def test_gpt_replay_identity_detects_different_provider_history(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "recorded"}}]}
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.requests.post",
+        lambda *args, **kwargs: Response(),
+    )
+
+    recording = GPTAgent(
+        name="agent",
+        api_key="key",
+        provider="openai",
+        model="model",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    tape = ReplayTape()
+    tape.attach_recording([recording])
+    assert recording.respond("hello") == "recorded"
+
+    replaying = GPTAgent(
+        name="agent",
+        api_key="different-key",
+        provider="openai",
+        model="model",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    replaying.conversation_state.record_turn("user", "DIFFERENT HISTORY")
+    tape.attach_replay([replaying])
+
+    with pytest.raises(ReplayMismatchError, match="prompt mismatch"):
+        replaying.respond("hello")
 
 
 def test_provider_backed_gpt_can_record_then_replay_offline(monkeypatch):
@@ -464,6 +631,45 @@ def test_provider_backed_gpt_can_record_then_replay_offline(monkeypatch):
     assert len(calls) == 1
 
 
+def test_replay_compatibility_ignores_runtime_and_dependency_audit_fields():
+    env = _build_random_env()
+    manifest = prepare_reproducible_run(
+        env,
+        seed=7,
+        dependencies=["requests"],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+
+    payload = manifest.to_dict()
+    payload["runtime"]["python"] = "9.9.9"
+    payload["runtime"]["platform"] = "different-machine"
+    payload["dependencies"]["requests"] = "999.0"
+    changed = RunManifest.from_dict(payload)
+
+    assert changed.fingerprint() == manifest.fingerprint()
+    assert changed.audit_fingerprint() != manifest.audit_fingerprint()
+    tape.replay_backend(manifest=changed)
+
+
+def test_manifest_mismatch_reports_differing_configuration_paths():
+    env = _build_random_env()
+    manifest = prepare_reproducible_run(
+        env,
+        seed=7,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+
+    payload = manifest.to_dict()
+    payload["seed"] = 8
+    changed = RunManifest.from_dict(payload)
+
+    with pytest.raises(ReplayMismatchError, match=r"differing fields: seed"):
+        tape.replay_backend(manifest=changed)
+
+
 def test_manifest_round_trip_and_fingerprint_ignore_creation_time(tmp_path):
     env = _build_random_env()
     first = prepare_reproducible_run(
@@ -498,6 +704,52 @@ def test_manifest_rejects_invalid_prompt_shapes(prompts):
     env = _build_random_env()
     with pytest.raises(ReproducibilityError, match="prompt"):
         create_run_manifest(env, seed=1, prompts=prompts, dependencies=[])
+
+
+def test_nested_recording_preserves_invocation_order():
+    tape = ReplayTape()
+    inner = tape.recording_backend(lambda prompt: "inner-response")
+
+    def outer_backend(prompt):
+        assert inner("inner") == "inner-response"
+        return "outer-response"
+
+    outer = tape.recording_backend(outer_backend)
+
+    assert outer("outer") == "outer-response"
+    assert [record.prompt for record in tape.records] == ["outer", "inner"]
+
+    replay = tape.replay_backend()
+    assert replay("outer") == "outer-response"
+    assert replay("inner") == "inner-response"
+    replay.assert_consumed()
+
+
+def test_slow_recording_call_does_not_block_other_model_calls():
+    tape = ReplayTape()
+    started = threading.Event()
+    release = threading.Event()
+    outcome = []
+
+    def slow_backend(prompt):
+        started.set()
+        assert release.wait(2)
+        return "slow-response"
+
+    slow = tape.recording_backend(slow_backend)
+    fast = tape.recording_backend(lambda prompt: "fast-response")
+
+    worker = threading.Thread(target=lambda: outcome.append(slow("slow")))
+    worker.start()
+    assert started.wait(1)
+
+    assert fast("fast") == "fast-response"
+    release.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert outcome == ["slow-response"]
+    assert [record.prompt for record in tape.records] == ["slow", "fast"]
 
 
 def test_attach_recording_is_atomic_when_one_agent_has_no_backend():
@@ -666,6 +918,16 @@ def test_replay_tape_detects_tampered_prompt_digest():
     payload = {"version": 1, "manifest_fingerprint": None, "records": [record.to_dict()]}
 
     with pytest.raises(ReproducibilityError, match="digest"):
+        ReplayTape.from_dict(payload)
+
+
+def test_replay_tape_detects_tampered_response_digest():
+    tape = ReplayTape()
+    tape.recording_backend(lambda prompt: "original")("prompt")
+    payload = tape.to_dict()
+    payload["records"][0]["response"] = "edited"
+
+    with pytest.raises(ReproducibilityError, match="record digest"):
         ReplayTape.from_dict(payload)
 
 
