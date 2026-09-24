@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API key and estimated spend ceiling. The README documents estimated pricing,
   limits, and provider-failure guidance; deterministic tests exercise the
   request path without real credentials.
+- Bounded provider streaming for built-in `GPTAgent` providers:
+  `stream_response()` returns a single-use `StreamSession` that yields `delta`
+  and `complete` `StreamEvent`s from OpenAI-compatible SSE, the Anthropic SDK,
+  and the Gemini SDK, with a bounded producer queue and both synchronous and
+  asynchronous consumption. Shared provider admission, spend accounting,
+  cache/history semantics, cancellation, and retry rules are preserved; a
+  response enters history and cache only when the consumer accepts the
+  `complete` event, and an interrupted stream raises `StreamInterruptedError`
+  carrying the uncommitted partial text. First-token and full-completion
+  latency are recorded separately as `neva.llm.first_token.latency` and
+  `neva.llm.api.latency` histogram metrics alongside a `neva.llm.call` span,
+  and loopback tests cover the local HTTP and SDK streaming paths.
 - Reproducible experiment support: `SeedReport`, `RunManifest`,
   `ReplayRecord`, `ReplayTape`, `ReplayBackend`,
   `seed_everything()`, `prepare_reproducible_run()`, and
@@ -269,6 +281,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Anthropic content-block parsing now reads SDK objects as well as dicts.
 - OpenTelemetry log SDK import prefers the public `opentelemetry.sdk.logs`
   package and falls back to `_logs`.
+- OpenTelemetry API imports accept both release layouts, so the declared
+  `observability` extra actually exports telemetry with opentelemetry-api 1.23:
+  the logs API falls back to `opentelemetry._logs` and `set_span_in_context` is
+  read from `opentelemetry.trace` when `opentelemetry.context` does not export
+  it. Previously the import failure was reported as a missing dependency and
+  telemetry silently degraded to the no-op fallback.
+- Configuring telemetry more than once (or again after `reset_telemetry()`) now
+  keeps exporting: the tracer and meter are bound to the manager's own providers
+  instead of the process-global ones, which OpenTelemetry sets only on the first
+  call, so a replacement manager previously recorded spans and metrics into
+  providers that `configure_telemetry()` had already shut down.
 - Custom OpenAI/Grok `api_base` values that are not already a Chat Completions
   endpoint now have `/chat/completions` appended.
 - `RateLimiter.acquire()` sleeps outside its lock so shared limiters are not

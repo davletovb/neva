@@ -46,11 +46,19 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     try:
         otel_trace = importlib.import_module("opentelemetry.trace")
         otel_metrics = importlib.import_module("opentelemetry.metrics")
-        otel_logs = importlib.import_module("opentelemetry.logs")
+        try:
+            otel_logs = importlib.import_module("opentelemetry.logs")
+        except Exception:
+            # opentelemetry-api < 1.24 exposes the logs API as `_logs` only.
+            otel_logs = importlib.import_module("opentelemetry._logs")
 
         context_module = importlib.import_module("opentelemetry.context")
         Context = getattr(context_module, "Context")
-        set_span_in_context = getattr(context_module, "set_span_in_context")
+        # `set_span_in_context` lives in `opentelemetry.trace` for older
+        # releases and is re-exported from `opentelemetry.context` in newer ones.
+        set_span_in_context = getattr(otel_trace, "set_span_in_context", None)
+        if set_span_in_context is None:
+            set_span_in_context = getattr(context_module, "set_span_in_context")
 
         try:
             sdk_logs = importlib.import_module("opentelemetry.sdk.logs")
@@ -435,7 +443,16 @@ class TelemetryManager:
                 modules.trace.set_tracer_provider(tracer_provider)
                 self._owns_tracer_provider = True
             self._tracer_provider = tracer_provider
-            self._tracer = tracer or modules.trace.get_tracer(__name__)
+            if tracer is not None:
+                self._tracer = tracer
+            elif tracer_provider is not None:
+                # Bind to this manager's provider. OpenTelemetry honours only the
+                # first set_tracer_provider() call, so the process-global lookup
+                # returns the provider of an earlier manager - which a
+                # reconfigured manager has already shut down.
+                self._tracer = tracer_provider.get_tracer(__name__)
+            else:  # pragma: no cover - the branch above always creates a provider.
+                self._tracer = modules.trace.get_tracer(__name__)
 
             readers = list(metric_readers or [])
             if meter_provider is None and meter is None:
@@ -445,7 +462,14 @@ class TelemetryManager:
                 modules.metrics.set_meter_provider(meter_provider)
                 self._owns_meter_provider = True
             self._meter_provider = meter_provider
-            self._meter = meter or modules.metrics.get_meter(__name__)
+            if meter is not None:
+                self._meter = meter
+            elif meter_provider is not None:
+                # See the tracer comment above: the global meter provider is also
+                # set only once per process.
+                self._meter = meter_provider.get_meter(__name__)
+            else:  # pragma: no cover - the branch above always creates a provider.
+                self._meter = modules.metrics.get_meter(__name__)
 
             if logger_provider is None and structured_logger is None:
                 logger_provider = modules.logger_provider_cls(resource=resource)

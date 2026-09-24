@@ -131,6 +131,16 @@ jobs:
         run: |
           pytest -q -o addopts=""             --cov=neva.memory.faiss_vector_store             --cov-report=term-missing             --cov-fail-under=80             tests/unit/test_memory_faiss.py
 
+      - name: Measure telemetry implementation coverage
+        run: |
+          pytest -q -o addopts="" \
+            --cov=neva.utils.telemetry \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            tests/unit/test_telemetry.py \
+            tests/unit/test_agent_telemetry.py \
+            tests/unit/test_telemetry_sdk_paths.py
+
   docs:
     name: Build documentation
     runs-on: ubuntu-latest
