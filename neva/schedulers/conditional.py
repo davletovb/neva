@@ -7,7 +7,7 @@ from typing import Callable, Dict, cast
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import ConfigurationError, SchedulingError
-from neva.utils.observer import SimulationObserver
+from neva.utils.observability.observer import SimulationObserver
 
 Condition = Callable[[AIAgent], bool]
 

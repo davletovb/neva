@@ -192,7 +192,7 @@ def _seed_scheduler(
     else:
         rng = getattr(scheduler, "_rng", None)
         if rng is random or isinstance(rng, random.Random):
-            setattr(scheduler, "_rng", random.Random(scheduler_seed))
+            setattr(scheduler, "_rng", random.Random(scheduler_seed))  # nosec B311
             seeded[path] = scheduler_seed
 
     children = getattr(scheduler, "_group_schedulers", None)
@@ -317,7 +317,7 @@ def _scheduler_config(scheduler: Optional["Scheduler"]) -> Optional[Dict[str, An
     for attribute, key in (("_queue", "queue"), ("_event_queue", "event_queue")):
         if not hasattr(scheduler, attribute):
             continue
-        rendered = []
+        rendered: list[Any] = []
         for item in list(getattr(scheduler, attribute)):
             if isinstance(item, tuple) and len(item) == 2:
                 value = getattr(item[1], "name", None)

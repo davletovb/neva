@@ -224,6 +224,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepts), and a `package` CI job that builds the wheel, installs it into a
   clean environment, and runs `scripts/wheel_smoke.py`. A committed
   `poetry.lock` pins the resolution and is verified with `poetry check --lock`.
+- Public methods across `AIAgent`, `AgentManager`, `GPTAgent`, `Environment`,
+  and `Scheduler` now carry docstrings, and `interrogate` enforces a 50%
+  floor over the public API surface (private methods, `__init__`, and nested
+  helpers excluded; the floor is a ratchet to raise as modules are documented).
 
 ### Changed
 - Supported/tested Python versions are now 3.11, 3.12, 3.13, and 3.14; Python
@@ -252,6 +256,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAI-compatible path uses `requests`), and the optional dependency manifests
   are cross-checked against each other and against the imports in `neva/` by
   `tests/unit/test_packaging_metadata.py`.
+- The observability modules moved into a subpackage: the implementations now
+  live in `neva.utils.observability.telemetry` and
+  `neva.utils.observability.observer`, while `neva.utils.telemetry` and
+  `neva.utils.observer` remain importable as compatibility shims that alias the
+  implementation modules (so imports *and* module-level attribute mutation on the
+  old paths keep working). Internal imports, the README, and the guides use the
+  new paths; the generated API reference picks them up automatically.
+
+### Changed
+- `mypy` runs with `disallow_untyped_defs` and `warn_unused_ignores` for
+  `neva.tools.*` and `neva.utils.reproducibility` through per-module overrides;
+  the rest of the tree keeps the previous settings until each module is clean.
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a

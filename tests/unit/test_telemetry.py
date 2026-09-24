@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
 
-from neva.utils.telemetry import (
+from neva.utils.observability.telemetry import (
     TelemetryManager,
     _content_fields,
     configure_telemetry,

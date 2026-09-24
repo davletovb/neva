@@ -125,8 +125,7 @@ class ProviderResourceCoordinator:
         now = time.time()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS provider_scope_config (
                     scope TEXT PRIMARY KEY,
                     rate INTEGER,
@@ -134,40 +133,32 @@ class ProviderResourceCoordinator:
                     max_concurrency INTEGER,
                     max_cost REAL
                 )
-                """
-            )
-            connection.execute(
-                """
+                """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS provider_scope_state (
                     scope TEXT PRIMARY KEY,
                     allowance REAL NOT NULL,
                     last_check REAL NOT NULL,
                     spent REAL NOT NULL
                 )
-                """
-            )
-            connection.execute(
-                """
+                """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS provider_waiters (
                     ticket INTEGER PRIMARY KEY AUTOINCREMENT,
                     scope TEXT NOT NULL,
                     owner TEXT NOT NULL UNIQUE,
                     expires REAL NOT NULL
                 )
-                """
-            )
-            connection.execute(
-                """
+                """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS provider_leases (
                     scope TEXT NOT NULL,
                     owner TEXT NOT NULL,
                     expires REAL NOT NULL,
                     PRIMARY KEY (scope, owner)
                 )
-                """
-            )
-            connection.execute(
-                """
+                """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS provider_reservations (
                     scope TEXT NOT NULL,
                     owner TEXT NOT NULL,
@@ -175,8 +166,7 @@ class ProviderResourceCoordinator:
                     expires REAL NOT NULL,
                     PRIMARY KEY (scope, owner)
                 )
-                """
-            )
+                """)
             row = connection.execute(
                 "SELECT rate, period, max_concurrency, max_cost "
                 "FROM provider_scope_config WHERE scope = ?",

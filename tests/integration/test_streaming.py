@@ -423,7 +423,7 @@ def test_gemini_stream_adapter_and_usage(monkeypatch):
     )
     original = importlib.import_module
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
+        "neva.agents.gpt._import_module",
         lambda name: module if name == "google.generativeai" else original(name),
     )
     agent = GPTAgent(api_key="test", provider="gemini", model="gemini-test", max_retries=0)

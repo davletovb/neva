@@ -180,7 +180,7 @@ def test_anthropic_requires_package(monkeypatch):
     def _missing(name: str):
         raise ImportError(name)
 
-    monkeypatch.setattr("neva.agents.gpt.importlib.import_module", _missing)
+    monkeypatch.setattr("neva.agents.gpt._import_module", _missing)
     agent = GPTAgent(api_key="k", provider="anthropic", name="Scout", max_retries=0)
     with pytest.raises(ConfigurationError):
         agent._invoke_anthropic("hello")
@@ -190,7 +190,7 @@ def test_gemini_requires_package(monkeypatch):
     def _missing(name: str):
         raise ImportError(name)
 
-    monkeypatch.setattr("neva.agents.gpt.importlib.import_module", _missing)
+    monkeypatch.setattr("neva.agents.gpt._import_module", _missing)
     agent = GPTAgent(api_key="k", provider="gemini", name="Scout", max_retries=0)
     with pytest.raises(ConfigurationError):
         agent._invoke_gemini("hello")
@@ -224,7 +224,7 @@ def test_anthropic_success_and_empty(monkeypatch):
             Anthropic = _Bound
 
         monkeypatch.setattr(
-            "neva.agents.gpt.importlib.import_module",
+            "neva.agents.gpt._import_module",
             lambda name: _Mod if name == "anthropic" else (_ for _ in ()).throw(ImportError(name)),
         )
 
@@ -271,7 +271,7 @@ def test_anthropic_passes_request_timeout(monkeypatch):
         Anthropic = _Client
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
+        "neva.agents.gpt._import_module",
         lambda name: _Mod if name == "anthropic" else (_ for _ in ()).throw(ImportError(name)),
     )
     agent = GPTAgent(api_key="k", provider="anthropic", max_retries=0, request_timeout=12.5)
@@ -300,10 +300,10 @@ def test_gemini_passes_request_timeout(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
-        lambda name: _GenAI
-        if name == "google.generativeai"
-        else (_ for _ in ()).throw(ImportError(name)),
+        "neva.agents.gpt._import_module",
+        lambda name: (
+            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
+        ),
     )
     agent = GPTAgent(api_key="k", provider="gemini", max_retries=0, request_timeout=7.5)
     assert agent._invoke_gemini("hello") == "ok"
@@ -330,10 +330,10 @@ def test_gemini_success_and_candidates(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
-        lambda name: _GenAI
-        if name == "google.generativeai"
-        else (_ for _ in ()).throw(ImportError(name)),
+        "neva.agents.gpt._import_module",
+        lambda name: (
+            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
+        ),
     )
     agent = GPTAgent(api_key="k", provider="gemini", name="Scout", max_retries=0)
     assert agent._invoke_gemini("hello") == "gemini-ok"
@@ -360,10 +360,12 @@ def test_gemini_success_and_candidates(monkeypatch):
         GenerativeModel = _EmptyTextModel
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
-        lambda name: _CandidateGenAI
-        if name == "google.generativeai"
-        else (_ for _ in ()).throw(ImportError(name)),
+        "neva.agents.gpt._import_module",
+        lambda name: (
+            _CandidateGenAI
+            if name == "google.generativeai"
+            else (_ for _ in ()).throw(ImportError(name))
+        ),
     )
     assert agent._invoke_gemini("hello") == "from-candidate"
 
@@ -650,10 +652,10 @@ def test_gemini_invoke_sends_budgeted_text(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
-        lambda name: _GenAI
-        if name == "google.generativeai"
-        else (_ for _ in ()).throw(ImportError(name)),
+        "neva.agents.gpt._import_module",
+        lambda name: (
+            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
+        ),
     )
     tight = GPTAgent(
         api_key="k",
@@ -702,10 +704,10 @@ def test_gemini_token_tracker_counts_flattened_history(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
-        lambda name: _GenAI
-        if name == "google.generativeai"
-        else (_ for _ in ()).throw(ImportError(name)),
+        "neva.agents.gpt._import_module",
+        lambda name: (
+            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
+        ),
     )
     agent = GPTAgent(
         api_key="k",
@@ -742,10 +744,10 @@ def test_gemini_uses_provider_usage_metadata(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt.importlib.import_module",
-        lambda name: _GenAI
-        if name == "google.generativeai"
-        else (_ for _ in ()).throw(ImportError(name)),
+        "neva.agents.gpt._import_module",
+        lambda name: (
+            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
+        ),
     )
     agent = GPTAgent(
         api_key="k",

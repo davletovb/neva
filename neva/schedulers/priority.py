@@ -7,7 +7,7 @@ from typing import Any, List, Tuple, cast
 from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import SchedulingError
-from neva.utils.observer import SimulationObserver
+from neva.utils.observability.observer import SimulationObserver
 
 
 class PriorityScheduler(Scheduler):

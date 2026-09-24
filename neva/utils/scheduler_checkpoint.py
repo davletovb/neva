@@ -1,4 +1,5 @@
 """Data-only scheduler checkpoint adapters, with explicit custom hooks."""
+
 from __future__ import annotations
 
 import random
@@ -87,7 +88,8 @@ def prepare_scheduler(scheduler: Any, payload: Any, agents: Dict[str, Any]) -> A
                 raise ValueError("Checkpoint queue contains unknown agents")
             updates[attr] = [(value, agents[name]) for value, name in payload[key]]
     if "rng" in payload:
-        rng = random.Random()
+        # Seeded PRNG for reproducibility; not a security-sensitive use.
+        rng = random.Random()  # nosec B311
         state = payload["rng"]
         rng.setstate((state[0], tuple(state[1]), state[2]))
         updates["_rng"] = rng  # Do not mutate process-global random state.

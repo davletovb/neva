@@ -11,9 +11,9 @@ from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
 from .utils import missing_dependency_message
 
 try:  # pragma: no cover - exercised when wikipedia is available.
-    import wikipedia  # type: ignore
+    import wikipedia
 except Exception:  # pragma: no cover - fallback for optional dependency.
-    wikipedia = None  # type: ignore
+    wikipedia = None
 
 
 logger = logging.getLogger(__name__)

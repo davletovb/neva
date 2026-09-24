@@ -41,6 +41,9 @@ jobs:
       - name: Bandit
         run: bandit -r neva benchmarks
 
+      - name: Docstring coverage
+        run: interrogate neva
+
       - name: Pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
 
@@ -131,7 +134,7 @@ jobs:
       - name: Measure telemetry implementation coverage
         run: |
           pytest -q -o addopts="" \
-            --cov=neva.utils.telemetry \
+            --cov=neva.utils.observability.telemetry \
             --cov-report=term-missing \
             --cov-fail-under=80 \
             tests/unit/test_telemetry.py \
