@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API key and estimated spend ceiling. The README documents estimated pricing,
   limits, and provider-failure guidance; deterministic tests exercise the
   request path without real credentials.
+- Bounded provider streaming for built-in `GPTAgent` providers:
+  `stream_response()` returns a single-use `StreamSession` that yields `delta`
+  and `complete` `StreamEvent`s from OpenAI-compatible SSE, the Anthropic SDK,
+  and the Gemini SDK, with a bounded producer queue and both synchronous and
+  asynchronous consumption. Shared provider admission, spend accounting,
+  cache/history semantics, cancellation, and retry rules are preserved; a
+  response enters history and cache only when the consumer accepts the
+  `complete` event, and an interrupted stream raises `StreamInterruptedError`
+  carrying the uncommitted partial text. First-token and full-completion
+  latency are recorded separately as `neva.llm.first_token.latency` and
+  `neva.llm.api.latency` histogram metrics alongside a `neva.llm.call` span,
+  and loopback tests cover the local HTTP and SDK streaming paths.
 - Reproducible experiment support: `SeedReport`, `RunManifest`,
   `ReplayRecord`, `ReplayTape`, `ReplayBackend`,
   `seed_everything()`, `prepare_reproducible_run()`, and
