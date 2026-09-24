@@ -1,6 +1,7 @@
 """Opt-in model token envelopes, including actual provider request framing."""
 
 import pytest
+import requests
 
 from neva.agents.gpt import _RAW_PROMPT_MODE, GPTAgent
 from neva.utils.context_budget import ModelContextBudget, openai_chat_counter
@@ -51,7 +52,8 @@ def test_openai_counter_uses_selected_model_encoding_and_message_framing(monkeyp
 
     class Encoding:
         @staticmethod
-        def encode(text):
+        def encode(text, *, disallowed_special):
+            assert disallowed_special == ()
             return list(text)
 
     class Tiktoken:
@@ -68,6 +70,35 @@ def test_openai_counter_uses_selected_model_encoding_and_message_framing(monkeyp
         counter("hello")
     with pytest.raises(ConfigurationError, match="does not support"):
         openai_chat_counter("unknown-model")
+    with pytest.raises(ConfigurationError, match="counter provider/model"):
+        ModelContextBudget("gemini", "gpt-4o-mini", 100, counter, "openai-counter")
+
+
+def test_special_token_looking_text_in_history_is_counted_as_ordinary_text(monkeypatch):
+    class Encoding:
+        @staticmethod
+        def encode(text, *, disallowed_special):
+            assert disallowed_special == ()
+            return list(text)
+
+    class Tiktoken:
+        @staticmethod
+        def encoding_for_model(model):
+            return Encoding()
+
+    monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
+    agent = GPTAgent(
+        name="Scout",
+        llm_backend=lambda prompt: "ok",
+        context_budget=ModelContextBudget(
+            "openai", "gpt-4o-mini", 300, openai_chat_counter("gpt-4o-mini"), "test-v1"
+        ),
+        max_output_tokens=2,
+    )
+    agent._remember("user", "Pasted docs mention <|endoftext|> here")
+    for message in ("first", "second"):
+        assert agent._history_window(message)[0].message.startswith("Pasted docs")
+        assert agent.respond(message) == "ok"
 
 
 def test_openai_counter_requires_optional_tokenizer(monkeypatch):
@@ -76,6 +107,17 @@ def test_openai_counter_requires_optional_tokenizer(monkeypatch):
 
     monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", missing)
     with pytest.raises(ConfigurationError, match="requires tiktoken"):
+        openai_chat_counter("gpt-4o-mini")
+
+
+def test_encoding_cache_network_failure_is_configuration_error(monkeypatch):
+    class Tiktoken:
+        @staticmethod
+        def encoding_for_model(model):
+            raise requests.exceptions.ProxyError("offline")
+
+    monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
+    with pytest.raises(ConfigurationError, match="encoding cache, and network"):
         openai_chat_counter("gpt-4o-mini")
 
 
@@ -88,6 +130,8 @@ def test_profile_must_match_model_and_reserve_output_tokens():
         GPTAgent(context_budget=profile(limit=8), max_output_tokens=8)
     with pytest.raises(ConfigurationError, match="max_output_tokens"):
         GPTAgent(context_budget=profile(), max_output_tokens=True)
+    assert profile(provider="OpenAI").provider == "openai"
+    GPTAgent(context_budget=profile(provider="OpenAI"), max_output_tokens=1)
 
 
 def test_history_trimming_includes_roles_overhead_and_output_reservation():
@@ -189,6 +233,36 @@ def test_cache_identity_changes_with_budget_and_model_change_rejects():
     first.model = "changed"
     with pytest.raises(ConfigurationError, match="no longer matches"):
         first._scoped_key("ping")
+
+
+def test_long_history_counts_logarithmically_many_requests(monkeypatch):
+    calls = []
+
+    def counting(request):
+        calls.append(len(request))
+        return chat_tokens(request)
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", lambda *args, **kwargs: Response())
+    agent = GPTAgent(
+        api_key="test",
+        name="Scout",
+        max_retries=0,
+        max_context_chars=1_000_000,
+        context_budget=profile(limit=1_000_000, counter=counting),
+        max_output_tokens=1,
+    )
+    for index in range(800):
+        agent._remember("user", str(index))
+    assert agent.respond("now") == "ok"
+    assert len(calls) < 100
+    assert sum(calls) < 80_000
 
 
 def test_spend_preflight_reserves_model_count_including_message_overhead(monkeypatch):

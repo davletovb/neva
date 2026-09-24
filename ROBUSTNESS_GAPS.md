@@ -427,6 +427,8 @@ scripted offline demonstrations.
   can include model-specific tokenization and framing. The optional
   `openai_chat_counter()` uses `tiktoken` plus the OpenAI cookbook's message and
   reply-priming estimate for `gpt-4o-mini`; unsupported models fail explicitly.
+  Special-token-looking text is counted as ordinary content; unavailable
+  tokenizer/cache/network access raises a configuration error.
 - `GPTAgent(context_budget=...)` keeps the recent contiguous history suffix
   only if both existing formatted-text character limits and
   `request tokens + max_output_tokens <= max_tokens` hold. Output reservation
@@ -435,6 +437,10 @@ scripted offline demonstrations.
   is never truncated to fit. Streaming and raw model-tool paths use the same
   history/check. Spend preflight uses model request tokens, including overhead,
   when the token envelope is enabled.
+- Binary search selects the largest fitting history suffix in logarithmically
+  many complete-request counts, avoiding quadratic re-encoding. The built-in
+  OpenAI counter is bound to its provider/model at profile construction, and
+  provider names are normalized for case.
 - Cache/replay identity and run manifests include the limit and counter ID;
   tests cover role overhead, suffix eviction, provider payload, Gemini shape,
   invalid/mismatched counters and models, current-prompt rejection, streaming
@@ -444,7 +450,8 @@ scripted offline demonstrations.
 Boundary: callers must select the correct provider/model context ceiling and
 counter for their endpoint. The OpenAI cookbook message-count function is an
 estimate, not an immutable guarantee; other providers require caller-supplied
-model-aware counters. Provider-side revisions, hidden framing, tool/image
+model-aware counters that are nondecreasing as history is prepended for binary
+search to find the largest fitting suffix. Provider-side revisions, hidden framing, tool/image
 payloads, and custom gateways can differ from local estimates. This is an
 opt-in preflight bound, not a universal provider context guarantee. Stored
 conversation retention remains independently configurable.

@@ -922,16 +922,31 @@ class GPTAgent(AIAgent):
         if _RAW_PROMPT_MODE.get():
             return []
 
-        window: List[Any] = []
-        for turn in reversed(self.conversation_state.turns):
-            candidate = [turn, *window]
-            if len(self._format_request(candidate, prompt)) > self._max_context_chars or (
-                budget is not None
-                and self._count_request_tokens(candidate, prompt) + self._max_output_tokens
-                > budget.max_tokens
-            ):
-                break
-            window = candidate
+        turns = self.conversation_state.turns
+        if budget is None:
+            # Preserve the legacy character-only window selection.
+            window: List[Any] = []
+            for turn in reversed(turns):
+                candidate = [turn, *window]
+                if len(self._format_request(candidate, prompt)) > self._max_context_chars:
+                    break
+                window = candidate
+        else:
+            # The caller's counter should be nondecreasing when older turns
+            # are prepended. Count only logarithmically many complete requests
+            # rather than re-encoding each growing suffix (quadratic work).
+            low, high = 0, len(turns)
+            while low < high:
+                middle = (low + high + 1) // 2
+                candidate = turns[-middle:]
+                if len(self._format_request(candidate, prompt)) > self._max_context_chars or (
+                    self._count_request_tokens(candidate, prompt) + self._max_output_tokens
+                    > budget.max_tokens
+                ):
+                    high = middle - 1
+                else:
+                    low = middle
+            window = turns[-low:] if low else []
         if self.provider not in _GEMINI_PROVIDERS:
             while window and window[0].speaker == self.name:
                 window.pop(0)

@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming, and raw model requests. Optional `openai_chat_counter()` uses the
   model's `tiktoken` encoding and OpenAI's estimated chat overhead. Cache and
   run-manifest identities include the versioned counter/limit; character-only
-  behavior remains the default.
+  behavior remains the default. Token-window selection uses binary search;
+  special-token-looking text is encoded as ordinary content and optional
+  tokenizer cache/network failures surface as configuration errors.
 - `examples/live_provider_smoke.py` runs offline with a scripted response by
   default and opts into a single bounded OpenAI request only with an explicit
   API key and estimated spend ceiling. The README documents estimated pricing,

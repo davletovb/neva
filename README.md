@@ -140,7 +140,10 @@ agent = GPTAgent(
 ```
 
 Install the optional tokenizer with `pip install tiktoken`; its first encoding
-load may require network access. The OpenAI helper counts the chosen model's
+load may require network access. For offline use, pre-populate tiktoken's
+encoding cache and point `TIKTOKEN_CACHE_DIR` at that directory; a missing or
+invalid entry fails closed with a configuration error. The OpenAI helper
+encodes special-token-looking user text as ordinary content and counts the chosen model's
 text tokens plus message-role and reply-priming overhead using the
 [OpenAI cookbook estimate](https://developers.openai.com/cookbook/examples/how_to_count_tokens_with_tiktoken).
 It rejects unsupported models rather than silently substituting another
@@ -148,7 +151,10 @@ encoding. For Anthropic, Gemini, xAI, custom endpoints, or other OpenAI models,
 provide `count_request_tokens` for that model and provider: it receives a
 sequence of actual role/content messages for chat APIs, or the flattened
 request string for Gemini, and must include provider framing overhead. Set a
-distinct `counter_id` whenever counting semantics change.
+distinct `counter_id` whenever counting semantics change. Custom counters
+should be nondecreasing as older turns are prepended: Neva uses binary search
+to find the largest fitting suffix. The OpenAI helper is bound to its
+provider/model at construction, so a Gemini profile cannot use it.
 
 On each request, Neva keeps a recent contiguous history suffix fitting both
 the character cap and `input tokens + max_output_tokens <= max_tokens`.

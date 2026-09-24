@@ -33,6 +33,7 @@ class ModelContextBudget:
     def __post_init__(self) -> None:
         if not isinstance(self.provider, str) or not self.provider.strip():
             raise ConfigurationError("context budget provider must be nonempty")
+        object.__setattr__(self, "provider", self.provider.strip().lower())
         if not isinstance(self.model, str) or not self.model.strip():
             raise ConfigurationError("context budget model must be nonempty")
         if isinstance(self.max_tokens, bool) or not isinstance(self.max_tokens, int):
@@ -41,6 +42,12 @@ class ModelContextBudget:
             raise ConfigurationError("context budget max_tokens must be a positive integer")
         if not callable(self.count_request_tokens):
             raise ConfigurationError("context budget count_request_tokens must be callable")
+        bound_provider = getattr(self.count_request_tokens, "_neva_provider", None)
+        bound_model = getattr(self.count_request_tokens, "_neva_model", None)
+        if (bound_provider is not None and bound_provider != self.provider) or (
+            bound_model is not None and bound_model != self.model
+        ):
+            raise ConfigurationError("context token counter provider/model must match the budget")
         if not isinstance(self.counter_id, str) or not self.counter_id.strip():
             raise ConfigurationError("context budget counter_id must be nonempty")
 
@@ -70,17 +77,22 @@ def openai_chat_counter(model: str) -> RequestTokenCounter:
     try:
         tiktoken = importlib.import_module("tiktoken")
         encoding = tiktoken.encoding_for_model(model)
-    except (ImportError, KeyError) as exc:
+    except Exception as exc:
         raise ConfigurationError(
-            "OpenAI context counting requires tiktoken for this model"
+            "OpenAI context counting requires tiktoken and its model encoding "
+            "(check package, encoding cache, and network)"
         ) from exc
 
     def count(request: RequestContent) -> int:
         if isinstance(request, str):
             raise ConfigurationError("OpenAI chat counter requires role/content messages")
         return 3 + sum(
-            3 + len(encoding.encode(message["role"])) + len(encoding.encode(message["content"]))
+            3
+            + len(encoding.encode(message["role"], disallowed_special=()))
+            + len(encoding.encode(message["content"], disallowed_special=()))
             for message in request
         )
 
+    setattr(count, "_neva_provider", "openai")
+    setattr(count, "_neva_model", model)
     return count
