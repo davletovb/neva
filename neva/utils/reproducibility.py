@@ -1165,6 +1165,17 @@ class ReplayTape:
 
         return _record
 
+    def _recording_wrapper(
+        self,
+        identity: Callable[[str], str],
+    ) -> Callable[[Callable[[str], str]], Callable[[str], str]]:
+        """Bind one replay-identity resolver to future backend resolutions."""
+
+        def _wrap(backend: Callable[[str], str]) -> Callable[[str], str]:
+            return self.recording_backend(backend, identity=identity)
+
+        return _wrap
+
     def attach_recording(self, agents: Iterable["AIAgent"]) -> None:
         """Install recording wrappers after all model boundaries validate."""
 
@@ -1173,12 +1184,7 @@ class ReplayTape:
         for agent in agent_list:
             agent.replayable_backend()
         for agent, identity in zip(agent_list, identities):
-            agent.set_model_backend_wrapper(
-                lambda backend, identity=identity: self.recording_backend(
-                    backend,
-                    identity=identity,
-                )
-            )
+            agent.set_model_backend_wrapper(self._recording_wrapper(identity))
 
     def attach_replay(
         self,
