@@ -42,7 +42,9 @@ if TYPE_CHECKING:  # pragma: no cover
 
 _MANIFEST_VERSION = 1
 _REPLAY_VERSION = 1
-_RECORDING_STACK: ContextVar[tuple[int, ...]] = ContextVar("neva_replay_recording_stack", default=())
+_RECORDING_STACK: ContextVar[tuple[int, ...]] = ContextVar(
+    "neva_replay_recording_stack", default=()
+)
 _DEFAULT_DEPENDENCIES = (
     "neva",
     "requests",
@@ -1212,7 +1214,6 @@ class ReplayTape:
                 return response
             finally:
                 _RECORDING_STACK.reset(token)
-
 
         return _record
 
