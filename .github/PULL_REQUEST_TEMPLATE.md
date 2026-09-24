@@ -1,6 +1,6 @@
 ## What changed
 
-<!-- One or two sentences per behavioural change. Link the tracked gap if this closes one. -->
+<!-- One or two sentences per behavioural change. Link the relevant issue or design discussion when useful. -->
 
 ## Verification
 
@@ -9,7 +9,8 @@
 - [ ] Full local suite: `pytest -q` (report the passed/skipped counts)
 - [ ] Quality gates: `black --check .`, `isort --check-only .`, `flake8`, `mypy neva benchmarks`,
       `bandit -r neva benchmarks`, `pre-commit run --all-files`
-- [ ] `ROBUSTNESS_GAPS.md` and `CHANGELOG.md` updated if this changes tracked status or behavior
+- [ ] `CAPABILITIES.md` updated if this changes supported library behavior
+- [ ] `CHANGELOG.md` updated when the change belongs in release history
 
 ## Notes for reviewers
 
