@@ -218,6 +218,9 @@ current provider limits and billing before running live workloads.
 
 - [Library capabilities](CAPABILITIES.md) — current runtime features,
   configuration concepts, and important boundaries.
+- [Production-readiness acceptance plan](PRODUCTION_READINESS.md) —
+  release-candidate checklist covering artifact, live-provider, operational,
+  and deployment checks.
 - [Documentation source](docs/) — guides and API documentation.
 - [Examples](examples/) — runnable simulations and integrations.
 - [Changelog](CHANGELOG.md) — chronological release and implementation history.
