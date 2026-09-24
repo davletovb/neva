@@ -764,6 +764,23 @@ class GPTAgent(AIAgent):
     def _cache_store(self, prompt: str, response: str) -> None:
         super()._cache_store(self._scoped_key(prompt), response)
 
+    def replay_identity_resolver(self) -> Callable[[str], str]:
+        """Capture the effective provider-request identity for replay validation."""
+
+        if self.llm_backend is not None:
+            return super().replay_identity_resolver()
+        return self._scoped_key
+
+    def replayable_backend(
+        self,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> LLMBackend:
+        """Return a cancellation-aware provider/custom model boundary."""
+
+        backend = self.llm_backend or self._default_backend(cancel_event=cancel_event)
+        return self._wrap_model_backend(backend)
+
     def generate_model_output(self, prompt: str) -> str:
         """Generate from an already composed prompt without adding history/context."""
 
@@ -773,8 +790,7 @@ class GPTAgent(AIAgent):
             cached = self._cache_lookup(validated_prompt)
             if cached is not None:
                 return cached
-            backend = self.llm_backend or self._default_backend()
-            response = backend(validated_prompt)
+            response = self.replayable_backend()(validated_prompt)
             self._cache_store(validated_prompt, response)
             return response
         finally:
@@ -800,8 +816,7 @@ class GPTAgent(AIAgent):
         if cached is not None:
             return cached
 
-        backend = self.llm_backend or self._default_backend(cancel_event=cancel_event)
-        response = backend(validated_prompt)
+        response = self.replayable_backend(cancel_event=cancel_event)(validated_prompt)
         self._cache_store(validated_prompt, response)
         return response
 

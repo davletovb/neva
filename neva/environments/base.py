@@ -105,6 +105,24 @@ class Environment:
 
         return ""
 
+    def seed(
+        self,
+        seed: int,
+        *,
+        optional_libraries: bool = True,
+        set_child_hash_seed: bool = False,
+    ):
+        """Seed Neva-owned RNGs, optionally setting child-process hash seeding."""
+
+        from neva.utils.reproducibility import seed_everything
+
+        return seed_everything(
+            seed,
+            environment=self,
+            optional_libraries=optional_libraries,
+            set_child_hash_seed=set_child_hash_seed,
+        )
+
     def on_turn_complete(self, response: str) -> None:
         """Update transcript/state before metrics; override instead of wrapping step."""
 

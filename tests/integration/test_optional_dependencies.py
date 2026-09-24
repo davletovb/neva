@@ -20,8 +20,11 @@ pytest.importorskip("numpy")
 pytest.importorskip("anthropic")
 
 from neva.agents import GPTAgent, TransformerAgent
+from neva.environments import BasicEnvironment
 from neva.memory import FaissVectorStoreMemory
+from neva.schedulers import RandomScheduler
 from neva.utils.exceptions import BackendError
+from neva.utils.reproducibility import create_run_manifest
 
 
 class _TinyTokenizer:
@@ -89,6 +92,29 @@ def test_faiss_real_dependency_returns_nearest_record_first():
         "A: alpha nearest",
         "B: beta farther",
     ]
+
+
+def test_faiss_memory_state_changes_reproducibility_fingerprint():
+    def build(message):
+        memory = FaissVectorStoreMemory(_axis_embedder, top_k=2)
+        memory.remember("A", message)
+        env = BasicEnvironment("faiss", "fingerprint", RandomScheduler())
+        env.register_agent(
+            TransformerAgent(
+                name="agent",
+                llm_backend=lambda prompt: "ok",
+                memory=memory,
+            )
+        )
+        return env
+
+    first = create_run_manifest(build("alpha nearest"), seed=1, dependencies=[])
+    second = create_run_manifest(build("beta farther"), seed=1, dependencies=[])
+
+    assert first.fingerprint() != second.fingerprint()
+    memory_state = first.agents[0]["memory"]["state"]
+    assert memory_state["records"][0]["record"]["message"] == "alpha nearest"
+    assert len(memory_state["index_sha256"]) == 64
 
 
 @pytest.fixture

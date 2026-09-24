@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Reproducible experiment support: `SeedReport`, `RunManifest`,
+  `ReplayRecord`, `ReplayTape`, `ReplayBackend`,
+  `seed_everything()`, `prepare_reproducible_run()`, and
+  `Environment.seed()`. Manifests capture replay-affecting environment,
+  scheduler, provider/model/endpoint, prompt-validator, conversation, built-in
+  memory (including FAISS), tool schema/guard, cache, and seed configuration,
+  while retaining dependency/runtime information as audit-only data. Replay
+  compatibility fingerprints exclude machine/package audit fields;
+  `audit_fingerprint()` retains them, and replay mismatch errors identify
+  differing configuration paths. Provider-backed GPT tapes validate an
+  effective request identity including history rather than only a bare prompt.
+  Recording reserves sequence slots before model work, preserving nested-call
+  invocation order without holding the tape lock across slow provider calls.
+  Whole-record digests detect edited responses/failures as well as prompt
+  changes. Seeding no longer overwrites unknown custom `_rng` objects and
+  child-process `PYTHONHASHSEED` mutation is opt-in. Non-JSON-native metadata
+  is normalized without string-key collisions, unsupported memory state fails
+  explicitly, and real FAISS memory state is fingerprinted. API keys remain
+  excluded; prompt/conversation/memory/tool metadata and replay outputs remain
+  potentially sensitive.
 - Bounded model-driven tool orchestration: `ToolLoopConfig`,
   `ToolLoopStep`, `ToolLoopResult`, `run_tool_loop()`, and
   `AIAgent.run_tool_loop()` implement a strict JSON action protocol for

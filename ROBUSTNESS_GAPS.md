@@ -290,13 +290,70 @@ in code-level tool schemas/guards, not in prompt instructions. The generic
 returns; provider-native generation/token limits must still be configured at
 the provider layer. Streaming/backpressure remains section 8.
 
-### 7. Reproducible experiments — not implemented as a complete system
+### 7. Reproducible experiments — complete at the Neva experiment boundary
 
-- Run manifests with provider/model identifiers, prompts, generation settings, dependency versions, seeds, scheduler configuration, and cache policy.
-- Unified seeding and deterministic offline replay.
-- Documented limits of live-provider reproducibility.
+PR #75 adds a single manifest/seeding/offline-replay workflow rather than
+treating checkpointed scheduler RNG state as sufficient reproducibility:
 
-Checkpointed scheduler RNG state alone does not establish reproducibility.
+- `prepare_reproducible_run(...)`, `seed_everything(...)`, and
+  `Environment.seed(...)` seed the process-global Python RNG, optional
+  NumPy/PyTorch RNGs, known Neva Python-random schedulers recursively, and
+  explicit custom agent/scheduler `set_seed` hooks. Stable path-derived seeds
+  separate nested scheduler streams. A custom scheduler's unrelated `_rng`
+  object is not replaced. `PYTHONHASHSEED` mutation is opt-in through
+  `set_child_hash_seed=True`; the current interpreter's hash seed remains an
+  interpreter-startup property.
+- Version-1 manifests record caller prompts, behavior-affecting environment
+  config/state and per-agent failure policies, recursive scheduler state
+  including EventDriven queues, provider/model/endpoint and generation settings,
+  full prompt-validator policy, initial conversation state, supported built-in
+  and subclassed memory state (including FAISS index digests), agent attributes,
+  tool metadata plus ArgumentSchema/ToolGuard policy, cache policy/initial-state
+  fingerprints, dependency/runtime versions, seed report, and audit metadata.
+  Non-JSON-native metadata is deterministically normalized without collapsing
+  distinct keys such as `1` and `"1"`. Unsupported custom memories must
+  provide `checkpoint_state()` or `reproducibility_config()`; capture fails
+  explicitly instead of silently omitting recall-affecting state.
+- `RunManifest.fingerprint()` is replay-compatibility oriented and excludes
+  audit-only `created_at`, dependency/runtime versions, seed-report details,
+  metadata, and explanatory reproducibility notes. `audit_fingerprint()`
+  includes those fields (except `created_at`). Replay tapes persist the
+  compatibility payload so mismatches identify differing field paths instead of
+  returning only an opaque hash failure.
+- `AIAgent.replay_identity_resolver()` defines what replay validates.
+  Ordinary/custom backends use the exact prompt. Provider-backed GPT agents use
+  the scoped effective request identity, including provider/model/endpoint,
+  raw-vs-history behavior, and the conversation history window that the provider
+  request would contain. This closes the case where the same bare prompt with
+  divergent history previously replayed silently.
+- Recording reserves a sequence slot before backend execution and fills that
+  slot afterward. Nested calls therefore remain in invocation order, while the
+  tape lock is not held across slow/network model calls and unrelated agents are
+  not serialized behind one provider call. Recording still preserves GPT's
+  cooperative cancellation-aware backend construction.
+- Replay records carry a prompt/request-identity SHA-256 plus a whole-record
+  SHA-256 covering the response or failure metadata. Load rejects prompt edits,
+  response edits, malformed response/error combinations, and malformed shapes.
+  Replays also fail on mismatched order, exhausted/extra calls, or unconsumed
+  records; recorded failures surface as `RecordedReplayError`.
+- End-to-end tests cover seeded RandomScheduler record→persist→fresh replay,
+  provider-backed GPT request-history divergence, nested/concurrent recording
+  order, cross-machine-compatible replay fingerprints, actionable manifest
+  mismatch paths, ShortTerm and real FAISS memory state, non-JSON-native memory
+  metadata, tool schema/guard policies, custom RNG preservation, opt-in child
+  hash seeding, tape-response integrity, and the earlier environment/cache/
+  validator/endpoint/tamper/failure cases.
+
+Boundary: reproducibility is exact at the recorded Neva model-request identity
+boundary, not a claim that live providers or arbitrary application code are
+deterministic. Provider-side revisions/routing/runtime state remain external;
+framework/hardware deterministic settings remain the application's
+responsibility. Callable identities in manifests are descriptive and cannot
+prove that two arbitrary closures behave identically. Wall-clock timestamps,
+UUIDs, and telemetry timing are not replayed. Manifests can contain prompts,
+conversation/memory contents, attributes, tool descriptions and metadata; tapes
+contain effective request identities and model outputs/failures. Protect both
+artifact classes accordingly.
 
 ### 8. Streaming — not implemented
 
@@ -317,13 +374,12 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-Sections 1–6 are now implemented at their documented library/orchestration boundaries.
+Sections 1–7 are now implemented at their documented library/orchestration/experiment boundaries.
 The remaining priorities are:
 
 1. Model-aware context/token budgeting and explicit output-token reservations.
-2. Reproducible experiment manifests, unified seeding, and deterministic offline replay.
-3. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
-4. Opt-in live-provider examples with explicit credential/cost/limit guidance.
+2. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
+3. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
@@ -344,5 +400,6 @@ The remaining priorities are:
 - [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of deferred PR #53.
 - [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 - [x] Complete bounded model-driven tool orchestration with schema/guard feedback and termination limits (PR #74).
+- [x] Complete run manifests, unified seeding, and deterministic offline model-boundary replay (PR #75).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.

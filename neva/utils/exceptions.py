@@ -145,3 +145,15 @@ class ToolLoopConfigurationError(ConfigurationError):
 
 class ToolLoopLimitError(ToolError):
     """Raised when a bounded tool-loop resource envelope cannot be satisfied."""
+
+
+class ReproducibilityError(NevaError):
+    """Base class for experiment reproducibility failures."""
+
+
+class ReplayMismatchError(ReproducibilityError):
+    """Raised when offline replay diverges from the recorded prompt sequence."""
+
+
+class RecordedReplayError(ReproducibilityError):
+    """Raised when replay reaches a model failure recorded in the tape."""

@@ -1,0 +1,1013 @@
+import json
+import os
+import random
+import threading
+from datetime import datetime, timezone
+
+import pytest
+
+from neva.agents import GPTAgent, TransformerAgent
+from neva.agents.base import AIAgent, Tool
+from neva.environments import BasicEnvironment, Environment
+from neva.memory import ShortTermMemory
+from neva.schedulers import CompositeScheduler, EventDrivenScheduler, RandomScheduler
+from neva.tools import ArgumentSchema, ArgumentSpec, ToolGuard, ToolLimits
+from neva.utils.caching import LLMCache
+from neva.utils.exceptions import (
+    AgentCommunicationError,
+    RecordedReplayError,
+    ReplayMismatchError,
+    ReproducibilityError,
+)
+from neva.utils.reproducibility import (
+    ReplayRecord,
+    ReplayTape,
+    RunManifest,
+    create_run_manifest,
+    prepare_reproducible_run,
+    seed_everything,
+)
+from neva.utils.safety import PromptValidator
+
+
+class ManifestTool(Tool):
+    def __init__(self, *, schema=None, guard=None):
+        super().__init__(
+            "manifest-tool",
+            "Manifest test tool",
+            capabilities=("test",),
+            argument_schema=schema,
+            tool_guard=guard,
+        )
+
+    def use(self, task):
+        return task
+
+
+class SeedAwareAgent(AIAgent):
+    def __init__(self, name):
+        super().__init__(name=name)
+        self.seed_seen = None
+
+    def set_seed(self, seed):
+        self.seed_seen = seed
+
+    def respond(self, message):
+        return f"{self.name}:{message}"
+
+
+def _deterministic_backend(prompt):
+    return f"reply:{len(prompt)}:{prompt[:24]}"
+
+
+def _build_random_env(backend=_deterministic_backend):
+    env = BasicEnvironment("lab", "deterministic replay", RandomScheduler())
+    for name in ("alpha", "beta", "gamma"):
+        env.register_agent(TransformerAgent(name=name, llm_backend=backend))
+    return env
+
+
+@pytest.mark.parametrize("bad_seed", [True, 1.5, "7", -1])
+def test_seed_everything_rejects_invalid_seed(bad_seed):
+    with pytest.raises(ReproducibilityError, match="seed"):
+        seed_everything(bad_seed, optional_libraries=False)
+
+
+def test_child_hash_seed_is_opt_in(monkeypatch):
+    monkeypatch.delenv("PYTHONHASHSEED", raising=False)
+
+    report = seed_everything(123, optional_libraries=False)
+
+    assert "PYTHONHASHSEED" not in os.environ
+    assert report.python_hash_seed == "unchanged-for-child-processes"
+
+    report = seed_everything(
+        123,
+        optional_libraries=False,
+        set_child_hash_seed=True,
+    )
+
+    assert os.environ["PYTHONHASHSEED"] == "123"
+    assert report.python_hash_seed.startswith("set-to-123-for-child-processes")
+
+
+def test_seed_does_not_replace_unknown_custom_rng_type():
+    class CustomScheduler:
+        def __init__(self):
+            self._rng = object()
+
+    scheduler = CustomScheduler()
+    original = scheduler._rng
+
+    report = seed_everything(
+        99,
+        scheduler=scheduler,
+        optional_libraries=False,
+    )
+
+    assert scheduler._rng is original
+    assert report.scheduler_seeds == {}
+
+
+def test_seed_everything_repeats_global_random_and_scheduler_sequence():
+    env_one = _build_random_env()
+    report_one = seed_everything(1234, environment=env_one, optional_libraries=False)
+    global_one = [random.random() for _ in range(4)]
+    selected_one = [env_one.scheduler.get_next_agent().name for _ in range(12)]
+
+    env_two = _build_random_env()
+    report_two = seed_everything(1234, environment=env_two, optional_libraries=False)
+    global_two = [random.random() for _ in range(4)]
+    selected_two = [env_two.scheduler.get_next_agent().name for _ in range(12)]
+
+    assert global_one == global_two
+    assert selected_one == selected_two
+    assert report_one.scheduler_seeds == report_two.scheduler_seeds
+    assert report_one.optional_libraries == {"numpy": "skipped", "torch": "skipped"}
+    assert report_one.python_hash_seed.startswith("unchanged-")
+
+
+def test_environment_seed_reaches_nested_composite_scheduler_and_agent_hook():
+    outer = CompositeScheduler()
+    inner_random = RandomScheduler()
+    agent = SeedAwareAgent("seed-aware")
+    outer.add(agent, group="random-group", scheduler=inner_random)
+    env = Environment(outer)
+    agent.set_environment(env)
+    env.agents.append(agent)
+
+    report = env.seed(77, optional_libraries=False)
+
+    assert agent.seed_seen == report.agent_seeds["seed-aware"]
+    assert "scheduler[0].group[random-group]" in report.scheduler_seeds
+    assert isinstance(inner_random._rng, random.Random)
+
+
+def test_manifest_captures_prompts_provider_model_generation_cache_and_dependencies():
+    env = BasicEnvironment("study", "manifest", RandomScheduler())
+    agent = GPTAgent(
+        name="writer",
+        api_key="super-secret-key",
+        provider="openai",
+        model="gpt-test",
+        llm_backend=_deterministic_backend,
+        cache=LLMCache(max_size=7),
+        max_retries=2,
+        retry_backoff=1.25,
+        max_output_tokens=321,
+        max_context_chars=4321,
+        request_timeout=9.0,
+    )
+    env.register_agent(agent)
+    report = seed_everything(9, environment=env, optional_libraries=False)
+
+    manifest = create_run_manifest(
+        env,
+        seed=9,
+        seed_report=report,
+        prompts={"system": "Grade carefully", "scenario": "Essay task"},
+        dependencies=["requests", "definitely-not-installed-neva-test-package"],
+        metadata={"experiment": "baseline"},
+    )
+    payload = manifest.to_dict()
+    agent_config = payload["agents"][0]
+
+    assert payload["seed"] == 9
+    assert payload["prompts"] == {"scenario": "Essay task", "system": "Grade carefully"}
+    assert payload["scheduler"]["type"].endswith(".RandomScheduler")
+    assert payload["scheduler"]["rng_state_sha256"]
+    assert agent_config["provider"] == "openai"
+    assert agent_config["model"] == "gpt-test"
+    assert agent_config["generation"]["max_output_tokens"] == 321
+    assert agent_config["generation"]["max_context_chars"] == 4321
+    assert agent_config["generation"]["max_retries"] == 2
+    assert agent_config["generation"]["retry_backoff"] == 1.25
+    assert agent_config["generation"]["request_timeout"] == 9.0
+    assert agent_config["cache"]["enabled"] is True
+    assert agent_config["cache"]["max_size"] == 7
+    assert payload["dependencies"]["requests"]
+    assert payload["dependencies"]["definitely-not-installed-neva-test-package"] is None
+    assert payload["metadata"] == {"experiment": "baseline"}
+    assert "super-secret-key" not in json.dumps(payload)
+
+
+def test_manifest_fingerprint_captures_builtin_memory_state_without_timestamps():
+    def build(message):
+        memory = ShortTermMemory(capacity=3)
+        memory.remember("user", message)
+        env = BasicEnvironment("memory", "initial state", RandomScheduler())
+        env.register_agent(
+            TransformerAgent(
+                name="agent",
+                llm_backend=_deterministic_backend,
+                memory=memory,
+            )
+        )
+        return env
+
+    same_one = create_run_manifest(build("same"), seed=1, dependencies=[])
+    same_two = create_run_manifest(build("same"), seed=1, dependencies=[])
+    different = create_run_manifest(build("different"), seed=1, dependencies=[])
+
+    assert same_one.fingerprint() == same_two.fingerprint()
+    assert same_one.fingerprint() != different.fingerprint()
+    state = same_one.agents[0]["memory"]["state"]
+    assert state["capacity"] == 3
+    assert state["records"][0]["message"] == "same"
+    assert "timestamp" not in json.dumps(state)
+
+
+def test_builtin_memory_subclass_reproducibility_hook_changes_fingerprint():
+    class TaggedMemory(ShortTermMemory):
+        def __init__(self, tag):
+            super().__init__(capacity=2)
+            self.tag = tag
+            self.remember("user", "same")
+
+        def reproducibility_config(self):
+            return {"tag": self.tag}
+
+    def build(tag):
+        env = BasicEnvironment("memory", "subclass", RandomScheduler())
+        env.register_agent(
+            TransformerAgent(
+                name="agent",
+                llm_backend=_deterministic_backend,
+                memory=TaggedMemory(tag),
+            )
+        )
+        return env
+
+    first = create_run_manifest(build("one"), seed=1, dependencies=[])
+    second = create_run_manifest(build("two"), seed=1, dependencies=[])
+
+    assert first.fingerprint() != second.fingerprint()
+    assert first.agents[0]["memory"]["state"]["custom"] == {"tag": "one"}
+
+
+def test_memory_metadata_is_normalized_for_manifest_fingerprints(tmp_path):
+    memory = ShortTermMemory(capacity=2)
+    memory.remember(
+        "user",
+        "metadata",
+        metadata={
+            "when": datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc),
+            "tags": {"b", "a"},
+        },
+    )
+    env = BasicEnvironment("memory", "metadata", RandomScheduler())
+    env.register_agent(
+        TransformerAgent(
+            name="agent",
+            llm_backend=_deterministic_backend,
+            memory=memory,
+        )
+    )
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+    manifest.fingerprint()
+    path = tmp_path / "memory-manifest.json"
+    manifest.save(path)
+
+    metadata = manifest.agents[0]["memory"]["state"]["records"][0]["metadata"]
+    assert metadata["when"]["isoformat"] == "2026-01-02T03:04:00+00:00"
+    assert metadata["tags"] == ["a", "b"]
+    assert path.exists()
+
+
+def test_json_native_mapping_preserves_distinct_non_string_and_string_keys():
+    env = _build_random_env()
+    manifest = create_run_manifest(
+        env,
+        seed=1,
+        dependencies=[],
+        metadata={1: "integer", "1": "string"},
+    )
+
+    entries = manifest.metadata["__neva_mapping_entries__"]
+    assert len(entries) == 2
+    assert [1, "integer"] in entries
+    assert ["1", "string"] in entries
+
+
+def test_manifest_fingerprint_captures_full_prompt_validator_policy():
+    first = BasicEnvironment("validator", "policy", RandomScheduler())
+    second = BasicEnvironment("validator", "policy", RandomScheduler())
+    first.register_agent(
+        TransformerAgent(
+            name="agent",
+            llm_backend=_deterministic_backend,
+            prompt_validator=PromptValidator(forbidden_patterns=[r"blocked-one"]),
+        )
+    )
+    second.register_agent(
+        TransformerAgent(
+            name="agent",
+            llm_backend=_deterministic_backend,
+            prompt_validator=PromptValidator(forbidden_patterns=[r"blocked-two"]),
+        )
+    )
+
+    first_manifest = create_run_manifest(first, seed=1, dependencies=[])
+    second_manifest = create_run_manifest(second, seed=1, dependencies=[])
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+    assert (
+        first_manifest.agents[0]["prompt_validator"]["forbidden_patterns"][0]["pattern"]
+        == "blocked-one"
+    )
+
+
+def test_manifest_fingerprint_captures_provider_api_base_without_api_key():
+    def build(api_base, api_key):
+        env = BasicEnvironment("provider", "endpoint", RandomScheduler())
+        env.register_agent(
+            GPTAgent(
+                name="agent",
+                api_key=api_key,
+                provider="openai",
+                model="gpt-test",
+                api_base=api_base,
+                provider_rate=None,
+                max_provider_concurrency=None,
+            )
+        )
+        return env
+
+    first = create_run_manifest(
+        build("https://one.example/v1", "secret-one"),
+        seed=1,
+        dependencies=[],
+    )
+    second = create_run_manifest(
+        build("https://two.example/v1", "secret-two"),
+        seed=1,
+        dependencies=[],
+    )
+
+    assert first.fingerprint() != second.fingerprint()
+    assert first.agents[0]["api_base"] == "https://one.example/v1"
+    assert "secret-one" not in json.dumps(first.to_dict())
+
+
+def test_manifest_fingerprint_changes_with_behavior_affecting_environment_config():
+    first = BasicEnvironment("first-name", "first-description", RandomScheduler())
+    second = BasicEnvironment("second-name", "second-description", RandomScheduler())
+    for env in (first, second):
+        env.register_agent(TransformerAgent(name="agent", llm_backend=_deterministic_backend))
+
+    first_manifest = prepare_reproducible_run(
+        first,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    second_manifest = prepare_reproducible_run(
+        second,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+    assert first_manifest.environment["public_config"]["name"] == "first-name"
+    assert first_manifest.environment["public_config"]["description"] == "first-description"
+
+
+def test_manifest_captures_per_agent_failure_policy_without_uuid_identity():
+    env = BasicEnvironment("policies", "per-agent behavior", RandomScheduler())
+    agent = TransformerAgent(name="agent", llm_backend=_deterministic_backend)
+    env.register_agent(agent, error_policy="return", error_value="fallback")
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+
+    assert manifest.environment["agent_error_policies"] == [
+        {
+            "agent_index": 0,
+            "agent_name": "agent",
+            "policy": {"policy": "return", "value": "fallback"},
+        }
+    ]
+    assert str(agent.id) not in json.dumps(manifest.environment)
+
+
+def test_manifest_rejects_duplicate_agent_names():
+    env = BasicEnvironment("duplicates", "ambiguous identity", RandomScheduler())
+    env.register_agent(TransformerAgent(name="same", llm_backend=_deterministic_backend))
+    env.register_agent(TransformerAgent(name="same", llm_backend=_deterministic_backend))
+
+    with pytest.raises(ReproducibilityError, match="unique agent names"):
+        create_run_manifest(env, seed=1, dependencies=[])
+
+
+def test_json_native_encodes_bytes_and_rejects_unsupported_state_values():
+    first = _build_random_env()
+    second = _build_random_env()
+    first.state["blob"] = b"first"
+    second.state["blob"] = b"second"
+
+    first_manifest = create_run_manifest(first, seed=1, dependencies=[])
+    second_manifest = create_run_manifest(second, seed=1, dependencies=[])
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+    assert first_manifest.environment["state"]["blob"] == {"__neva_bytes_hex__": "6669727374"}
+
+    class Unsupported:
+        pass
+
+    first.state["unsupported"] = Unsupported()
+    with pytest.raises(ReproducibilityError, match="unsupported reproducibility value type"):
+        create_run_manifest(first, seed=1, dependencies=[])
+
+
+def test_manifest_fingerprint_changes_with_environment_state():
+    first = _build_random_env()
+    second = _build_random_env()
+    first.state["phase"] = "one"
+    second.state["phase"] = "two"
+
+    first_manifest = prepare_reproducible_run(
+        first,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    second_manifest = prepare_reproducible_run(
+        second,
+        seed=5,
+        dependencies=[],
+        optional_libraries=False,
+    )
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+
+
+def test_manifest_captures_initial_conversation_and_agent_attributes():
+    env = BasicEnvironment("agent-config", "prompt inputs", RandomScheduler())
+    agent = TransformerAgent(name="configured", llm_backend=_deterministic_backend)
+    agent.set_attribute("role", "reviewer")
+    agent.conversation_state.record_turn("user", "prior context")
+    env.register_agent(agent)
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+    config = manifest.agents[0]
+
+    assert config["attributes"] == {"role": "reviewer"}
+    assert config["conversation"]["turns"] == [{"speaker": "user", "message": "prior context"}]
+
+
+def test_event_scheduler_pending_queue_changes_manifest_fingerprint():
+    def build(order):
+        scheduler = EventDrivenScheduler()
+        env = Environment(scheduler)
+        agents = {
+            name: TransformerAgent(name=name, llm_backend=_deterministic_backend)
+            for name in ("a", "b")
+        }
+        for agent in agents.values():
+            env.register_agent(agent)
+        for name in order:
+            scheduler.notify_event(agents[name])
+        return env
+
+    first = build(("a", "b"))
+    second = build(("b", "a"))
+
+    first_manifest = create_run_manifest(first, seed=1, dependencies=[])
+    second_manifest = create_run_manifest(second, seed=1, dependencies=[])
+
+    assert first_manifest.scheduler["event_queue"] == ["a", "b"]
+    assert second_manifest.scheduler["event_queue"] == ["b", "a"]
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+
+
+def test_manifest_fingerprint_captures_tool_schema_and_guard_policy():
+    def build(max_length, allowed):
+        env = BasicEnvironment("tools", "policy", RandomScheduler())
+        agent = TransformerAgent(name="agent", llm_backend=_deterministic_backend)
+        agent.register_tool(
+            ManifestTool(
+                schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=max_length)}),
+                guard=ToolGuard(
+                    allowed_tools={allowed},
+                    limits=ToolLimits(max_output_chars=100),
+                ),
+            )
+        )
+        env.register_agent(agent)
+        return env
+
+    first = create_run_manifest(build(5, "manifest-tool"), seed=1, dependencies=[])
+    second = create_run_manifest(build(10, "other"), seed=1, dependencies=[])
+
+    assert first.fingerprint() != second.fingerprint()
+    tool = first.agents[0]["tools"][0]
+    assert tool["argument_schema"]["fields"]["input"]["max_length"] == 5
+    assert tool["tool_guard"]["allowed_tools"] == ["manifest-tool"]
+
+
+def test_manifest_marks_builtin_live_provider_as_not_exactly_reproducible():
+    env = BasicEnvironment("live", "provider caveat", RandomScheduler())
+    agent = GPTAgent(
+        name="live-agent",
+        api_key="not-used",
+        provider="openai",
+        model="gpt-live-test",
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    env.register_agent(agent)
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+
+    assert manifest.reproducibility["live_providers"] == ["openai"]
+    assert manifest.reproducibility["live_provider_exact_replay"] is False
+    assert any("not guaranteed reproducible" in note for note in manifest.reproducibility["notes"])
+
+
+def test_cache_policy_fingerprints_initial_lru_state_without_exposing_values():
+    env = BasicEnvironment("cache", "state", RandomScheduler())
+    cache = LLMCache(max_size=3)
+    cache.set("secret prompt", "secret response")
+    agent = TransformerAgent(name="cached", llm_backend=_deterministic_backend, cache=cache)
+    env.register_agent(agent)
+
+    manifest = create_run_manifest(env, seed=1, dependencies=[])
+    policy = manifest.agents[0]["cache"]
+
+    assert policy["initial_entries"] == 1
+    assert len(policy["state_sha256"]) == 64
+    assert "secret prompt" not in json.dumps(policy)
+    assert "secret response" not in json.dumps(policy)
+
+
+def test_recording_preserves_gpt_cancellation_aware_backend_resolution(monkeypatch):
+    agent = GPTAgent(
+        name="cancel-aware",
+        api_key="test-key",
+        provider="openai",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    seen = []
+
+    def fake_default_backend(*, cancel_event=None):
+        seen.append(cancel_event)
+        return lambda prompt: "ok"
+
+    monkeypatch.setattr(agent, "_default_backend", fake_default_backend)
+    tape = ReplayTape()
+    tape.attach_recording([agent])
+
+    assert agent.llm_backend is None
+    cancel_event = threading.Event()
+    assert agent.replayable_backend(cancel_event=cancel_event)("prompt") == "ok"
+    assert seen[-1] is cancel_event
+    assert tape.records[0].response == "ok"
+
+
+def test_gpt_replay_identity_detects_different_provider_history(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "recorded"}}]}
+
+    monkeypatch.setattr(
+        "neva.agents.gpt.requests.post",
+        lambda *args, **kwargs: Response(),
+    )
+
+    recording = GPTAgent(
+        name="agent",
+        api_key="key",
+        provider="openai",
+        model="model",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    tape = ReplayTape()
+    tape.attach_recording([recording])
+    assert recording.respond("hello") == "recorded"
+
+    replaying = GPTAgent(
+        name="agent",
+        api_key="different-key",
+        provider="openai",
+        model="model",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    replaying.conversation_state.record_turn("user", "DIFFERENT HISTORY")
+    tape.attach_replay([replaying])
+
+    with pytest.raises(ReplayMismatchError, match="prompt mismatch"):
+        replaying.respond("hello")
+
+
+def test_provider_backed_gpt_can_record_then_replay_offline(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "live-recorded-response"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }
+
+    def fake_post(url, *, headers, json, timeout):
+        calls.append(json)
+        return Response()
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+
+    recording_env = BasicEnvironment("provider", "record once", RandomScheduler())
+    recording_agent = GPTAgent(
+        name="provider-agent",
+        api_key="test-key",
+        provider="openai",
+        model="gpt-test",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    recording_env.register_agent(recording_agent)
+    manifest = prepare_reproducible_run(
+        recording_env,
+        seed=88,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+    tape.attach_recording(recording_env.agents)
+
+    assert recording_env.step() == "live-recorded-response"
+    assert len(calls) == 1
+    assert len(tape.records) == 1
+
+    replay_env = BasicEnvironment("provider", "record once", RandomScheduler())
+    replay_agent = GPTAgent(
+        name="provider-agent",
+        api_key="different-key-not-used",
+        provider="openai",
+        model="gpt-test",
+        max_retries=0,
+        provider_rate=None,
+        max_provider_concurrency=None,
+    )
+    replay_env.register_agent(replay_agent)
+    replay_manifest = prepare_reproducible_run(
+        replay_env,
+        seed=88,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    assert replay_manifest.fingerprint() == manifest.fingerprint()
+
+    replay = tape.attach_replay(replay_env.agents, manifest=replay_manifest)
+    assert replay_env.step() == "live-recorded-response"
+    replay.assert_consumed()
+    assert len(calls) == 1
+
+
+def test_replay_compatibility_ignores_runtime_and_dependency_audit_fields():
+    env = _build_random_env()
+    manifest = prepare_reproducible_run(
+        env,
+        seed=7,
+        dependencies=["requests"],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+
+    payload = manifest.to_dict()
+    payload["runtime"]["python"] = "9.9.9"
+    payload["runtime"]["platform"] = "different-machine"
+    payload["dependencies"]["requests"] = "999.0"
+    changed = RunManifest.from_dict(payload)
+
+    assert changed.fingerprint() == manifest.fingerprint()
+    assert changed.audit_fingerprint() != manifest.audit_fingerprint()
+    tape.replay_backend(manifest=changed)
+
+
+def test_manifest_mismatch_reports_differing_configuration_paths():
+    env = _build_random_env()
+    manifest = prepare_reproducible_run(
+        env,
+        seed=7,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+
+    payload = manifest.to_dict()
+    payload["seed"] = 8
+    changed = RunManifest.from_dict(payload)
+
+    with pytest.raises(ReplayMismatchError, match=r"differing fields: seed"):
+        tape.replay_backend(manifest=changed)
+
+
+def test_manifest_round_trip_and_fingerprint_ignore_creation_time(tmp_path):
+    env = _build_random_env()
+    first = prepare_reproducible_run(
+        env,
+        seed=44,
+        prompts=["one", "two"],
+        dependencies=["requests"],
+        optional_libraries=False,
+    )
+    path = tmp_path / "manifest.json"
+    first.save(path)
+    loaded = RunManifest.load(path)
+
+    payload = loaded.to_dict()
+    payload["created_at"] = "2099-01-01T00:00:00+00:00"
+    changed_time = RunManifest.from_dict(payload)
+
+    assert loaded.to_dict() == first.to_dict()
+    assert changed_time.fingerprint() == first.fingerprint()
+    assert list(tmp_path.glob(".manifest.json.*.tmp")) == []
+
+
+@pytest.mark.parametrize(
+    "prompts",
+    [
+        "single string is ambiguous",
+        {"ok": 1},
+        ["ok", 2],
+    ],
+)
+def test_manifest_rejects_invalid_prompt_shapes(prompts):
+    env = _build_random_env()
+    with pytest.raises(ReproducibilityError, match="prompt"):
+        create_run_manifest(env, seed=1, prompts=prompts, dependencies=[])
+
+
+def test_nested_recording_preserves_invocation_order():
+    tape = ReplayTape()
+    inner = tape.recording_backend(lambda prompt: "inner-response")
+
+    def outer_backend(prompt):
+        assert inner("inner") == "inner-response"
+        return "outer-response"
+
+    outer = tape.recording_backend(outer_backend)
+
+    assert outer("outer") == "outer-response"
+    assert [record.prompt for record in tape.records] == ["outer", "inner"]
+    assert [record.parent_index for record in tape.records] == [None, 0]
+
+    replay = tape.replay_backend()
+    assert replay("outer") == "outer-response"
+    replay.assert_consumed()
+    with pytest.raises(ReplayMismatchError, match="exhausted"):
+        replay("inner")
+
+
+def test_slow_recording_call_does_not_block_other_model_calls():
+    tape = ReplayTape()
+    started = threading.Event()
+    release = threading.Event()
+    outcome = []
+
+    def slow_backend(prompt):
+        started.set()
+        assert release.wait(2)
+        return "slow-response"
+
+    slow = tape.recording_backend(slow_backend)
+    fast = tape.recording_backend(lambda prompt: "fast-response")
+
+    worker = threading.Thread(target=lambda: outcome.append(slow("slow")))
+    worker.start()
+    assert started.wait(1)
+
+    assert fast("fast") == "fast-response"
+    release.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert outcome == ["slow-response"]
+    assert [record.prompt for record in tape.records] == ["slow", "fast"]
+
+
+def test_attach_recording_is_atomic_when_one_agent_has_no_backend():
+    good_backend = _deterministic_backend
+    good = TransformerAgent(name="good", llm_backend=good_backend)
+    bad = SeedAwareAgent("bad")
+    tape = ReplayTape()
+
+    with pytest.raises(AgentCommunicationError, match="replayable model backend"):
+        tape.attach_recording([good, bad])
+
+    assert good.llm_backend is good_backend
+    assert bad.llm_backend is None
+    assert good._model_backend_wrapper is None
+    assert bad._model_backend_wrapper is None
+    assert tape.records == ()
+
+
+def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
+    recording_env = _build_random_env()
+    recording_manifest = prepare_reproducible_run(
+        recording_env,
+        seed=2026,
+        prompts={"scenario": recording_env.context()},
+        dependencies=["requests"],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(recording_manifest)
+    tape.attach_recording(recording_env.agents)
+
+    recorded_outputs = [recording_env.step() for _ in range(12)]
+    recorded_turns = {
+        agent.name: [(turn.speaker, turn.message) for turn in agent.conversation_state.turns]
+        for agent in recording_env.agents
+    }
+
+    manifest_path = tmp_path / "run-manifest.json"
+    tape_path = tmp_path / "replay.json"
+    recording_manifest.save(manifest_path)
+    tape.save(tape_path)
+
+    replay_env = _build_random_env()
+    replay_manifest = prepare_reproducible_run(
+        replay_env,
+        seed=2026,
+        prompts={"scenario": replay_env.context()},
+        dependencies=["requests"],
+        optional_libraries=False,
+    )
+    assert replay_manifest.fingerprint() == recording_manifest.fingerprint()
+
+    loaded_tape = ReplayTape.load(tape_path)
+    replay = loaded_tape.attach_replay(
+        replay_env.agents,
+        manifest=RunManifest.load(manifest_path),
+    )
+
+    replayed_outputs = [replay_env.step() for _ in range(12)]
+    replayed_turns = {
+        agent.name: [(turn.speaker, turn.message) for turn in agent.conversation_state.turns]
+        for agent in replay_env.agents
+    }
+    replay.assert_consumed()
+
+    assert replayed_outputs == recorded_outputs
+    assert replayed_turns == recorded_turns
+    assert len(loaded_tape.records) == 12
+
+
+def test_nested_recorded_calls_are_consumed_with_outer_replay_span():
+    inner = TransformerAgent(name="inner", llm_backend=lambda prompt: f"inner:{prompt}")
+
+    def outer_backend(prompt):
+        nested = inner.replayable_backend()("nested")
+        return f"outer:{prompt}:{nested}"
+
+    outer = TransformerAgent(name="outer", llm_backend=outer_backend)
+    tape = ReplayTape()
+    tape.attach_recording([outer, inner])
+
+    recorded = outer.replayable_backend()("root")
+    assert recorded == "outer:root:inner:nested"
+    assert [record.parent_index for record in tape.records] == [None, 0]
+
+    replay_inner = TransformerAgent(name="inner", llm_backend=lambda prompt: "should-not-run")
+    replay_outer = TransformerAgent(name="outer", llm_backend=lambda prompt: "should-not-run")
+    replay = tape.attach_replay([replay_outer, replay_inner])
+
+    assert replay_outer.replayable_backend()("root") == recorded
+    replay.assert_consumed()
+
+
+def test_replay_rejects_prompt_mismatch_without_advancing():
+    tape = ReplayTape()
+    tape.recording_backend(lambda prompt: "ok")("expected")
+    replay = tape.replay_backend()
+
+    with pytest.raises(ReplayMismatchError, match="prompt mismatch"):
+        replay("changed")
+
+    assert replay.position == 0
+    assert replay("expected") == "ok"
+    assert replay.position == 1
+
+
+def test_replay_exhaustion_and_unconsumed_records_are_explicit():
+    tape = ReplayTape()
+    recorder = tape.recording_backend(lambda prompt: prompt.upper())
+    recorder("one")
+    recorder("two")
+
+    replay = tape.replay_backend()
+    assert replay("one") == "ONE"
+    with pytest.raises(ReplayMismatchError, match="consumed 1 of 2"):
+        replay.assert_consumed()
+    assert replay("two") == "TWO"
+    replay.assert_consumed()
+    with pytest.raises(ReplayMismatchError, match="exhausted"):
+        replay("three")
+
+
+def test_replay_manifest_mismatch_is_rejected():
+    env = _build_random_env()
+    manifest = prepare_reproducible_run(
+        env,
+        seed=1,
+        dependencies=[],
+        optional_libraries=False,
+    )
+    tape = ReplayTape.for_manifest(manifest)
+
+    payload = manifest.to_dict()
+    payload["seed"] = 2
+    different = RunManifest.from_dict(payload)
+
+    with pytest.raises(ReplayMismatchError, match="manifest"):
+        tape.replay_backend(manifest=different)
+
+
+def test_recorded_backend_failure_replays_as_recorded_error():
+    tape = ReplayTape()
+
+    def fail(prompt):
+        raise ValueError(f"bad:{prompt}")
+
+    recorder = tape.recording_backend(fail)
+    with pytest.raises(ValueError, match="bad:oops"):
+        recorder("oops")
+
+    record = tape.records[0]
+    assert record.error_type.endswith(".ValueError")
+    replay = tape.replay_backend()
+    with pytest.raises(RecordedReplayError, match=r"ValueError: bad:oops"):
+        replay("oops")
+
+
+def test_manifest_and_tape_loaders_fail_closed_on_bad_shapes():
+    with pytest.raises(ReproducibilityError, match="manifest"):
+        RunManifest.from_dict({"version": 1, "created_at": "now", "seed": 1, "agents": 7})
+
+    with pytest.raises(ReproducibilityError, match="records"):
+        ReplayTape.from_dict({"version": 1, "records": ["not-an-object"]})
+
+    prompt = "x"
+    digest = __import__("hashlib").sha256(prompt.encode()).hexdigest()
+    with pytest.raises(ReproducibilityError, match="both response and error"):
+        ReplayTape.from_dict(
+            {
+                "version": 1,
+                "records": [
+                    {
+                        "prompt": prompt,
+                        "prompt_sha256": digest,
+                        "response": "ok",
+                        "error_type": "ValueError",
+                        "error_message": "bad",
+                    }
+                ],
+            }
+        )
+
+
+def test_replay_tape_detects_tampered_prompt_digest():
+    record = ReplayRecord(
+        prompt="original",
+        prompt_sha256="0" * 64,
+        response="x",
+    )
+    payload = {"version": 1, "manifest_fingerprint": None, "records": [record.to_dict()]}
+
+    with pytest.raises(ReproducibilityError, match="digest"):
+        ReplayTape.from_dict(payload)
+
+
+def test_replay_tape_detects_tampered_response_digest():
+    tape = ReplayTape()
+    tape.recording_backend(lambda prompt: "original")("prompt")
+    payload = tape.to_dict()
+    payload["records"][0]["response"] = "edited"
+
+    with pytest.raises(ReproducibilityError, match="record digest"):
+        ReplayTape.from_dict(payload)
+
+
+def test_recording_backend_rejects_non_string_response_and_records_failure():
+    tape = ReplayTape()
+    recorder = tape.recording_backend(lambda prompt: 123)
+
+    with pytest.raises(ReproducibilityError, match="response"):
+        recorder("prompt")
+
+    assert len(tape.records) == 1
+    assert tape.records[0].error_type.endswith(".ReproducibilityError")

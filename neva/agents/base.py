@@ -285,6 +285,7 @@ class AIAgent(ABC):
         self.tool_guard: Optional["ToolGuard"] = tool_guard
         self.attributes: Dict[str, str] = {}
         self._llm_backend = llm_backend
+        self._model_backend_wrapper: Optional[Callable[[LLMBackend], LLMBackend]] = None
         self._memory: Optional[MemoryModule] = None
         self._cache = cache
         self._prompt_validator = prompt_validator or PromptValidator()
@@ -571,6 +572,40 @@ class AIAgent(ABC):
     def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
         self._llm_backend = backend
 
+    def set_model_backend_wrapper(
+        self,
+        wrapper: Optional[Callable[[LLMBackend], LLMBackend]],
+    ) -> None:
+        """Wrap future model-boundary resolutions without replacing the backend."""
+
+        if wrapper is not None and not callable(wrapper):
+            raise AgentCommunicationError("model backend wrapper must be callable or None")
+        self._model_backend_wrapper = wrapper
+
+    def _wrap_model_backend(self, backend: LLMBackend) -> LLMBackend:
+        wrapper = self._model_backend_wrapper
+        return wrapper(backend) if wrapper is not None else backend
+
+    def replay_identity_resolver(self) -> Callable[[str], str]:
+        """Return the identity function used to validate record/replay calls."""
+
+        return lambda prompt: prompt
+
+    def replayable_backend(
+        self,
+        *,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> LLMBackend:
+        """Return the synchronous model boundary used for record/replay."""
+
+        del cancel_event
+        if self.llm_backend is None:
+            raise AgentCommunicationError(
+                "Agent has no replayable model backend; configure llm_backend "
+                "or override replayable_backend()."
+            )
+        return self._wrap_model_backend(self.llm_backend)
+
     def generate_model_output(self, prompt: str) -> str:
         """Generate from an already composed prompt without adding agent context.
 
@@ -580,15 +615,10 @@ class AIAgent(ABC):
         """
 
         validated_prompt = self.prompt_validator.validate(prompt)
-        if self.llm_backend is None:
-            raise AgentCommunicationError(
-                "Agent has no raw model backend; pass model= to run_tool_loop() "
-                "or override generate_model_output()."
-            )
         cached = self._cache_lookup(validated_prompt)
         if cached is not None:
             return cached
-        response = self.llm_backend(validated_prompt)
+        response = self.replayable_backend()(validated_prompt)
         self._cache_store(validated_prompt, response)
         return response
 
