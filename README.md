@@ -344,38 +344,52 @@ scheduler = create_scheduler("my_scheduler")
   checkpoint format, not an OS memory limit or a streaming JSON parser.
 - **Reproducible experiments**: `neva.utils.reproducibility` provides one
   run-manifest/seeding/offline-replay workflow. Call
-  `prepare_reproducible_run(environment, seed=..., prompts=...)` before the
-  run to seed Python, optional NumPy/PyTorch runtimes, Neva scheduler RNGs
-  (including nested Composite schedulers), and custom `set_seed` hooks, then
-  capture exact prompt inputs, behavior-affecting public environment configuration/state,
-  provider/model identifiers plus configured provider endpoint, generation settings,
-  full prompt-validator regex policy, initial conversation and built-in memory state,
-  agent attributes/tool metadata, dependency/runtime versions, scheduler configuration
-  (including pending event queues), cache policy plus an initial cache-state fingerprint,
-  and the seed report. `environment.seed(...)`
-  is the seeding-only convenience API. `ReplayTape.for_manifest(manifest)`
-  can attach recording to agents with `tape.attach_recording(env.agents)`;
-  recording wraps future backend resolution instead of replacing the provider backend,
-  so GPT cooperative cancellation still reaches provider waits/retries/requests;
-  save the manifest/tape, construct a fresh equivalently configured environment,
-  seed/capture its manifest, then use
-  `tape.attach_replay(env.agents, manifest=manifest)`. Replay validates exact
-  prompt order/content and refuses manifest, prompt, exhaustion, or unconsumed
-  call mismatches. Recording serializes model-boundary calls intentionally so
-  the tape has one deterministic total order. Replay of recorded model failures
-  raises `RecordedReplayError` with the recorded exception type/message rather
-  than recreating an arbitrary provider exception class.
-  This does **not** make live providers deterministic: server-side model
-  revisions, routing, sampling/runtime implementations, hidden service state,
-  and provider-side changes remain outside Neva's control. PyTorch/CUDA kernels
-  can also be nondeterministic unless the application configures the relevant
-  deterministic-algorithm settings. `PYTHONHASHSEED` is set for child/future
-  processes but cannot change hash randomization of the already-running Python
-  interpreter. Exact replay is guaranteed only at the recorded
-  prompt→response/error model boundary with matching local configuration.
-  Manifests contain the prompt strings supplied by the caller, and replay tapes
-  contain exact model prompts/responses, so treat both files as potentially
-  sensitive data.
+  `prepare_reproducible_run(environment, seed=..., prompts=...)` before a run
+  to seed Python, optional NumPy/PyTorch runtimes, Neva-owned Python-random
+  schedulers (including nested Composite schedulers), and explicit custom
+  `set_seed` hooks. Unknown custom `_rng` objects are never replaced.
+  `PYTHONHASHSEED` is **not** mutated by default; opt in with
+  `set_child_hash_seed=True` when child/future interpreters should inherit the
+  derived hash seed. The current interpreter's hash randomization cannot be
+  changed after startup.
+  Run manifests record exact caller prompts, behavior-affecting environment
+  configuration/state, scheduler state/order, provider/model/endpoint settings,
+  generation settings, full prompt-validator policy, initial conversation and
+  supported memory state (including FAISS index state), agent attributes,
+  tool argument schemas and guard policies, cache policy/state fingerprints,
+  dependency/runtime versions, seed application, and audit metadata. Unsupported
+  custom memories must expose `checkpoint_state()` or
+  `reproducibility_config()`; manifest creation fails rather than silently
+  claiming complete state. API keys and cached prompt/response contents are not
+  serialized.
+  `RunManifest.fingerprint()` is the **replay-compatibility fingerprint**:
+  it excludes audit-only dependency/runtime/seed-report/metadata fields so an
+  otherwise compatible tape can replay after a Python patch, kernel, or unused
+  dependency update. `audit_fingerprint()` includes those audit fields.
+  `ReplayTape.for_manifest(manifest)` stores both the compatibility fingerprint
+  and its payload, so a mismatch reports the differing configuration paths.
+  Recording attaches through `tape.attach_recording(env.agents)`. GPT recording
+  validates the effective provider-request identity—including provider/model,
+  endpoint, raw-vs-history mode, and the history window actually used—not only
+  the bare prompt. Each call reserves its tape position before backend work, so
+  nested calls preserve invocation order and slow provider calls do not hold the
+  tape lock or serialize other agents. Fresh agents can then use
+  `tape.attach_replay(env.agents, manifest=...)`; replay validates exact
+  request-identity order/content and refuses mismatched manifests, altered
+  records, exhausted sequences, or unconsumed calls. Each record has both the
+  request-identity digest and a whole-record digest covering response/failure
+  data; edited responses therefore fail on load. Recorded failures replay as
+  `RecordedReplayError` rather than reconstructing arbitrary provider
+  exception classes.
+  This does **not** make live providers deterministic: server-side revisions,
+  routing, sampling/runtime implementations, hidden service state, and
+  provider-side changes remain outside Neva's control. NumPy/PyTorch seeding
+  alone also does not guarantee deterministic hardware kernels. Wall-clock
+  timestamps, generated UUIDs, and telemetry timing are runtime metadata and
+  are not rewritten by replay. Manifests may contain caller prompts,
+  conversation/memory contents, tool descriptions and metadata; replay tapes
+  contain effective request identities plus model responses/failures. Treat both
+  artifact types as potentially sensitive.
 - **Long-Term Memory Integrations**: Plug in semantic vector stores like FAISS
   to give agents durable recall of historical conversations and research notes.
 - **Input hygiene, not a security boundary**: Prompts are length-capped and
