@@ -46,11 +46,19 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     try:
         otel_trace = importlib.import_module("opentelemetry.trace")
         otel_metrics = importlib.import_module("opentelemetry.metrics")
-        otel_logs = importlib.import_module("opentelemetry.logs")
+        try:
+            otel_logs = importlib.import_module("opentelemetry.logs")
+        except Exception:
+            # opentelemetry-api < 1.24 exposes the logs API as `_logs` only.
+            otel_logs = importlib.import_module("opentelemetry._logs")
 
         context_module = importlib.import_module("opentelemetry.context")
         Context = getattr(context_module, "Context")
-        set_span_in_context = getattr(context_module, "set_span_in_context")
+        # `set_span_in_context` lives in `opentelemetry.trace` for older
+        # releases and is re-exported from `opentelemetry.context` in newer ones.
+        set_span_in_context = getattr(otel_trace, "set_span_in_context", None)
+        if set_span_in_context is None:
+            set_span_in_context = getattr(context_module, "set_span_in_context")
 
         try:
             sdk_logs = importlib.import_module("opentelemetry.sdk.logs")

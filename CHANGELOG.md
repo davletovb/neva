@@ -251,6 +251,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Anthropic content-block parsing now reads SDK objects as well as dicts.
 - OpenTelemetry log SDK import prefers the public `opentelemetry.sdk.logs`
   package and falls back to `_logs`.
+- OpenTelemetry API imports accept both release layouts, so the declared
+  `observability` extra actually exports telemetry with opentelemetry-api 1.23:
+  the logs API falls back to `opentelemetry._logs` and `set_span_in_context` is
+  read from `opentelemetry.trace` when `opentelemetry.context` does not export
+  it. Previously the import failure was reported as a missing dependency and
+  telemetry silently degraded to the no-op fallback.
 - Custom OpenAI/Grok `api_base` values that are not already a Chat Completions
   endpoint now have `/chat/completions` appended.
 - `RateLimiter.acquire()` sleeps outside its lock so shared limiters are not
