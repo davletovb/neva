@@ -8,7 +8,7 @@ from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
 from neva.schedulers.round_robin import RoundRobinScheduler
 from neva.utils.exceptions import ConfigurationError, SchedulingError
-from neva.utils.observer import SimulationObserver
+from neva.utils.observability.observer import SimulationObserver
 
 if False:  # pragma: no cover - for type checking only
     from neva.environments.base import Environment

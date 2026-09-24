@@ -8,7 +8,7 @@ steps, and quickstart examples. The most common workflows include:
 * Scheduling coordinated interactions with :class:`neva.schedulers.RoundRobinScheduler`
   or any of the registry-backed schedulers in :mod:`neva.schedulers`.
 * Capturing environment state and telemetry using :class:`neva.environments.Environment`
-  and :mod:`neva.utils.telemetry` helpers.
+  and :mod:`neva.utils.observability.telemetry` helpers.
 
 For local development, ensure the development dependencies are installed and run the
 commands listed in the ``Testing & Quality Assurance`` section of the README to execute

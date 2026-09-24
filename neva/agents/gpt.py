@@ -33,13 +33,13 @@ from neva.utils.metrics import (
     TokenUsageTracker,
     estimate_token_count,
 )
+from neva.utils.observability.telemetry import get_telemetry
 from neva.utils.provider_resources import (
     ProviderPermit,
     ProviderResourceCoordinator,
     shared_provider_resources,
 )
 from neva.utils.safety import CircuitBreaker, RateLimiter
-from neva.utils.telemetry import get_telemetry
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.tools.guard import ToolGuard

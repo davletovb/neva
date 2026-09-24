@@ -131,7 +131,7 @@ jobs:
       - name: Measure telemetry implementation coverage
         run: |
           pytest -q -o addopts="" \
-            --cov=neva.utils.telemetry \
+            --cov=neva.utils.observability.telemetry \
             --cov-report=term-missing \
             --cov-fail-under=80 \
             tests/unit/test_telemetry.py \

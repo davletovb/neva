@@ -231,6 +231,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry omits raw prompts, completions, tool payloads, and reasoning
   text by default (length + SHA-256 fingerprints instead). Pass
   `include_content=True` to opt in to exporting conversation content.
+- The observability modules moved into a subpackage: the implementations now
+  live in `neva.utils.observability.telemetry` and
+  `neva.utils.observability.observer`, while `neva.utils.telemetry` and
+  `neva.utils.observer` remain importable as compatibility shims that
+  re-export the same objects. Internal imports, the README, and the guides use
+  the new paths; the generated API reference picks them up automatically.
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a

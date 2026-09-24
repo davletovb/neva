@@ -3,7 +3,7 @@ import threading
 
 from neva.agents import AgentManager
 from neva.agents.base import ParallelExecutionConfig
-from neva.utils.observer import SimulationObserver
+from neva.utils.observability.observer import SimulationObserver
 
 
 class _NamedStubAgent:

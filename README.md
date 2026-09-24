@@ -182,7 +182,7 @@ your preferred dashboarding stack.
 ### OpenTelemetry Observability
 
 Neva ships with a vendor-neutral instrumentation layer powered by
-OpenTelemetry. Call `neva.utils.telemetry.configure_telemetry()` once during
+OpenTelemetry. Call `neva.utils.observability.telemetry.configure_telemetry()` once during
 initialisation to emit traces, metrics, and structured logs for every
 conversation turn, LLM API invocation, and tool call. The helper exposes the
 standard OpenTelemetry providers so you can attach any exporter supported by
@@ -190,7 +190,7 @@ your observability stack:
 
 ```python
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-from neva.utils.telemetry import configure_telemetry
+from neva.utils.observability.telemetry import configure_telemetry
 
 telemetry = configure_telemetry(
     span_exporter=ConsoleSpanExporter(),

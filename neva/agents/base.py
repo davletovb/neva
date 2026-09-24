@@ -43,15 +43,15 @@ from neva.utils.exceptions import (
     ToolSchemaConfigurationError,
 )
 from neva.utils.metrics import ResponseTimeTracker, batch_prompt_summary, profile_memory_usage
+from neva.utils.observability.telemetry import get_telemetry
 from neva.utils.safety import PromptValidator, sanitize_input
 from neva.utils.state_management import ConversationState
-from neva.utils.telemetry import get_telemetry
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
     from neva.environments.base import Environment
     from neva.tools.guard import ToolGuard
     from neva.tools.loop import ToolLoopConfig, ToolLoopResult
-    from neva.utils.observer import SimulationObserver
+    from neva.utils.observability.observer import SimulationObserver
 
 
 @dataclass
