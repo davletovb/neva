@@ -48,14 +48,14 @@ wikipedia = { version = "1.4.0", optional = true }
 "opentelemetry-api" = { version = "^1.23.0", optional = true }
 "opentelemetry-sdk" = { version = "^1.23.0", optional = true }
 "deep-translator" = { version = "^1.11.4", optional = true }
-transformers = { version = "^4.35.2", optional = true }
+transformers = { version = ">=4.35.2,<6.0.0", optional = true }
 torch = { version = "^2.2.2", optional = true }
-mlflow = { version = "^2.9.1", optional = true }
-anthropic = { version = "^0.26.0", optional = true }
-httpx = { version = ">=0.23,<0.28", optional = true }
-"google-generativeai" = { version = "^0.3.2", optional = true }
+mlflow = { version = ">=2.9.1,<4.0.0", optional = true }
+anthropic = { version = ">=0.26,<1.8", optional = true }
+httpx = { version = ">=0.23,<0.29", optional = true }
+"google-generativeai" = { version = ">=0.3.2,<0.9.0", optional = true }
 "faiss-cpu" = { version = "^1.7.4", optional = true }
-numpy = { version = "^1.26.4", optional = true }
+numpy = { version = ">=1.26.4,<3.0.0", optional = true }
 # >=0.7.0 is the first release whose model map covers gpt-4o-mini, the model
 # openai_chat_counter() accepts; 0.6.x raises KeyError and the documented flow
 # fails with ConfigurationError. No upper bound so a newer tiktoken is not
