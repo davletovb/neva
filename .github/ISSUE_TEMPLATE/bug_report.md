@@ -26,4 +26,4 @@ labels: bug
 
 **Anything else**
 
-<!-- Deterministic? Intermittent? Related to a tracker item in ROBUSTNESS_GAPS.md? -->
+<!-- Deterministic? Intermittent? Related to a documented behavior in CAPABILITIES.md? -->
