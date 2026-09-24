@@ -192,7 +192,10 @@ Available controls include:
 
 Thread-based timeout mode is cooperative and cannot forcibly stop arbitrary
 synchronous code. For hard termination, tools can opt into process isolation.
-Process isolation requires picklable state and is not a complete security
+Worker startup (interpreter, imports, argument unpickling) is bounded by a
+fixed grace before the execution timeout starts, so heavyweight environments
+do not spend the tool's own budget on imports. Process isolation requires
+picklable state and is not a complete security
 sandbox: child processes still inherit application-level filesystem and network
 access unless the application supplies a stronger external sandbox.
 
