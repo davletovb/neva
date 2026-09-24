@@ -217,6 +217,34 @@ def test_manifest_fingerprint_captures_builtin_memory_state_without_timestamps()
     assert "timestamp" not in json.dumps(state)
 
 
+def test_builtin_memory_subclass_reproducibility_hook_changes_fingerprint():
+    class TaggedMemory(ShortTermMemory):
+        def __init__(self, tag):
+            super().__init__(capacity=2)
+            self.tag = tag
+            self.remember("user", "same")
+
+        def reproducibility_config(self):
+            return {"tag": self.tag}
+
+    def build(tag):
+        env = BasicEnvironment("memory", "subclass", RandomScheduler())
+        env.register_agent(
+            TransformerAgent(
+                name="agent",
+                llm_backend=_deterministic_backend,
+                memory=TaggedMemory(tag),
+            )
+        )
+        return env
+
+    first = create_run_manifest(build("one"), seed=1, dependencies=[])
+    second = create_run_manifest(build("two"), seed=1, dependencies=[])
+
+    assert first.fingerprint() != second.fingerprint()
+    assert first.agents[0]["memory"]["state"]["custom"] == {"tag": "one"}
+
+
 def test_memory_metadata_is_normalized_for_manifest_fingerprints(tmp_path):
     memory = ShortTermMemory(capacity=2)
     memory.remember(
@@ -370,6 +398,26 @@ def test_manifest_rejects_duplicate_agent_names():
 
     with pytest.raises(ReproducibilityError, match="unique agent names"):
         create_run_manifest(env, seed=1, dependencies=[])
+
+
+def test_json_native_encodes_bytes_and_rejects_unsupported_state_values():
+    first = _build_random_env()
+    second = _build_random_env()
+    first.state["blob"] = b"first"
+    second.state["blob"] = b"second"
+
+    first_manifest = create_run_manifest(first, seed=1, dependencies=[])
+    second_manifest = create_run_manifest(second, seed=1, dependencies=[])
+
+    assert first_manifest.fingerprint() != second_manifest.fingerprint()
+    assert first_manifest.environment["state"]["blob"] == {"__neva_bytes_hex__": "6669727374"}
+
+    class Unsupported:
+        pass
+
+    first.state["unsupported"] = Unsupported()
+    with pytest.raises(ReproducibilityError, match="unsupported reproducibility value type"):
+        create_run_manifest(first, seed=1, dependencies=[])
 
 
 def test_manifest_fingerprint_changes_with_environment_state():
@@ -815,6 +863,29 @@ def test_record_and_replay_reproduce_seeded_random_run_end_to_end(tmp_path):
     assert replayed_outputs == recorded_outputs
     assert replayed_turns == recorded_turns
     assert len(loaded_tape.records) == 12
+
+
+def test_nested_recorded_calls_are_consumed_with_outer_replay_span():
+    inner = TransformerAgent(name="inner", llm_backend=lambda prompt: f"inner:{prompt}")
+
+    def outer_backend(prompt):
+        nested = inner.replayable_backend()("nested")
+        return f"outer:{prompt}:{nested}"
+
+    outer = TransformerAgent(name="outer", llm_backend=outer_backend)
+    tape = ReplayTape()
+    tape.attach_recording([outer, inner])
+
+    recorded = outer.replayable_backend()("root")
+    assert recorded == "outer:root:inner:nested"
+    assert [record.parent_index for record in tape.records] == [None, 0]
+
+    replay_inner = TransformerAgent(name="inner", llm_backend=lambda prompt: "should-not-run")
+    replay_outer = TransformerAgent(name="outer", llm_backend=lambda prompt: "should-not-run")
+    replay = tape.attach_replay([replay_outer, replay_inner])
+
+    assert replay_outer.replayable_backend()("root") == recorded
+    replay.assert_consumed()
 
 
 def test_replay_rejects_prompt_mismatch_without_advancing():
