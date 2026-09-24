@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response enters history and cache only when the consumer accepts the
   `complete` event, and an interrupted stream raises `StreamInterruptedError`
   carrying the uncommitted partial text. First-token and full-completion
-  latency are recorded separately (including `neva.llm.api.latency` spans),
+  latency are recorded separately as `neva.llm.first_token.latency` and
+  `neva.llm.api.latency` histogram metrics alongside a `neva.llm.call` span,
   and loopback tests cover the local HTTP and SDK streaming paths.
 - Reproducible experiment support: `SeedReport`, `RunManifest`,
   `ReplayRecord`, `ReplayTape`, `ReplayBackend`,
