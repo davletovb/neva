@@ -129,6 +129,24 @@ show_error_codes = true
 plugins = []
 files = ["neva"]
 
+# Ratchet: modules that already pass under stricter flags. Widen the module
+# list as remaining modules are cleaned up rather than flipping these flags on
+# globally.
+[[tool.mypy.overrides]]
+module = ["neva.tools.*", "neva.utils.reproducibility"]
+disallow_untyped_defs = true
+warn_unused_ignores = true
+
 [tool.bandit]
 skips = ["B101"]
+
+# Ratchet: raise fail-under as the remaining public methods are documented.
+# Private methods, __init__, and nested helpers are excluded so the number
+# reflects the documented public API surface.
+[tool.interrogate]
+ignore-init-method = true
+ignore-private = true
+ignore-nested-functions = true
+fail-under = 50
+verbose = 1
 

@@ -21,6 +21,7 @@ class Scheduler(ABC):
         self._termination_hooks: List[Callable[[AIAgent], None]] = []
 
     def set_environment(self, environment: "Environment") -> None:
+        """Bind the scheduler to the environment it drives."""
         self.environment = environment
 
     def record_metrics(
