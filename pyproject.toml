@@ -56,7 +56,11 @@ httpx = { version = ">=0.23,<0.28", optional = true }
 "google-generativeai" = { version = "^0.3.2", optional = true }
 "faiss-cpu" = { version = "^1.7.4", optional = true }
 numpy = { version = "^1.26.4", optional = true }
-tiktoken = { version = "^0.6.0", optional = true }
+# >=0.7.0 is the first release whose model map covers gpt-4o-mini, the model
+# openai_chat_counter() accepts; 0.6.x raises KeyError and the documented flow
+# fails with ConfigurationError. No upper bound so a newer tiktoken is not
+# downgraded on install.
+tiktoken = { version = ">=0.7.0", optional = true }
 
 [tool.poetry.group.dev.dependencies]
 black = "23.9.1"

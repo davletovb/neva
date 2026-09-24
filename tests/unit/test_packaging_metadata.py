@@ -104,6 +104,19 @@ def test_every_optional_dependency_is_reachable_from_an_extra():
     assert not orphans, f"optional dependencies not exposed by any extra: {orphans}"
 
 
+def test_budgeting_extra_declares_a_tokenizer_floor_with_the_gpt4o_mapping():
+    """`openai_chat_counter` only accepts gpt-4o-mini, which needs tiktoken>=0.7.0."""
+
+    declared = _declared_optionals()["tiktoken"]
+    match = re.search(r"(\d+)\.(\d+)", declared)
+    assert match, declared
+    assert (int(match.group(1)), int(match.group(2))) >= (0, 7), declared
+
+    pinned = re.search(r"^tiktoken==([\d.]+)$", REQUIREMENTS_OPTIONAL.read_text(), re.M)
+    assert pinned, "requirements-optional.txt must pin tiktoken"
+    assert tuple(int(part) for part in pinned.group(1).split(".")[:2]) >= (0, 7), pinned.group(1)
+
+
 def test_requirements_optional_matches_the_extras():
     from_extras = {name for names in _extras().values() for name in names}
     from_requirements = set(_requirement_names())
