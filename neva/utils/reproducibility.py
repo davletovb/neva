@@ -95,10 +95,7 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
         return {"type": _type_name(value), "isoformat": value.isoformat()}
     if isinstance(value, Mapping):
         if all(isinstance(key, str) for key in value):
-            return {
-                key: _json_native(item, depth=depth + 1)
-                for key, item in sorted(value.items())
-            }
+            return {key: _json_native(item, depth=depth + 1) for key, item in sorted(value.items())}
         entries = [
             [
                 _json_native(key, depth=depth + 1),
@@ -519,11 +516,7 @@ def _capture_manifest_memory(memory: Any) -> Any:
             short_term=_capture_manifest_memory(memory._short_term),
             summary=_capture_manifest_memory(memory._summary),
             summarizer=_callable_name(memory._summarizer),
-            embedder=(
-                _callable_name(memory._embedder)
-                if memory._embedder is not None
-                else None
-            ),
+            embedder=(_callable_name(memory._embedder) if memory._embedder is not None else None),
         )
         return base
 
@@ -594,9 +587,7 @@ def _tool_guard_config(guard: Any) -> Any:
     hook = getattr(guard, "reproducibility_config", None)
     config = {
         "type": _type_name(guard),
-        "allowed_tools": (
-            sorted(guard.allowed_tools) if guard.allowed_tools is not None else None
-        ),
+        "allowed_tools": (sorted(guard.allowed_tools) if guard.allowed_tools is not None else None),
         "approve": _callable_name(guard.approve) if guard.approve is not None else None,
         "limits": {
             "timeout": limits.timeout,
@@ -980,9 +971,7 @@ def _manifest_diff_paths(expected: Any, actual: Any, *, prefix: str = "") -> Lis
             if key not in expected or key not in actual:
                 differences.append(path)
                 continue
-            differences.extend(
-                _manifest_diff_paths(expected[key], actual[key], prefix=path)
-            )
+            differences.extend(_manifest_diff_paths(expected[key], actual[key], prefix=path))
             if len(differences) >= 12:
                 break
         return differences
@@ -1087,9 +1076,7 @@ class ReplayTape:
         self._records: List[Optional[ReplayRecord]] = list(records or ())
         self.manifest_fingerprint = manifest_fingerprint
         self.manifest_compatibility = (
-            deepcopy(dict(manifest_compatibility))
-            if manifest_compatibility is not None
-            else None
+            deepcopy(dict(manifest_compatibility)) if manifest_compatibility is not None else None
         )
         self._lock = threading.RLock()
 
@@ -1238,11 +1225,7 @@ class ReplayTape:
                 "version": _REPLAY_VERSION,
                 "manifest_fingerprint": self.manifest_fingerprint,
                 "manifest_compatibility": deepcopy(self.manifest_compatibility),
-                "records": [
-                    record.to_dict()
-                    for record in self._records
-                    if record is not None
-                ],
+                "records": [record.to_dict() for record in self._records if record is not None],
             }
 
     @classmethod
