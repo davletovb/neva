@@ -5,24 +5,24 @@
 wikipedia==1.4.0
 deep-translator==1.11.4
 transformers==4.35.2
-torch==2.2.2
+torch==2.14.0
 
 # mlops extra
-mlflow==2.9.1
+mlflow==3.16.1
 
 # providers extra
-anthropic==0.26.0
+anthropic==1.7.0
 httpx==0.27.2
-google-generativeai==0.3.2
+google-generativeai==0.8.6
 
 # memory extra (FAISS vector store)
-faiss-cpu==1.7.4
-numpy==1.26.4
+faiss-cpu==1.15.1
+numpy==2.4.6
 
 # budgeting extra (optional tokenizer for openai_chat_counter; the gpt-4o
 # model mapping needs tiktoken>=0.7.0)
 tiktoken==0.14.0
 
 # observability extra
-opentelemetry-api==1.23.0
-opentelemetry-sdk==1.23.0
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
