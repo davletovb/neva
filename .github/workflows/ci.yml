@@ -155,3 +155,37 @@ jobs:
         with:
           name: documentation-html
           path: docs/_build/html
+
+  package:
+    name: Package build and install
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install "build==1.2.2.post1" "poetry==2.2.1"
+
+      - name: Check that poetry.lock matches pyproject.toml
+        run: poetry check --lock
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Install the wheel into a clean environment
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/python -m pip install --upgrade pip
+          /tmp/wheel-smoke/bin/python -m pip install dist/*.whl
+
+      - name: Smoke-test the installed wheel
+        run: /tmp/wheel-smoke/bin/python scripts/wheel_smoke.py
