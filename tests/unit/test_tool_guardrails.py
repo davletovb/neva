@@ -337,16 +337,31 @@ class ConcurrencyProbeTool(Tool):
 
 
 def test_isolated_process_timeout_is_hard():
-    tool = RecordingTool(name="isolated", delay=1.0)
+    tool = RecordingTool(name="isolated", delay=60.0)
     guard = ToolGuard(limits=ToolLimits(timeout=0.05, isolate_process=True))
     started = time.monotonic()
     with pytest.raises(ToolTimeoutError, match="hard execution limit"):
         guard.invoke(tool, "slow")
-    assert time.monotonic() - started < 0.8
+    # Enforcement happens at the execution deadline, which is reached only
+    # after worker startup (bounded by the fixed startup grace). An unenforced
+    # timeout would wait the tool's full 60 s delay instead.
+    assert time.monotonic() - started < guard_module._ISOLATED_STARTUP_GRACE + 1.0
     assert not any(
         process.name == "neva-tool-process-isolated"
         for process in __import__("multiprocessing").active_children()
     )
+
+
+def test_isolated_process_startup_is_not_charged_to_the_execution_timeout():
+    from _slow_startup_tool import IMPORT_DELAY_SECONDS, SlowStartupTool
+
+    # The child cannot boot (import the tool module) faster than the module's
+    # import delay, which exceeds the execution timeout. The call must still
+    # succeed: startup is bounded by its own grace, not by the tool's budget.
+    assert IMPORT_DELAY_SECONDS > 0.5
+    tool = SlowStartupTool()
+    guard = ToolGuard(limits=ToolLimits(timeout=0.5, isolate_process=True))
+    assert guard.invoke(tool, "go") == "ok:go"
 
 
 def test_isolated_process_truncates_before_parent_result():
