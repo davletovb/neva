@@ -44,7 +44,6 @@ packages = [{ include = "neva" }]
 [tool.poetry.dependencies]
 python = ">=3.11,<4.0"
 requests = "^2.31.0"
-openai = { version = "^1.40.0", optional = true }
 wikipedia = { version = "1.4.0", optional = true }
 "opentelemetry-api" = { version = "^1.23.0", optional = true }
 "opentelemetry-sdk" = { version = "^1.23.0", optional = true }
@@ -57,6 +56,11 @@ httpx = { version = ">=0.23,<0.28", optional = true }
 "google-generativeai" = { version = "^0.3.2", optional = true }
 "faiss-cpu" = { version = "^1.7.4", optional = true }
 numpy = { version = "^1.26.4", optional = true }
+# >=0.7.0 is the first release whose model map covers gpt-4o-mini, the model
+# openai_chat_counter() accepts; 0.6.x raises KeyError and the documented flow
+# fails with ConfigurationError. No upper bound so a newer tiktoken is not
+# downgraded on install.
+tiktoken = { version = ">=0.7.0", optional = true }
 
 [tool.poetry.group.dev.dependencies]
 black = "23.9.1"
@@ -64,6 +68,7 @@ coverage = "7.3.2"
 mypy = "1.6.1"
 pytest = "7.4.2"
 pytest-cov = "4.1.0"
+pytest-timeout = "2.2.0"
 isort = "5.12.0"
 flake8 = "6.1.0"
 pre-commit = "3.4.0"
@@ -74,7 +79,8 @@ types-requests = "2.31.0.7"
 [tool.poetry.extras]
 tools = ["wikipedia", "deep-translator", "transformers", "torch"]
 mlops = ["mlflow"]
-providers = ["openai", "anthropic", "httpx", "google-generativeai"]
+providers = ["anthropic", "httpx", "google-generativeai"]
+budgeting = ["tiktoken"]
 observability = ["opentelemetry-api", "opentelemetry-sdk"]
 memory = ["faiss-cpu", "numpy"]
 all = [
@@ -83,7 +89,6 @@ all = [
     "transformers",
     "torch",
     "mlflow",
-    "openai",
     "anthropic",
     "httpx",
     "google-generativeai",
@@ -91,6 +96,7 @@ all = [
     "opentelemetry-sdk",
     "faiss-cpu",
     "numpy",
+    "tiktoken",
 ]
 
 [tool.black]
@@ -100,6 +106,9 @@ target-version = ["py311"]
 [tool.pytest.ini_options]
 addopts = "-ra --cov=neva --cov-report=term-missing --cov-report=xml --cov-report=html --cov-fail-under=80"
 testpaths = ["tests"]
+# Bound every test so a hang fails the job instead of burning the CI limit.
+timeout = 120
+timeout_method = "thread"
 
 [tool.isort]
 profile = "black"

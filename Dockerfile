@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.4
 FROM python:3.11-slim AS runtime
 
-ARG POETRY_VERSION=1.6.1
+# poetry.lock is committed: poetry 2.x fails the build when the lock is stale
+# instead of silently re-resolving dependencies.
+ARG POETRY_VERSION=2.2.1
 ARG WITH_EXTRAS=""
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -14,7 +16,7 @@ RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 
 WORKDIR /workspace
 
-COPY pyproject.toml poetry.lock* README.md ./
+COPY pyproject.toml poetry.lock README.md ./
 COPY neva ./neva
 COPY examples ./examples
 COPY tests ./tests

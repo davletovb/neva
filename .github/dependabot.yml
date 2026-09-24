@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      optional-integrations:
+        patterns:
+          - "anthropic"
+          - "deep-translator"
+          - "faiss-cpu"
+          - "google-generativeai"
+          - "httpx"
+          - "mlflow"
+          - "numpy"
+          - "opentelemetry-*"
+          - "tiktoken"
+          - "torch"
+          - "transformers"
+          - "wikipedia"
+      development-tools:
+        patterns:
+          - "bandit"
+          - "black"
+          - "build"
+          - "coverage"
+          - "flake8"
+          - "isort"
+          - "mypy"
+          - "pre-commit"
+          - "pytest*"
+          - "sphinx"
+          - "types-requests"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"

@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API key and estimated spend ceiling. The README documents estimated pricing,
   limits, and provider-failure guidance; deterministic tests exercise the
   request path without real credentials.
+- Bounded provider streaming for built-in `GPTAgent` providers:
+  `stream_response()` returns a single-use `StreamSession` that yields `delta`
+  and `complete` `StreamEvent`s from OpenAI-compatible SSE, the Anthropic SDK,
+  and the Gemini SDK, with a bounded producer queue and both synchronous and
+  asynchronous consumption. Shared provider admission, spend accounting,
+  cache/history semantics, cancellation, and retry rules are preserved; a
+  response enters history and cache only when the consumer accepts the
+  `complete` event, and an interrupted stream raises `StreamInterruptedError`
+  carrying the uncommitted partial text. First-token and full-completion
+  latency are recorded separately as `neva.llm.first_token.latency` and
+  `neva.llm.api.latency` histogram metrics alongside a `neva.llm.call` span,
+  and loopback tests cover the local HTTP and SDK streaming paths.
 - Reproducible experiment support: `SeedReport`, `RunManifest`,
   `ReplayRecord`, `ReplayTape`, `ReplayBackend`,
   `seed_everything()`, `prepare_reproducible_run()`, and
@@ -207,6 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (each retryable HTTP attempt counts) and allows a single probe after a
   cooldown. A rejected probe releases the in-flight slot so later calls can
   try again. Pass the same instance to share a provider circuit across agents.
+- `budgeting` extra declaring `tiktoken>=0.7.0` for `openai_chat_counter()` (the
+  first release whose model map covers `gpt-4o-mini`, the only model the helper
+  accepts), and a `package` CI job that builds the wheel, installs it into a
+  clean environment, and runs `scripts/wheel_smoke.py`. A committed
+  `poetry.lock` pins the resolution and is verified with `poetry check --lock`.
 
 ### Changed
 - Supported/tested Python versions are now 3.11, 3.12, 3.13, and 3.14; Python
@@ -231,12 +248,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry omits raw prompts, completions, tool payloads, and reasoning
   text by default (length + SHA-256 fingerprints instead). Pass
   `include_content=True` to opt in to exporting conversation content.
+- The `providers` extra no longer declares the unused `openai` SDK (the
+  OpenAI-compatible path uses `requests`), and the optional dependency manifests
+  are cross-checked against each other and against the imports in `neva/` by
+  `tests/unit/test_packaging_metadata.py`.
 - The observability modules moved into a subpackage: the implementations now
   live in `neva.utils.observability.telemetry` and
   `neva.utils.observability.observer`, while `neva.utils.telemetry` and
-  `neva.utils.observer` remain importable as compatibility shims that
-  re-export the same objects. Internal imports, the README, and the guides use
-  the new paths; the generated API reference picks them up automatically.
+  `neva.utils.observer` remain importable as compatibility shims that alias the
+  implementation modules (so imports *and* module-level attribute mutation on the
+  old paths keep working). Internal imports, the README, and the guides use the
+  new paths; the generated API reference picks them up automatically.
 
 ### Fixed
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a
