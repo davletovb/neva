@@ -2,10 +2,10 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `715cd57` (through PR #77 merged).
+Updated against `main` at `1bcec04` (through PR #78 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
-- FAISS PR #53 remains open/deferred, but PR #73 intentionally supersedes its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness/integration coverage. PR #53 should be rebased or retired after #73 lands.
+- FAISS PR #53 was closed unmerged on 2026-09-23; PR #73 superseded its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness and integration coverage, so no rebase is needed. Its `test/faiss-integration-ci` branch is retained only for reference and can be deleted.
 - These checks do not establish production readiness. Items below include feature gaps, untested risks, and known scope limits—not all are confirmed bugs.
 
 ## Already implemented on merged main
@@ -145,8 +145,8 @@ introducing a second persistence format:
 - First-party memory checkpoint adapters from PR #67 remain data-only and
   preserve configured callable/`MemoryBudget` identities; custom/third-party
   scheduler and memory implementations still require explicit checkpoint hooks.
-  Deferred FAISS/PR #53 remains outside this section rather than being silently
-  serialized.
+  The closed FAISS PR #53 remains outside this section rather than being
+  silently serialized.
 - Transcript retention now has three independent opt-in axes:
   `max_turns`, per-message `max_turn_bytes`, and aggregate retained-message
   `max_history_bytes`. The aggregate budget truncates one oversized newest
@@ -197,11 +197,11 @@ requiring live provider credentials or external model downloads:
   a dedicated FAISS-module coverage gate of at least 80%. Review of the real
   dependency path also fixed an ordering bug: FAISS already returns nearest
   neighbours in metric order, so Neva no longer reverses L2 distances.
-  PR #53 remains separately deferred as a PR, but #73 intentionally overlaps
-  two of its test/coverage changes (removing the FAISS coverage omit and making
-  the missing-dependency test work when FAISS is installed). #73 targets the
-  FAISS implementation already present on main and adds broader correctness and
-  integration coverage; #53 should be rebased or retired after #73 lands.
+  PR #53 was closed unmerged on 2026-09-23; #73 intentionally overlapped two
+  of its test/coverage changes (removing the FAISS coverage omit and making the
+  missing-dependency test work when FAISS is installed). #73 targets the FAISS
+  implementation already present on main and adds broader correctness and
+  integration coverage, so the deferred PR is retired rather than rebased.
 - Composite/Conditional scheduler coverage now includes group fairness
   independent of group size, changing conditional eligibility, pause/resume
   after condition changes, nested Composite schedulers, recursive environment
@@ -478,12 +478,12 @@ not assume a universal context or billing guarantee from local estimates.
 - [x] Add durable failure records and replay control (PR #60).
 - [x] Tool-call guardrails (PR #61).
 - [x] Validated tool argument schemas (PR #62).
-- [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of deferred PR #53.
+- [x] Add dependency-enabled FAISS CI/coverage for the implementation on main; PR #73 supersedes the overlapping coverage/test portions of PR #53 (closed unmerged on 2026-09-23).
 - [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 - [x] Complete bounded model-driven tool orchestration with schema/guard feedback and termination limits (PR #74).
 - [x] Complete run manifests, unified seeding, and deterministic offline model-boundary replay (PR #75).
-- [x] Add bounded provider streaming, cancellation, partial-failure handling, and separate first-token/completion latency accounting.
-- [x] Add an opt-in live-provider example, deterministic offline mode, credential/cost guidance, and bounded-call tests (section 9).
-- [x] Add model-bound request token accounting, output reservations, preflight failures, and documentation (section 10).
+- [x] Add bounded provider streaming, cancellation, partial-failure handling, and separate first-token/completion latency accounting (PR #76).
+- [x] Add an opt-in live-provider example, deterministic offline mode, credential/cost guidance, and bounded-call tests (PR #77).
+- [x] Add model-bound request token accounting, output reservations, preflight failures, and documentation (PR #78).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
