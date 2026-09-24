@@ -652,6 +652,14 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
 
     if hasattr(agent, "model_name"):
         generation.setdefault("max_length", 200)
+    context_budget = getattr(agent, "_context_budget", None)
+    if context_budget is not None:
+        generation["context_budget"] = {
+            "provider": context_budget.provider,
+            "model": context_budget.model,
+            "max_tokens": context_budget.max_tokens,
+            "counter_id": context_budget.counter_id,
+        }
 
     backend = agent.llm_backend
     state = agent.conversation_state

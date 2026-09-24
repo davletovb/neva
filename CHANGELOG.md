@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Opt-in `ModelContextBudget` for provider/model-bound request token envelopes:
+  a caller-supplied request counter includes message framing, configured
+  output tokens reserve context before each call, and an oversized current
+  request fails before cache/admission/HTTP. History trimming works for normal,
+  streaming, and raw model requests. Optional `openai_chat_counter()` uses the
+  model's `tiktoken` encoding and OpenAI's estimated chat overhead. Cache and
+  run-manifest identities include the versioned counter/limit; character-only
+  behavior remains the default.
 - `examples/live_provider_smoke.py` runs offline with a scripted response by
   default and opts into a single bounded OpenAI request only with an explicit
   API key and estimated spend ceiling. The README documents estimated pricing,

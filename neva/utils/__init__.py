@@ -3,6 +3,7 @@
 from importlib import import_module as _import_module
 
 caching = _import_module(".caching", __name__)
+context_budget = _import_module(".context_budget", __name__)
 exceptions = _import_module(".exceptions", __name__)
 failures = _import_module(".failures", __name__)
 logging_utils = _import_module(".logging_utils", __name__)
@@ -17,6 +18,7 @@ telemetry = _import_module(".telemetry", __name__)
 
 __all__ = [
     "caching",
+    "context_budget",
     "exceptions",
     "failures",
     "logging_utils",

@@ -112,6 +112,58 @@ account's usage before running the live path; provider charges may differ.
 The test suite stubs the HTTP response and never uses a real key or incurs a
 provider charge.
 
+### Model-aware context budgeting
+
+`GPTAgent` retains its character-based `max_context_chars` guard. For an
+additional token envelope, opt in with a `ModelContextBudget` bound to the
+selected provider/model, a model-specific request counter, and a token ceiling
+you have verified for your endpoint. For example, install `tiktoken` separately
+and use the built-in *estimate* for text-only `gpt-4o-mini` chat messages:
+
+```python
+from neva.agents import GPTAgent
+from neva.utils.context_budget import ModelContextBudget, openai_chat_counter
+
+agent = GPTAgent(
+    provider="openai",
+    model="gpt-4o-mini",
+    api_key="...",  # supply from your secret manager
+    max_output_tokens=128,
+    context_budget=ModelContextBudget(
+        provider="openai",
+        model="gpt-4o-mini",
+        max_tokens=8192,  # example cap; verify your model/endpoint's limit
+        count_request_tokens=openai_chat_counter("gpt-4o-mini"),
+        counter_id="openai-mini-chat-cookbook-v1",
+    ),
+)
+```
+
+Install the optional tokenizer with `pip install tiktoken`; its first encoding
+load may require network access. The OpenAI helper counts the chosen model's
+text tokens plus message-role and reply-priming overhead using the
+[OpenAI cookbook estimate](https://developers.openai.com/cookbook/examples/how_to_count_tokens_with_tiktoken).
+It rejects unsupported models rather than silently substituting another
+encoding. For Anthropic, Gemini, xAI, custom endpoints, or other OpenAI models,
+provide `count_request_tokens` for that model and provider: it receives a
+sequence of actual role/content messages for chat APIs, or the flattened
+request string for Gemini, and must include provider framing overhead. Set a
+distinct `counter_id` whenever counting semantics change.
+
+On each request, Neva keeps a recent contiguous history suffix fitting both
+the character cap and `input tokens + max_output_tokens <= max_tokens`.
+It rejects an oversized *current prepared request* with `ConfigurationError`
+before a cached response, rate/spend admission, or HTTP request; it never
+silently truncates the current prompt or shrinks the output reservation.
+Non-streaming, streaming, and raw model-tool calls use the same check. When a
+spend limit is also configured, its input reservation uses the request counter;
+provider-reported usage (or Neva's fallback estimate) still governs settlement.
+Without `context_budget`, historical character-only behavior is unchanged.
+Token counters and provider-side framing can drift, so this is a local
+preflight envelope, **not** a guaranteed provider context limit or an
+authoritative billing cap. Choose a conservative ceiling and validate against
+provider usage/error responses for your model and endpoint.
+
 ### Observability & Experiment Tracking
 
 The :class:`observer.SimulationObserver` now registers a suite of metrics out of
