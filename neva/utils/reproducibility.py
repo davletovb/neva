@@ -24,6 +24,7 @@ import os
 import platform
 import random
 import threading
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
@@ -41,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 _MANIFEST_VERSION = 1
 _REPLAY_VERSION = 1
+_RECORDING_STACK: ContextVar[tuple[int, ...]] = ContextVar("neva_replay_recording_stack", default=())
 _DEFAULT_DEPENDENCIES = (
     "neva",
     "requests",
@@ -968,6 +970,7 @@ def _record_digest(
     response: Optional[str],
     error_type: Optional[str],
     error_message: Optional[str],
+    parent_index: Optional[int],
 ) -> str:
     payload = {
         "prompt": prompt,
@@ -975,6 +978,7 @@ def _record_digest(
         "response": response,
         "error_type": error_type,
         "error_message": error_message,
+        "parent_index": parent_index,
     }
     raw = json.dumps(
         payload,
@@ -1023,6 +1027,7 @@ class ReplayRecord:
     response: Optional[str] = None
     error_type: Optional[str] = None
     error_message: Optional[str] = None
+    parent_index: Optional[int] = None
     record_sha256: Optional[str] = None
 
     def __post_init__(self) -> None:
@@ -1032,6 +1037,7 @@ class ReplayRecord:
             self.response,
             self.error_type,
             self.error_message,
+            self.parent_index,
         )
         object.__setattr__(self, "record_sha256", digest)
 
@@ -1042,6 +1048,7 @@ class ReplayRecord:
             "response": self.response,
             "error_type": self.error_type,
             "error_message": self.error_message,
+            "parent_index": self.parent_index,
             "record_sha256": self.record_sha256,
         }
 
@@ -1060,10 +1067,17 @@ class ReplayRecord:
             raise ReproducibilityError("replay record response must be a string or null")
         error_type = payload.get("error_type")
         error_message = payload.get("error_message")
+        parent_index = payload.get("parent_index")
         if error_type is not None and not isinstance(error_type, str):
             raise ReproducibilityError("replay record error_type must be a string or null")
         if error_message is not None and not isinstance(error_message, str):
             raise ReproducibilityError("replay record error_message must be a string or null")
+        if parent_index is not None and (
+            isinstance(parent_index, bool) or not isinstance(parent_index, int) or parent_index < 0
+        ):
+            raise ReproducibilityError(
+                "replay record parent_index must be a non-negative integer or null"
+            )
         if response is not None and error_type is not None:
             raise ReproducibilityError("replay record cannot contain both response and error")
         if response is None and error_type is None:
@@ -1075,6 +1089,7 @@ class ReplayRecord:
             response,
             error_type,
             error_message,
+            parent_index,
         )
         if record_digest != expected_record_digest:
             raise ReproducibilityError("replay record digest does not match record contents")
@@ -1084,6 +1099,7 @@ class ReplayRecord:
             response=response,
             error_type=error_type,
             error_message=error_message,
+            parent_index=parent_index,
             record_sha256=record_digest,
         )
 
@@ -1152,41 +1168,51 @@ class ReplayTape:
             if not isinstance(replay_identity, str):
                 raise ReproducibilityError("replay identity must be a string")
             prompt_digest = hashlib.sha256(replay_identity.encode("utf-8")).hexdigest()
+            parent_stack = _RECORDING_STACK.get()
+            parent_index = parent_stack[-1] if parent_stack else None
             slot = self._reserve()
+            token = _RECORDING_STACK.set(parent_stack + (slot,))
             try:
-                response = backend(prompt)
-            except BaseException as exc:
+                try:
+                    response = backend(prompt)
+                except BaseException as exc:
+                    self._complete(
+                        slot,
+                        ReplayRecord(
+                            prompt=replay_identity,
+                            prompt_sha256=prompt_digest,
+                            error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+                            error_message=str(exc),
+                            parent_index=parent_index,
+                        ),
+                    )
+                    raise
+                if not isinstance(response, str):
+                    error = ReproducibilityError("recorded model response must be a string")
+                    self._complete(
+                        slot,
+                        ReplayRecord(
+                            prompt=replay_identity,
+                            prompt_sha256=prompt_digest,
+                            error_type=f"{type(error).__module__}.{type(error).__qualname__}",
+                            error_message=str(error),
+                            parent_index=parent_index,
+                        ),
+                    )
+                    raise error
                 self._complete(
                     slot,
                     ReplayRecord(
                         prompt=replay_identity,
                         prompt_sha256=prompt_digest,
-                        error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
-                        error_message=str(exc),
+                        response=response,
+                        parent_index=parent_index,
                     ),
                 )
-                raise
-            if not isinstance(response, str):
-                error = ReproducibilityError("recorded model response must be a string")
-                self._complete(
-                    slot,
-                    ReplayRecord(
-                        prompt=replay_identity,
-                        prompt_sha256=prompt_digest,
-                        error_type=f"{type(error).__module__}.{type(error).__qualname__}",
-                        error_message=str(error),
-                    ),
-                )
-                raise error
-            self._complete(
-                slot,
-                ReplayRecord(
-                    prompt=replay_identity,
-                    prompt_sha256=prompt_digest,
-                    response=response,
-                ),
-            )
-            return response
+                return response
+            finally:
+                _RECORDING_STACK.reset(token)
+
 
         return _record
 
@@ -1270,6 +1296,11 @@ class ReplayTape:
         if not all(isinstance(item, Mapping) for item in records_payload):
             raise ReproducibilityError("replay tape records must contain JSON objects")
         records = [ReplayRecord.from_dict(item) for item in records_payload]
+        for index, record in enumerate(records):
+            if record.parent_index is not None and record.parent_index >= index:
+                raise ReproducibilityError(
+                    "replay record parent_index must reference an earlier record"
+                )
         fingerprint = payload.get("manifest_fingerprint")
         if fingerprint is not None and not isinstance(fingerprint, str):
             raise ReproducibilityError("manifest_fingerprint must be a string or null")
@@ -1294,35 +1325,57 @@ class ReplayTape:
 
 
 class ReplayBackend:
-    """Sequential backend that validates exact replay-identity order and content."""
+    """Sequential backend that validates replay identities and consumes nested spans."""
 
     def __init__(self, tape: ReplayTape) -> None:
         self._tape = tape
+        self._records = tuple(tape.records)
+        self._children: Dict[int, List[int]] = {}
+        for index, record in enumerate(self._records):
+            if record.parent_index is not None:
+                self._children.setdefault(record.parent_index, []).append(index)
+        self._consumed: set[int] = set()
         self._index = 0
         self._lock = threading.Lock()
+
+    def _advance(self) -> None:
+        while self._index < len(self._records) and self._index in self._consumed:
+            self._index += 1
+
+    def _consume_subtree(self, root: int) -> None:
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if current in self._consumed:
+                continue
+            self._consumed.add(current)
+            stack.extend(self._children.get(current, ()))
 
     @property
     def position(self) -> int:
         with self._lock:
+            self._advance()
             return self._index
 
     def _consume(self, replay_identity: str) -> str:
         if not isinstance(replay_identity, str):
             raise ReplayMismatchError("replay identity must be a string")
         with self._lock:
-            records = self._tape.records
-            if self._index >= len(records):
+            self._advance()
+            if self._index >= len(self._records):
                 raise ReplayMismatchError(
                     f"replay exhausted at call {self._index}; no recorded response remains"
                 )
-            record = records[self._index]
+            record_index = self._index
+            record = self._records[record_index]
             digest = hashlib.sha256(replay_identity.encode("utf-8")).hexdigest()
             if digest != record.prompt_sha256 or replay_identity != record.prompt:
                 raise ReplayMismatchError(
-                    f"replay prompt mismatch at call {self._index}: "
+                    f"replay prompt mismatch at call {record_index}: "
                     f"expected sha256={record.prompt_sha256}, got sha256={digest}"
                 )
-            self._index += 1
+            self._consume_subtree(record_index)
+            self._advance()
             if record.error_type is not None:
                 raise RecordedReplayError(
                     f"recorded model failure {record.error_type}: {record.error_message or ''}"
@@ -1349,14 +1402,15 @@ class ReplayBackend:
 
     def assert_consumed(self) -> None:
         with self._lock:
-            total = len(self._tape.records)
-            if self._index != total:
+            self._advance()
+            if len(self._consumed) != len(self._records):
                 raise ReplayMismatchError(
-                    f"replay consumed {self._index} of {total} recorded model calls"
+                    f"replay consumed {len(self._consumed)} of {len(self._records)} recorded model calls"
                 )
 
     def reset(self) -> None:
         with self._lock:
+            self._consumed.clear()
             self._index = 0
 
 
