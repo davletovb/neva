@@ -10,6 +10,7 @@ flake8==6.1.0
 pre-commit==3.4.0
 pbr>=5.11.0
 bandit==1.7.5
+interrogate==1.7.0
 sphinx==7.2.6
 types-requests==2.31.0.7
 opentelemetry-api==1.44.0

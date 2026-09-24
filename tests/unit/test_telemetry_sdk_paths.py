@@ -15,8 +15,7 @@ import logging
 import pytest
 
 from neva.utils.exceptions import MissingDependencyError
-from neva.utils.state_management import ConversationState, ConversationTurn
-from neva.utils.telemetry import (
+from neva.utils.observability.telemetry import (
     TelemetryManager,
     _estimate_tokens,
     _extract_reasoning_steps,
@@ -26,6 +25,7 @@ from neva.utils.telemetry import (
     get_telemetry,
     reset_telemetry,
 )
+from neva.utils.state_management import ConversationState, ConversationTurn
 
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
@@ -207,7 +207,7 @@ def test_fallback_instrumentation_when_opentelemetry_is_unavailable(monkeypatch)
     def missing() -> None:
         raise MissingDependencyError("opentelemetry unavailable")
 
-    monkeypatch.setattr("neva.utils.telemetry._require_opentelemetry", missing)
+    monkeypatch.setattr("neva.utils.observability.telemetry._require_opentelemetry", missing)
     telemetry = TelemetryManager(service_name="neva-fallback")
 
     assert telemetry._trace_api is None and telemetry._metrics_api is None

@@ -41,6 +41,9 @@ jobs:
       - name: Bandit
         run: bandit -r neva benchmarks
 
+      - name: Docstring coverage
+        run: interrogate neva
+
       - name: Pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
 
@@ -99,8 +102,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.2
-          pip install transformers==4.35.2 faiss-cpu==1.7.4 numpy==1.26.4 anthropic==0.26.0 httpx==0.27.2 tiktoken==0.14.0
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+          pip install -r requirements-optional.txt
 
       - name: Verify optional integration imports
         run: |
@@ -131,7 +134,7 @@ jobs:
       - name: Measure telemetry implementation coverage
         run: |
           pytest -q -o addopts="" \
-            --cov=neva.utils.telemetry \
+            --cov=neva.utils.observability.telemetry \
             --cov-report=term-missing \
             --cov-fail-under=80 \
             tests/unit/test_telemetry.py \
