@@ -295,76 +295,65 @@ the provider layer. Streaming/backpressure remains section 8.
 PR #75 adds a single manifest/seeding/offline-replay workflow rather than
 treating checkpointed scheduler RNG state as sufficient reproducibility:
 
-- `prepare_reproducible_run(environment, seed=..., prompts=...)` applies one
-  validated seed and immediately captures a `RunManifest`.
-  `seed_everything(...)` / `Environment.seed(...)` seed the process-global
-  Python RNG, optional NumPy/PyTorch RNGs, Neva-owned random schedulers
-  recursively (including nested Composite groups), and explicit custom
-  agent/scheduler `set_seed` hooks. Nested scheduler streams receive stable
-  path-derived seeds rather than sharing one correlated stream. The operation
-  also sets `PYTHONHASHSEED` for child/future processes and records that the
-  current interpreter's hash seed cannot be changed retroactively.
-- Version-1 run manifests record exact caller-supplied prompts, environment and
-  recovery configuration, scheduler type/order/paused/configuration plus RNG
-  state digest and pending event queues, behavior-affecting public environment
-  configuration/state, agent type/provider/model/provider endpoint, relevant
-  generation/request settings, full prompt-validator regex policy, initial
-  conversation content/retention policy, built-in memory state/configuration,
-  agent attributes,
-  tool metadata, prompt-validator ceiling, backend identity, cache policy/capacity
-  and initial cache-state fingerprint, selected dependency versions, Python/
-  platform versions, seed application report, user metadata, and explicit
-  reproducibility notes. API keys and cached prompt/response contents are not
-  serialized.
-- Built-in scheduler capture covers round-robin/conditional indexes, queue/
-  priority/weight state, condition callable identities, Composite membership/
-  group order/recursive child schedulers, and random RNG-state digests. Custom
-  schedulers can expose `reproducibility_config()` for additional JSON-safe
-  configuration; callable identity remains descriptive rather than a guarantee
-  that arbitrary code is reconstructible.
-- `RunManifest.save/load` uses atomic JSON replacement and a canonical
-  compatibility fingerprint that excludes only `created_at`. Replay tapes can
-  bind to that fingerprint so changed seeds/config/dependencies/prompts are
-  rejected before replay.
-- `AIAgent.replayable_backend()` defines the record/replay boundary.
-  `GPTAgent` exposes either its custom backend or built-in provider backend;
-  `TransformerAgent` exposes custom or local Transformer generation.
-  `ReplayTape.attach_recording(agents)` wraps future backend resolutions rather
-  than replacing GPT provider construction, preserving cooperative cancellation
-  while serializing calls into one deterministic total order.
-  `attach_replay(agents, manifest=...)`
-  installs one shared `ReplayBackend` across a fresh agent set.
-- Replay records exact model prompts plus response or failure metadata and a
-  prompt SHA-256. Replays validate exact prompt order/content, refuse changed
-  manifests and tampered digests, fail on extra/exhausted calls, expose
-  `assert_consumed()` for missing calls, and surface recorded failures as
-  `RecordedReplayError`. Manifest/tape JSON loaders validate their shapes
-  rather than leaking incidental parser/container errors.
-- End-to-end tests construct two independent RandomScheduler environments,
-  apply the same seed, record a model run, persist/load manifest+tape, and
-  reproduce the same outputs and speaker/message transcript content/order
-  offline (wall-clock turn timestamps are intentionally not replayed).
-  Additional tests cover global
-  RNG/scheduler repetition, nested Composite seeding, custom agent seed hooks,
-  provider/model/generation/cache/dependency manifest fields, environment public
-  config/state, EventDriven pending order, initial conversation/agent attributes,
-  built-in memory fingerprints, prompt-validator policy, provider endpoint, secret exclusion,
-  cache-state fingerprints, built-in GPT HTTP record→offline replay without a
-  second network call, manifest mismatch, prompt mismatch, exhaustion,
-  unconsumed calls, recorded failures, tampering, and malformed persisted data.
+- `prepare_reproducible_run(...)`, `seed_everything(...)`, and
+  `Environment.seed(...)` seed the process-global Python RNG, optional
+  NumPy/PyTorch RNGs, known Neva Python-random schedulers recursively, and
+  explicit custom agent/scheduler `set_seed` hooks. Stable path-derived seeds
+  separate nested scheduler streams. A custom scheduler's unrelated `_rng`
+  object is not replaced. `PYTHONHASHSEED` mutation is opt-in through
+  `set_child_hash_seed=True`; the current interpreter's hash seed remains an
+  interpreter-startup property.
+- Version-1 manifests record caller prompts, behavior-affecting environment
+  config/state and per-agent failure policies, recursive scheduler state
+  including EventDriven queues, provider/model/endpoint and generation settings,
+  full prompt-validator policy, initial conversation state, supported built-in
+  and subclassed memory state (including FAISS index digests), agent attributes,
+  tool metadata plus ArgumentSchema/ToolGuard policy, cache policy/initial-state
+  fingerprints, dependency/runtime versions, seed report, and audit metadata.
+  Non-JSON-native metadata is deterministically normalized without collapsing
+  distinct keys such as `1` and `"1"`. Unsupported custom memories must
+  provide `checkpoint_state()` or `reproducibility_config()`; capture fails
+  explicitly instead of silently omitting recall-affecting state.
+- `RunManifest.fingerprint()` is replay-compatibility oriented and excludes
+  audit-only `created_at`, dependency/runtime versions, seed-report details,
+  metadata, and explanatory reproducibility notes. `audit_fingerprint()`
+  includes those fields (except `created_at`). Replay tapes persist the
+  compatibility payload so mismatches identify differing field paths instead of
+  returning only an opaque hash failure.
+- `AIAgent.replay_identity_resolver()` defines what replay validates.
+  Ordinary/custom backends use the exact prompt. Provider-backed GPT agents use
+  the scoped effective request identity, including provider/model/endpoint,
+  raw-vs-history behavior, and the conversation history window that the provider
+  request would contain. This closes the case where the same bare prompt with
+  divergent history previously replayed silently.
+- Recording reserves a sequence slot before backend execution and fills that
+  slot afterward. Nested calls therefore remain in invocation order, while the
+  tape lock is not held across slow/network model calls and unrelated agents are
+  not serialized behind one provider call. Recording still preserves GPT's
+  cooperative cancellation-aware backend construction.
+- Replay records carry a prompt/request-identity SHA-256 plus a whole-record
+  SHA-256 covering the response or failure metadata. Load rejects prompt edits,
+  response edits, malformed response/error combinations, and malformed shapes.
+  Replays also fail on mismatched order, exhausted/extra calls, or unconsumed
+  records; recorded failures surface as `RecordedReplayError`.
+- End-to-end tests cover seeded RandomScheduler record→persist→fresh replay,
+  provider-backed GPT request-history divergence, nested/concurrent recording
+  order, cross-machine-compatible replay fingerprints, actionable manifest
+  mismatch paths, ShortTerm and real FAISS memory state, non-JSON-native memory
+  metadata, tool schema/guard policies, custom RNG preservation, opt-in child
+  hash seeding, tape-response integrity, and the earlier environment/cache/
+  validator/endpoint/tamper/failure cases.
 
-Boundary: reproducibility here is exact at the recorded Neva model boundary,
-not a claim that live providers are deterministic. Provider-side model
-revisions, routing, sampling/runtime implementations, hidden service state, and
-API behavior may change independently. NumPy/PyTorch seeding does not by itself
-guarantee deterministic hardware kernels; applications requiring that guarantee
-must configure the framework/hardware-specific deterministic settings.
-`PYTHONHASHSEED` only affects a process at interpreter startup. Recording
-serializes concurrent model-boundary calls to establish an exact order, so it
-can change timing/concurrency relative to an unrecorded live run. Manifests
-contain caller-supplied prompt strings and replay tapes contain exact model
-prompts/responses; both artifacts may contain sensitive data and should be
-protected accordingly.
+Boundary: reproducibility is exact at the recorded Neva model-request identity
+boundary, not a claim that live providers or arbitrary application code are
+deterministic. Provider-side revisions/routing/runtime state remain external;
+framework/hardware deterministic settings remain the application's
+responsibility. Callable identities in manifests are descriptive and cannot
+prove that two arbitrary closures behave identically. Wall-clock timestamps,
+UUIDs, and telemetry timing are not replayed. Manifests can contain prompts,
+conversation/memory contents, attributes, tool descriptions and metadata; tapes
+contain effective request identities and model outputs/failures. Protect both
+artifact classes accordingly.
 
 ### 8. Streaming — not implemented
 
