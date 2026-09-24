@@ -230,6 +230,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helpers excluded; the floor is a ratchet to raise as modules are documented).
 
 ### Changed
+- Held `pytest`, `coverage`, and `pytest-cov` at the previous releases: the
+  newer trio triggers a double initialization of the faiss/torch C extensions in
+  coverage-instrumented FAISS runs, which surfaces as
+  `ImportError: cannot load module more than once per process` (numpy 2.4) or a
+  segfault during garbage collection. The FAISS coverage step passes on the
+  previous trio with the same dependency set.
 - Supported/tested Python versions are now 3.11, 3.12, 3.13, and 3.14; Python
   3.9 and 3.10 were removed from the CI matrix and package classifiers.
 - Snapshot saves now serialize JSON incrementally into a sibling temporary file instead of materialising the complete JSON string and UTF-8 byte string in memory. Optional `max_bytes` limits are enforced while encoding; the staged file is flushed/fsynced and installed with atomic `os.replace`, so overflow, serialization errors, staging-write failures, and replacement failures preserve an existing checkpoint. Large saves therefore require temporary disk space on the destination filesystem roughly equal to the new checkpoint.

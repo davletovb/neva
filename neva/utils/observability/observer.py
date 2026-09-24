@@ -40,8 +40,7 @@ def _utcnow_naive() -> datetime:
 class ToolLike(Protocol):
     """Protocol describing the ``use`` method exposed by tools."""
 
-    def use(self, *args: Any, **kwargs: Any) -> Any:
-        ...
+    def use(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 ContextDict = Dict[str, Any]

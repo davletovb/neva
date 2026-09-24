@@ -702,8 +702,7 @@ def load_snapshot(
 
 @runtime_checkable
 class _SupportsToDict(Protocol):
-    def to_dict(self) -> Dict[str, Any]:
-        ...
+    def to_dict(self) -> Dict[str, Any]: ...
 
 
 def _json_default(value: object) -> Any:
