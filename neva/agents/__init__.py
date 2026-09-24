@@ -12,6 +12,7 @@ from .base import (
     ToolResponse,
 )
 from .gpt import GPTAgent
+from .streaming import StreamEvent, StreamInterruptedError, StreamSession
 from .transformer import TransformerAgent
 
 __all__ = [
@@ -22,6 +23,9 @@ __all__ = [
     "InteractionHistory",
     "LLMBackend",
     "ParallelExecutionConfig",
+    "StreamEvent",
+    "StreamInterruptedError",
+    "StreamSession",
     "Tool",
     "ToolCall",
     "ToolResponse",

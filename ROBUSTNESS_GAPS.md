@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `d7a7cac6` (PRs #49–#52, #54–#72 merged).
+Updated against `main` at `d18ec11` (through PR #75 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 remains open/deferred, but PR #73 intentionally supersedes its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness/integration coverage. PR #53 should be rebased or retired after #73 lands.
@@ -288,7 +288,8 @@ model behavior. Authorization and execution safety therefore continue to live
 in code-level tool schemas/guards, not in prompt instructions. The generic
 `max_model_output_chars` limit bounds retained/parsing work after a model call
 returns; provider-native generation/token limits must still be configured at
-the provider layer. Streaming/backpressure remains section 8.
+the provider layer. The separate provider response stream is described in
+section 8; the tool loop itself still consumes a complete model action.
 
 ### 7. Reproducible experiments — complete at the Neva experiment boundary
 
@@ -355,10 +356,38 @@ conversation/memory contents, attributes, tool descriptions and metadata; tapes
 contain effective request identities and model outputs/failures. Protect both
 artifact classes accordingly.
 
-### 8. Streaming — not implemented
+### 8. Streaming — implemented at the built-in provider boundary
 
-- Streaming interface with cancellation, partial-failure handling, and backpressure.
-- First-token versus full-completion latency accounting.
+- `GPTAgent.stream_response()` returns a single-use synchronous or asynchronous
+  `StreamSession` that yields text deltas and a terminal completion event.
+  OpenAI-compatible providers use incrementally parsed SSE; Anthropic and
+  Gemini use their declared SDK streaming interfaces. Ordinary `respond()` and
+  environment turns keep their existing non-streaming semantics.
+- The producer uses a bounded queue and blocks when the consumer falls behind.
+  Explicit `close()`/`aclose()` signals cooperative cancellation; provider
+  admission and retries already observe the signal, while active synchronous
+  socket/SDK reads remain subject to `request_timeout`.
+- Pre-output transport failures may retry. Once text is emitted, errors raise
+  `StreamInterruptedError` with uncommitted partial text, with no replay,
+  cache entry, or conversation turn. Provider permits and spend reservations
+  are released/settled even on partial failure or cancellation; available
+  usage is recorded per stream. The response accumulation and cached reply
+  have the same per-call character ceiling. Cache/history commit when the
+  consumer accepts the terminal completion event; provider spend can still be
+  incurred if the consumer closes after generation finishes.
+- Completion events report first-token and full-completion seconds separately.
+  LLM telemetry records both and identifies interrupted streams. Local HTTP
+  integration tests exercise completion, partial EOF, cache/history, bounded
+  cancellation, and async delivery without credentials.
+
+Boundary: no Python thread can forcibly interrupt a blocked synchronous
+provider read; configured request timeouts limit its lifetime. Backpressure
+bounds pending deltas, while the completed response is accumulated up to the
+configured response-character ceiling. A stream that is abandoned before its
+terminal event cannot be resumed to recover its generated answer. Streaming is
+not provider-native tool
+calling; custom backend/wrapper implementations have no generic stream
+contract and fail explicitly.
 
 ### 9. Real-provider examples — not implemented
 
@@ -374,12 +403,11 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-Sections 1–7 are now implemented at their documented library/orchestration/experiment boundaries.
+Sections 1–8 are now implemented at their documented boundaries.
 The remaining priorities are:
 
 1. Model-aware context/token budgeting and explicit output-token reservations.
-2. Streaming with cancellation, backpressure, partial-failure handling, and latency metrics.
-3. Opt-in live-provider examples with explicit credential/cost/limit guidance.
+2. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
@@ -401,5 +429,6 @@ The remaining priorities are:
 - [x] Close deterministic optional-integration, scheduler lifecycle/fairness, and transport/SDK coverage gaps (PR #73).
 - [x] Complete bounded model-driven tool orchestration with schema/guard feedback and termination limits (PR #74).
 - [x] Complete run manifests, unified seeding, and deterministic offline model-boundary replay (PR #75).
+- [x] Add bounded provider streaming, cancellation, partial-failure handling, and separate first-token/completion latency accounting.
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.

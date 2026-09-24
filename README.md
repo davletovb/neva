@@ -241,6 +241,52 @@ After installing dependencies run `pytest` to confirm the environment is ready
 for development.
 
 ## Usage
+
+### Streaming provider responses
+
+Built-in `GPTAgent` providers can stream text without changing the ordinary
+`respond()` and environment turn APIs. Use a single session once; consume
+`delta` events for display and use the `complete` event as the committed answer:
+
+```python
+from neva.agents import GPTAgent
+from neva.agents.streaming import StreamInterruptedError
+
+agent = GPTAgent(provider="openai", api_key="YOUR_API_KEY")
+session = agent.stream_response("Explain the result", max_queue_size=8)
+try:
+    for event in session:
+        if event.kind == "delta":
+            print(event.text, end="", flush=True)
+        else:
+            print("\nfirst token:", event.first_token_seconds)
+            print("completion:", event.completion_seconds)
+except StreamInterruptedError as exc:
+    print("Uncommitted partial response:", exc.partial_text)
+finally:
+    session.close()
+```
+
+The same session supports `async for event in session`; call `await
+session.aclose()` when stopping early. The producer blocks when the bounded
+queue fills. `close()` signals cancellation, but a synchronous provider read
+can take up to `request_timeout` to return. The response enters history and
+cache only when the consumer accepts the `complete` event. A provider call
+that finishes after the consumer closes can still incur and record spend.
+A failure after text is emitted raises `StreamInterruptedError` with its
+partial text; it is never retried or cached and is not added to conversation
+history. Failures before output can
+use configured retries. Completed output is capped by `max_response_chars`
+(default one million characters) in addition to the provider's output-token
+setting. Streaming uses the same shared provider admission, circuit breaker,
+spend reservations, and token/cost trackers as ordinary responses. The
+first-token and full-completion durations are exposed on the terminal event
+and in LLM telemetry (`neva.llm.first_token.latency` and
+`neva.llm.api.latency`); interrupted streams emit their available latency
+measurements with an interrupted status. Cached completions have zero provider
+latency. Custom synchronous `llm_backend` implementations and model-backend
+wrappers require their own streaming adapters and are rejected by this API.
+
 Create and simulate AI agents effortlessly:
 ```python
 from neva.agents import AgentManager
