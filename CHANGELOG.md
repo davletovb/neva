@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `examples/live_provider_smoke.py` runs offline with a scripted response by
+  default and opts into a single bounded OpenAI request only with an explicit
+  API key and estimated spend ceiling. The README documents estimated pricing,
+  limits, and provider-failure guidance; deterministic tests exercise the
+  request path without real credentials.
 - Reproducible experiment support: `SeedReport`, `RunManifest`,
   `ReplayRecord`, `ReplayTape`, `ReplayBackend`,
   `seed_everything()`, `prepare_reproducible_run()`, and
