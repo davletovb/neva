@@ -17,6 +17,7 @@ from neva.agents.base import AIAgent, LLMBackend
 from neva.agents.streaming import StreamEvent, StreamInterruptedError, StreamSession
 from neva.memory import MemoryModule
 from neva.utils.caching import LLMCache
+from neva.utils.context_budget import ModelContextBudget, RequestContent
 from neva.utils.exceptions import (
     BackendError,
     CircuitOpenError,
@@ -187,6 +188,7 @@ class GPTAgent(AIAgent):
         request_timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         max_context_chars: int = _DEFAULT_MAX_CONTEXT_CHARS,
+        context_budget: Optional[ModelContextBudget] = None,
         tool_guard: Optional["ToolGuard"] = None,
     ) -> None:
         resolved_cache = cache or LLMCache(max_size=256)
@@ -200,6 +202,23 @@ class GPTAgent(AIAgent):
         )
         if max_context_chars <= 0:
             raise ConfigurationError("max_context_chars must be positive")
+        selected_model = model or _DEFAULT_MODELS.get(provider.lower(), "gpt-4o-mini")
+        if context_budget is not None:
+            if not isinstance(context_budget, ModelContextBudget):
+                raise ConfigurationError("context_budget must be a ModelContextBudget")
+            if (
+                context_budget.provider != provider.lower()
+                or context_budget.model != selected_model
+            ):
+                raise ConfigurationError(
+                    "context budget provider/model must match the selected provider/model"
+                )
+            if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int):
+                raise ConfigurationError("max_output_tokens must be a positive integer")
+            if max_output_tokens <= 0 or max_output_tokens >= context_budget.max_tokens:
+                raise ConfigurationError(
+                    "max_output_tokens must be positive and below context budget"
+                )
         if spend_budget is not None:
             if llm_backend is not None:
                 raise ConfigurationError(
@@ -261,6 +280,7 @@ class GPTAgent(AIAgent):
         self._request_timeout = request_timeout
         self._extra_headers = dict(extra_headers or {})
         self._max_context_chars = max_context_chars
+        self._context_budget = context_budget
         self._last_provider_usage: Optional[Dict[str, Any]] = None
 
     def _call_cost(self, *, prompt_tokens: int, response_tokens: int) -> float:
@@ -286,7 +306,10 @@ class GPTAgent(AIAgent):
             self._provider_resources is None or self._provider_resources.max_cost is None
         ):
             return 0.0
-        prompt_tokens = estimate_token_count(self._request_text(prompt))
+        if self._context_budget is not None:
+            prompt_tokens = self._count_request_tokens(self._history_window(prompt), prompt)
+        else:
+            prompt_tokens = estimate_token_count(self._request_text(prompt))
         return self._call_cost(
             prompt_tokens=prompt_tokens,
             response_tokens=self._max_output_tokens,
@@ -849,11 +872,34 @@ class GPTAgent(AIAgent):
         contents.append(prompt)
         return "\n".join(contents)
 
-    def _history_window(self, prompt: str) -> List[Any]:
-        """Return a recent contiguous suffix of turns that fits the char budget.
+    def _messages_from_turns(self, turns: List[Any], prompt: str) -> List[Dict[str, str]]:
+        messages: List[Dict[str, str]] = []
+        for turn in turns:
+            content = self._turn_text(turn)
+            role = "assistant" if turn.speaker == self.name else "user"
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+        return messages
 
-        The budget is measured on the provider-specific serialized request, not
-        raw turn text. ConversationState itself is unbounded. Chat Completions
+    def _request_for_tokens(self, turns: List[Any], prompt: str) -> RequestContent:
+        if self.provider in _GEMINI_PROVIDERS:
+            return self._format_request(turns, prompt)
+        return self._messages_from_turns(turns, prompt)
+
+    def _count_request_tokens(self, turns: List[Any], prompt: str) -> int:
+        budget = self._context_budget
+        if budget is None:
+            raise ConfigurationError("context token counting requires a context budget")
+        if budget.provider != self.provider or budget.model != self.model:
+            raise ConfigurationError("context budget provider/model no longer matches the agent")
+        return budget.count(self._request_for_tokens(turns, prompt))
+
+    def _history_window(self, prompt: str) -> List[Any]:
+        """Return a recent contiguous suffix fitting both configured budgets.
+
+        The character budget uses provider-specific serialized text; the
+        opt-in token budget uses the provider-shaped request. ConversationState
+        itself is unbounded. Chat Completions
         and Anthropic drop a leading assistant turn so the request still starts
         with a user message. Raw model-generation mode intentionally excludes
         history because its caller already composed the complete bounded prompt.
@@ -864,15 +910,43 @@ class GPTAgent(AIAgent):
                 f"Current prompt is {len(prompt)} characters, which exceeds "
                 f"max_context_chars={self._max_context_chars}"
             )
+        budget = self._context_budget
+        if budget is not None:
+            current_tokens = self._count_request_tokens([], prompt)
+            if current_tokens + self._max_output_tokens > budget.max_tokens:
+                raise ConfigurationError(
+                    f"Current request needs {current_tokens} input tokens + "
+                    f"{self._max_output_tokens} reserved output tokens, exceeding "
+                    f"context budget of {budget.max_tokens} for {self.model}"
+                )
         if _RAW_PROMPT_MODE.get():
             return []
 
-        window: List[Any] = []
-        for turn in reversed(self.conversation_state.turns):
-            candidate = [turn, *window]
-            if len(self._format_request(candidate, prompt)) > self._max_context_chars:
-                break
-            window = candidate
+        turns = self.conversation_state.turns
+        if budget is None:
+            # Preserve the legacy character-only window selection.
+            window: List[Any] = []
+            for turn in reversed(turns):
+                candidate = [turn, *window]
+                if len(self._format_request(candidate, prompt)) > self._max_context_chars:
+                    break
+                window = candidate
+        else:
+            # The caller's counter should be nondecreasing when older turns
+            # are prepended. Count only logarithmically many complete requests
+            # rather than re-encoding each growing suffix (quadratic work).
+            low, high = 0, len(turns)
+            while low < high:
+                middle = (low + high + 1) // 2
+                candidate = turns[-middle:]
+                if len(self._format_request(candidate, prompt)) > self._max_context_chars or (
+                    self._count_request_tokens(candidate, prompt) + self._max_output_tokens
+                    > budget.max_tokens
+                ):
+                    high = middle - 1
+                else:
+                    low = middle
+            window = turns[-low:] if low else []
         if self.provider not in _GEMINI_PROVIDERS:
             while window and window[0].speaker == self.name:
                 window.pop(0)
@@ -881,15 +955,7 @@ class GPTAgent(AIAgent):
     def _chat_messages(self, prompt: str) -> List[Dict[str, str]]:
         """Build Chat Completions messages from recorded turns plus ``prompt``."""
 
-        messages: List[Dict[str, str]] = []
-        for turn in self._history_window(prompt):
-            content = self._turn_text(turn)
-            if turn.speaker == self.name:
-                messages.append({"role": "assistant", "content": content})
-            else:
-                messages.append({"role": "user", "content": content})
-        messages.append({"role": "user", "content": prompt})
-        return messages
+        return self._messages_from_turns(self._history_window(prompt), prompt)
 
     def _prompt_with_history(self, prompt: str) -> str:
         """Flatten recorded turns in front of ``prompt`` for string-only APIs."""
@@ -911,6 +977,16 @@ class GPTAgent(AIAgent):
             "api_base": self.api_base,
             "max_output_tokens": self._max_output_tokens,
             "max_context_chars": self._max_context_chars,
+            "context_budget": (
+                {
+                    "max_tokens": self._context_budget.max_tokens,
+                    "counter_id": self._context_budget.counter_id,
+                    "provider": self._context_budget.provider,
+                    "model": self._context_budget.model,
+                }
+                if self._context_budget is not None
+                else None
+            ),
             "history": history,
         }
         return json.dumps({"scope": scope, "prompt": prompt}, sort_keys=True)

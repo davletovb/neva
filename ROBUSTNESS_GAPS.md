@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `74f055a` (through PR #76 merged).
+Updated against `main` at `715cd57` (through PR #77 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 remains open/deferred, but PR #73 intentionally supersedes its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness/integration coverage. PR #53 should be rebased or retired after #73 lands.
@@ -33,7 +33,10 @@ Custom transcript environments must use the completion hook. Observer synchroniz
 - MathTool exponentiation has operand bounds; this is not a general resource sandbox.
 - README describes input hygiene and thread-safety limits instead of claiming comprehensive safety rails.
 
-Character limits remain heuristics: they are not model-specific token/context limits or an output-token reservation system. ConversationState is unbounded by default; PR #55 adds an opt-in stored-turn retention limit independent of the transmitted history window.
+The PR #49 character limit alone is heuristic. Section 10 adds a separate
+opt-in model-bound request token envelope and explicit output reservation.
+ConversationState is unbounded by default; PR #55 adds an opt-in stored-turn
+retention limit independent of the transmitted history window.
 
 ### PR #50: circuit breaker and default-model pricing
 
@@ -223,8 +226,8 @@ requiring live provider credentials or external model downloads:
 Boundary: these tests establish deterministic compatibility with Neva's local
 transport/model/dependency contracts. They do not establish compatibility with
 every future third-party SDK release, every hardware backend, or live-provider
-service behavior. Live-provider smoke examples/credentials remain the separate
-section 9 concern, and provider context/token budgeting remains section 10.
+service behavior. Live-provider smoke examples/credentials are addressed in
+section 9, and provider context/token budgeting in section 10.
 
 ### 6. Model-driven tool loop — complete at the Neva orchestration layer
 
@@ -415,20 +418,49 @@ token-context guarantee. Live service availability and provider billing are
 external and are not exercised in CI. Existing multi-agent showcases remain
 scripted offline demonstrations.
 
-### 10. Model-aware context budgeting — partial
+### 10. Model-aware context budgeting — complete at the opt-in Neva boundary
 
-- Token-based budgeting for the selected model and message-format overhead.
-- Explicit output-token reservations.
-- Documented behavior when the current request cannot fit.
+- `ModelContextBudget` binds a configured provider/model, a positive context
+  ceiling, a model-specific request-token counter, and a versioned counter
+  identity. The counter sees the actual role/content message sequence for
+  OpenAI-compatible and Anthropic requests or the flattened Gemini text, so it
+  can include model-specific tokenization and framing. The optional
+  `openai_chat_counter()` uses `tiktoken` plus the OpenAI cookbook's message and
+  reply-priming estimate for `gpt-4o-mini`; unsupported models fail explicitly.
+  Special-token-looking text is counted as ordinary content; unavailable
+  tokenizer/cache/network access raises a configuration error.
+- `GPTAgent(context_budget=...)` keeps the recent contiguous history suffix
+  only if both existing formatted-text character limits and
+  `request tokens + max_output_tokens <= max_tokens` hold. Output reservation
+  is validated at construction. If the prepared current request cannot fit,
+  `ConfigurationError` is raised before cache, admission, or HTTP; the prompt
+  is never truncated to fit. Streaming and raw model-tool paths use the same
+  history/check. Spend preflight uses model request tokens, including overhead,
+  when the token envelope is enabled.
+- Binary search selects the largest fitting history suffix in logarithmically
+  many complete-request counts, avoiding quadratic re-encoding. The built-in
+  OpenAI counter is bound to its provider/model at profile construction, and
+  provider names are normalized for case.
+- Cache/replay identity and run manifests include the limit and counter ID;
+  tests cover role overhead, suffix eviction, provider payload, Gemini shape,
+  invalid/mismatched counters and models, current-prompt rejection, streaming
+  preflight, raw mode, and spend reservation. The existing character-only
+  behavior remains the default.
 
-The implemented formatted-text character cap is useful, but it is not a universal provider-context guarantee.
+Boundary: callers must select the correct provider/model context ceiling and
+counter for their endpoint. The OpenAI cookbook message-count function is an
+estimate, not an immutable guarantee; other providers require caller-supplied
+model-aware counters that are nondecreasing as history is prepended for binary
+search to find the largest fitting suffix. Provider-side revisions, hidden framing, tool/image
+payloads, and custom gateways can differ from local estimates. This is an
+opt-in preflight bound, not a universal provider context guarantee. Stored
+conversation retention remains independently configurable.
 
 ## Recommended next priorities
 
-Sections 1–9 are now implemented at their documented boundaries.
-The remaining priority is:
-
-1. Model-aware context/token budgeting and explicit output-token reservations.
+Sections 1–10 are implemented at their documented Neva boundaries. Further
+work should follow measured provider-token discrepancies or application needs,
+not assume a universal context or billing guarantee from local estimates.
 
 ## Local delivery status
 
@@ -452,5 +484,6 @@ The remaining priority is:
 - [x] Complete run manifests, unified seeding, and deterministic offline model-boundary replay (PR #75).
 - [x] Add bounded provider streaming, cancellation, partial-failure handling, and separate first-token/completion latency accounting.
 - [x] Add an opt-in live-provider example, deterministic offline mode, credential/cost guidance, and bounded-call tests (section 9).
+- [x] Add model-bound request token accounting, output reservations, preflight failures, and documentation (section 10).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.
