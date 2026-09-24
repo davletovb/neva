@@ -546,7 +546,10 @@ def _capture_manifest_memory(memory: Any) -> Any:
 def _memory_config(memory: Any) -> Dict[str, Any]:
     if memory is None:
         return {"type": None}
-    return _json_native(_capture_manifest_memory(memory))
+    return {
+        "type": _type_name(memory),
+        "state": _json_native(_capture_manifest_memory(memory)),
+    }
 
 
 def _argument_schema_config(schema: Any) -> Any:
