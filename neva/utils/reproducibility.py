@@ -84,7 +84,7 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
     """Convert configuration values to deterministic JSON-native data."""
 
     if depth > 8:
-        return f"<{type(value).__name__}>"
+        raise ReproducibilityError("reproducibility value nesting exceeds depth 8")
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
@@ -93,6 +93,12 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
         return value
     if isinstance(value, (datetime, date, time)):
         return {"type": _type_name(value), "isoformat": value.isoformat()}
+    if isinstance(value, bytes):
+        return {"__neva_bytes_hex__": value.hex()}
+    if isinstance(value, bytearray):
+        return {"__neva_bytearray_hex__": bytes(value).hex()}
+    if isinstance(value, Path):
+        return {"__neva_path__": str(value)}
     if isinstance(value, Mapping):
         if all(isinstance(key, str) for key in value):
             return {key: _json_native(item, depth=depth + 1) for key, item in sorted(value.items())}
@@ -119,7 +125,16 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
         return sorted(converted, key=lambda item: json.dumps(item, sort_keys=True))
     if callable(value):
         return {"callable": _callable_name(value)}
-    return {"type": _type_name(value)}
+    hook = getattr(value, "reproducibility_config", None)
+    if callable(hook):
+        return {
+            "type": _type_name(value),
+            "custom": _json_native(hook(), depth=depth + 1),
+        }
+    raise ReproducibilityError(
+        f"unsupported reproducibility value type {_type_name(value)}; "
+        "provide reproducibility_config() or convert it to JSON-native data"
+    )
 
 
 def _dependency_versions(names: Iterable[str]) -> Dict[str, Optional[str]]:
@@ -422,6 +437,22 @@ def _memory_budget_config(budget: Any) -> Any:
     }
 
 
+def _merge_memory_reproducibility_hooks(
+    memory: Any,
+    base: Dict[str, Any],
+) -> tuple[Dict[str, Any], bool]:
+    added = False
+    checkpoint_hook = getattr(memory, "checkpoint_state", None)
+    if callable(checkpoint_hook):
+        base["checkpoint_state"] = _json_native(checkpoint_hook())
+        added = True
+    reproducibility_hook = getattr(memory, "reproducibility_config", None)
+    if callable(reproducibility_hook):
+        base["custom"] = _json_native(reproducibility_hook())
+        added = True
+    return base, added
+
+
 def _capture_manifest_memory(memory: Any) -> Any:
     from neva.memory import (
         AdaptiveConversationMemory,
@@ -439,7 +470,7 @@ def _capture_manifest_memory(memory: Any) -> Any:
             capacity=memory.capacity,
             records=[_memory_record_config(record) for record in memory._entries],
         )
-        return base
+        return _merge_memory_reproducibility_hooks(memory, base)[0]
 
     if isinstance(memory, SummaryMemory):
         base.update(
@@ -447,11 +478,11 @@ def _capture_manifest_memory(memory: Any) -> Any:
             records=[_memory_record_config(record) for record in memory._history],
             summarizer=_callable_name(memory._summarizer),
         )
-        return base
+        return _merge_memory_reproducibility_hooks(memory, base)[0]
 
     if isinstance(memory, CompositeMemory):
         base["modules"] = [_capture_manifest_memory(module) for module in memory._modules]
-        return base
+        return _merge_memory_reproducibility_hooks(memory, base)[0]
 
     if isinstance(memory, FaissVectorStoreMemory):
         index_sha256 = None
@@ -476,7 +507,7 @@ def _capture_manifest_memory(memory: Any) -> Any:
             index_sha256=index_sha256,
             embedder=_callable_name(memory._embedder),
         )
-        return base
+        return _merge_memory_reproducibility_hooks(memory, base)[0]
 
     if isinstance(memory, VectorStoreMemory):
         base.update(
@@ -492,7 +523,7 @@ def _capture_manifest_memory(memory: Any) -> Any:
             ],
             embedder=_callable_name(memory._embedder),
         )
-        return base
+        return _merge_memory_reproducibility_hooks(memory, base)[0]
 
     if isinstance(memory, AdaptiveConversationMemory):
         base.update(
@@ -518,16 +549,10 @@ def _capture_manifest_memory(memory: Any) -> Any:
             summarizer=_callable_name(memory._summarizer),
             embedder=(_callable_name(memory._embedder) if memory._embedder is not None else None),
         )
-        return base
+        return _merge_memory_reproducibility_hooks(memory, base)[0]
 
-    checkpoint_hook = getattr(memory, "checkpoint_state", None)
-    if callable(checkpoint_hook):
-        base["checkpoint_state"] = _json_native(checkpoint_hook())
-        return base
-
-    reproducibility_hook = getattr(memory, "reproducibility_config", None)
-    if callable(reproducibility_hook):
-        base["custom"] = _json_native(reproducibility_hook())
+    base, added = _merge_memory_reproducibility_hooks(memory, base)
+    if added:
         return base
 
     raise ReproducibilityError(
