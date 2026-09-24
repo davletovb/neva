@@ -1043,6 +1043,7 @@ class GPTAgent(AIAgent):
         *,
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
+        """Return a cached or freshly generated response for ``message``."""
         prompt = self.prepare_prompt(message)
         validated_prompt = self.prompt_validator.validate(prompt)
         cached = self._cache_lookup(validated_prompt)
@@ -1082,6 +1083,7 @@ class GPTAgent(AIAgent):
         completed: Dict[str, Any] = {}
 
         def produce(emit: Callable[[str], None], cancel: threading.Event) -> StreamEvent:
+            """Emit the cached or streamed completion text for this request."""
             cached = AIAgent._cache_lookup(self, cache_key)
             if cached is not None:
                 if len(cached) > max_response_chars:
@@ -1256,6 +1258,7 @@ class GPTAgent(AIAgent):
             raise BackendError("LLM stream failed") from last_error
 
         def accept(event: StreamEvent) -> None:
+            """Record the settled stream: conversation turns, cache, and usage."""
             self._remember("system", validated_message)
             self._remember(self.name, event.text)
             if not completed.get("cache_hit"):
