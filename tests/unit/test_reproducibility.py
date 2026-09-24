@@ -764,11 +764,13 @@ def test_nested_recording_preserves_invocation_order():
 
     assert outer("outer") == "outer-response"
     assert [record.prompt for record in tape.records] == ["outer", "inner"]
+    assert [record.parent_index for record in tape.records] == [None, 0]
 
     replay = tape.replay_backend()
     assert replay("outer") == "outer-response"
-    assert replay("inner") == "inner-response"
     replay.assert_consumed()
+    with pytest.raises(ReplayMismatchError, match="exhausted"):
+        replay("inner")
 
 
 def test_slow_recording_call_does_not_block_other_model_calls():
