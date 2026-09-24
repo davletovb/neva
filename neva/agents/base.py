@@ -88,6 +88,7 @@ class ToolCall:
         *,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> "ToolCall":
+        """Build a tool call from raw text, folding ``metadata`` into the payload."""
         payload: Dict[str, Any] = {"input": text}
         if metadata:
             payload.update(metadata)
@@ -133,6 +134,7 @@ class Tool(ABC):
 
         @wraps(implementation)
         def guarded_use(self: "Tool", task: str) -> str:
+            """Re-enter the implementation directly while the guard is already held."""
             if id(self) in _TOOL_USE_REENTRY.get():
                 return implementation(self, task)
             return Tool.use(self, task)
@@ -298,21 +300,25 @@ class AIAgent(ABC):
     # Tool and attribute management utilities
     # ------------------------------------------------------------------
     def set_environment(self, environment: "Environment") -> None:
+        """Attach the agent to an environment and register it with the observer."""
         self.environment = environment
         observer = self._resolve_observer()
         if observer is not None:
             observer.watch_agent(self)
 
     def register_tool(self, tool: Tool) -> None:
+        """Append a tool and notify the environment observer when present."""
         self.tools.append(tool)
         observer = self._resolve_observer()
         if observer is not None:
             observer.watch_tool(self, tool)
 
     def clear_tools(self) -> None:
+        """Remove every registered tool."""
         self.tools.clear()
 
     def set_attribute(self, key: str, value: str) -> None:
+        """Set a single agent attribute used by generated summaries."""
         self.attributes[key] = value
 
     def _resolve_observer(self) -> Optional["SimulationObserver"]:
@@ -324,6 +330,7 @@ class AIAgent(ABC):
         return getattr(scheduler, "simulation_observer", None)
 
     def generate_attribute_summary(self) -> str:
+        """Return a sorted, human-readable summary of the agent attributes."""
         if not self.attributes:
             return f"Agent {self.name} has no additional attributes."
 
@@ -331,6 +338,7 @@ class AIAgent(ABC):
         return f"Agent {self.name} attributes -> {joined}."
 
     def generate_tool_summary(self) -> str:
+        """Return a summary listing each registered tool and its description."""
         if not self.tools:
             return "No tools are currently available."
 
@@ -514,16 +522,20 @@ class AIAgent(ABC):
     # ------------------------------------------------------------------
     @property
     def memory(self) -> Optional[MemoryModule]:
+        """Return the configured memory module, if any."""
         return self._memory
 
     def set_memory(self, memory: Optional[MemoryModule]) -> None:
+        """Replace the memory module; ``None`` disables recall."""
         self._memory = memory
 
     @property
     def cache(self) -> Optional[LLMCache]:
+        """Return the configured LLM cache, if any."""
         return self._cache
 
     def set_cache(self, cache: Optional[LLMCache]) -> None:
+        """Replace the LLM cache; ``None`` disables caching."""
         self._cache = cache
 
     def _cache_lookup(self, prompt: str) -> Optional[str]:
@@ -543,23 +555,28 @@ class AIAgent(ABC):
         self._conversation_state.record_turn(speaker, cleaned)
 
     def recall_memory(self, *, query: Optional[str] = None) -> str:
+        """Return recalled context for ``query``; empty when no memory is configured."""
         if self._memory is None:
             return ""
         return self._memory.recall(query=query)
 
     @property
     def conversation_state(self) -> ConversationState:
+        """Return the mutable conversation state shared with observers."""
         return self._conversation_state
 
     def set_conversation_state(self, state: ConversationState) -> None:
+        """Replace the conversation state, for example when restoring a snapshot."""
         self._conversation_state = state
 
     @property
     def prompt_validator(self) -> PromptValidator:
+        """Return the validator applied to outgoing prompts."""
         return self._prompt_validator
 
     @property
     def response_time_tracker(self) -> ResponseTimeTracker:
+        """Return the tracker recording response latencies."""
         return self._response_time_tracker
 
     # ------------------------------------------------------------------
@@ -567,9 +584,11 @@ class AIAgent(ABC):
     # ------------------------------------------------------------------
     @property
     def llm_backend(self) -> Optional[LLMBackend]:
+        """Return the configured LLM backend, if any."""
         return self._llm_backend
 
     def set_llm_backend(self, backend: Optional[LLMBackend]) -> None:
+        """Replace the LLM backend used to produce responses."""
         self._llm_backend = backend
 
     def set_model_backend_wrapper(
@@ -831,6 +850,7 @@ class AgentManager:
         )
 
     def create_agent(self, agent_type: str, **kwargs) -> AIAgent:
+        """Instantiate an agent of ``agent_type`` and register it under a new id."""
         agent_type = agent_type.lower()
         agent: AIAgent
         if agent_type == "transformer":
@@ -848,18 +868,21 @@ class AgentManager:
         return agent
 
     def get_agent(self, agent_id: str) -> AIAgent:
+        """Return the registered agent; raise AgentNotFoundError for unknown ids."""
         try:
             return self.agents[agent_id]
         except KeyError as exc:
             raise AgentNotFoundError(f"Unknown agent id: {agent_id}") from exc
 
     def remove_agent(self, agent_id: str) -> None:
+        """Drop the agent from the manager; raise AgentNotFoundError for unknown ids."""
         try:
             del self.agents[agent_id]
         except KeyError as exc:
             raise AgentNotFoundError(f"Unknown agent id: {agent_id}") from exc
 
     def communicate(self, sender_id: str, receiver_id: str, message: str) -> str:
+        """Deliver ``message`` from one agent to another and return the reply."""
         sender = self.get_agent(sender_id)
         receiver = self.get_agent(receiver_id)
         return sender.communicate(receiver, message)
@@ -872,6 +895,7 @@ class AgentManager:
         *,
         concurrent: Optional[bool] = None,
     ) -> Dict[str, str]:
+        """Deliver one message to many receivers, concurrently when enabled."""
         receiver_list = list(receiver_ids)
         if not receiver_list:
             return {}
@@ -893,6 +917,7 @@ class AgentManager:
     async def batch_communicate_async(
         self, sender_id: str, receiver_ids: Iterable[str], message: str
     ) -> Dict[str, str]:
+        """Async variant of :meth:`batch_communicate` sharing one concurrency limit."""
         receiver_list = list(receiver_ids)
         if not receiver_list:
             return {}
@@ -930,18 +955,22 @@ class AgentManager:
         return responses
 
     def create_group(self, group_id: str, agent_ids: Sequence[str]) -> None:
+        """Record ``group_id`` with the given members, replacing any existing group."""
         self.groups[group_id] = list(agent_ids)
 
     def add_to_group(self, group_id: str, agent_id: str) -> None:
+        """Append an agent to a group, creating the group when missing."""
         self.groups.setdefault(group_id, []).append(agent_id)
 
     def remove_from_group(self, group_id: str, agent_id: str) -> None:
+        """Remove an agent from a group; raise AgentNotFoundError when absent."""
         members = self.groups.get(group_id)
         if not members or agent_id not in members:
             raise AgentNotFoundError(f"Agent {agent_id} is not in group '{group_id}'.")
         members.remove(agent_id)
 
     def schedule_action(self, agent_id: str, action: str, *args, **kwargs) -> None:
+        """Call a named agent action, wrapping lookup and execution failures."""
         agent = self.get_agent(agent_id)
         try:
             method = getattr(agent, action)
@@ -955,12 +984,14 @@ class AgentManager:
             ) from exc
 
     def handle_error(self, error: Exception) -> None:
+        """Log the error and raise AgentManagerError chained to it."""
         logging.getLogger(self.__class__.__name__).error(
             "agent_manager_error", extra={"error": str(error)}
         )
         raise AgentManagerError(f"An error occurred: {error}") from error
 
     def conversation_summary(self) -> Dict[str, Dict[str, int]]:
+        """Return per-agent summaries of their conversation turns."""
         summaries: Dict[str, Dict[str, int]] = {}
         for agent in self.agents.values():
             states = [turn.message for turn in agent.conversation_state.turns]
@@ -973,6 +1004,7 @@ class AgentFactory:
 
     @staticmethod
     def create_agent(agent_type: str, **kwargs) -> AIAgent:
+        """Create and return an agent of ``agent_type`` via a temporary manager."""
         manager = AgentManager()
         return manager.create_agent(agent_type, **kwargs)
 
@@ -984,6 +1016,7 @@ class InteractionHistory:
         self.history: List[Dict[str, object]] = []
 
     def record(self, sender_id: str, receiver_id: str, message: str) -> None:
+        """Append an interaction entry with its timestamp."""
         interaction = {
             "time": datetime.now(),
             "sender_id": sender_id,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from neva.agents.base import Tool
 from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
@@ -36,7 +36,7 @@ class SummarizerTool(Tool):
             return summarizer
 
         try:  # pragma: no cover - optional dependency.
-            from transformers import pipeline  # type: ignore
+            from transformers import pipeline
         except Exception as exc:  # pragma: no cover
             raise MissingDependencyError(
                 missing_dependency_message(
@@ -47,7 +47,7 @@ class SummarizerTool(Tool):
 
         summarizer = pipeline("summarization", model="t5-small")
 
-        def _summarise(text: str, *, _summarizer=summarizer) -> str:
+        def _summarise(text: str, *, _summarizer: Any = summarizer) -> str:
             results = _summarizer(text, truncation=True, max_length=150, min_length=40)
             if not results:
                 return ""

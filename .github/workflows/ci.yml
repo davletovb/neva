@@ -41,6 +41,9 @@ jobs:
       - name: Bandit
         run: bandit -r neva benchmarks
 
+      - name: Docstring coverage
+        run: interrogate neva
+
       - name: Pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
 

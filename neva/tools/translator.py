@@ -64,7 +64,7 @@ class _DeepTranslatorBackend:
         self._default_language = default_language
 
     def translate(self, text: str, *, target_language: str) -> str:
-        from deep_translator import GoogleTranslator  # type: ignore
+        from deep_translator import GoogleTranslator
 
         target = target_language or self._default_language
         translator = GoogleTranslator(source="auto", target=target)
@@ -104,7 +104,7 @@ class TranslatorTool(Tool):
             return self._wrap_translator(translator)
 
         try:  # pragma: no cover - depends on optional dependency.
-            import deep_translator  # type: ignore  # noqa: F401
+            import deep_translator  # noqa: F401
         except Exception as exc:  # pragma: no cover - optional dependency missing.
             raise MissingDependencyError(
                 missing_dependency_message(

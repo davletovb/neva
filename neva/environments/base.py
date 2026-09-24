@@ -127,6 +127,7 @@ class Environment:
         """Update transcript/state before metrics; override instead of wrapping step."""
 
     def step(self) -> Optional[str]:
+        """Advance one agent turn under the recovery policy and return its message."""
         if self.scheduler is None or not self.agents:
             return None
 
@@ -406,6 +407,7 @@ class Environment:
         return self._execute_turn(agent, context=record.context)
 
     def run(self, steps: int) -> List[Optional[str]]:
+        """Run ``steps`` turns and return the per-step messages."""
         return [self.step() for _ in range(steps)]
 
     def snapshot(
@@ -413,6 +415,7 @@ class Environment:
         *,
         limits: Optional[CheckpointLimits] = None,
     ) -> SimulationSnapshot:
+        """Capture a versioned snapshot of the environment and agent state."""
         from neva.utils.checkpoint import capture_runtime
 
         snapshot = create_snapshot(
@@ -431,6 +434,7 @@ class Environment:
         *,
         limits: Optional[CheckpointLimits] = None,
     ) -> None:
+        """Restore state from ``snapshot``, validating its limits first."""
         from copy import deepcopy
 
         from neva.utils.checkpoint import restore_runtime
