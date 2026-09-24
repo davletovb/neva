@@ -439,9 +439,7 @@ def test_manifest_fingerprint_captures_tool_schema_and_guard_policy():
         agent = TransformerAgent(name="agent", llm_backend=_deterministic_backend)
         agent.register_tool(
             ManifestTool(
-                schema=ArgumentSchema(
-                    {"input": ArgumentSpec(type=str, max_length=max_length)}
-                ),
+                schema=ArgumentSchema({"input": ArgumentSpec(type=str, max_length=max_length)}),
                 guard=ToolGuard(
                     allowed_tools={allowed},
                     limits=ToolLimits(max_output_chars=100),
