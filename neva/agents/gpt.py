@@ -764,6 +764,13 @@ class GPTAgent(AIAgent):
     def _cache_store(self, prompt: str, response: str) -> None:
         super()._cache_store(self._scoped_key(prompt), response)
 
+    def replay_identity_resolver(self) -> Callable[[str], str]:
+        """Capture the effective provider-request identity for replay validation."""
+
+        if self.llm_backend is not None:
+            return super().replay_identity_resolver()
+        return self._scoped_key
+
     def replayable_backend(
         self,
         *,
