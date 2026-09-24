@@ -7,7 +7,7 @@ import pytest
 from neva.agents import TransformerAgent
 from neva.agents.base import Tool, ToolCall
 from neva.utils.exceptions import MissingDependencyError
-from neva.utils.observer import SimulationObserver
+from neva.utils.observability.observer import SimulationObserver
 
 
 def test_collects_metrics():

@@ -12,6 +12,32 @@ Thank you for considering contributing to Neva! We're excited to have you join o
 ## Understanding the Project
 Before diving in, we recommend spending some time understanding the goals and architecture of Neva. Check out the README file for an overview and feel free to reach out to our community with any questions.
 
+### Project structure
+
+```
+neva/
+  agents/         AIAgent implementations and the agent manager
+  environments/   simulation loops, recovery policies, checkpoints
+  schedulers/     turn-taking and event-driven selection strategies
+  memory/         short-term and vector memory backends
+  tools/          built-in tools and the guarded tool loop
+  utils/          cross-cutting helpers
+    observability/  OpenTelemetry instrumentation and simulation observers
+```
+
+Dependency direction, as the code stands today:
+
+- `neva.utils` may import `neva.memory` (checkpointing) and must not import
+  `neva.agents`, `neva.environments`, `neva.schedulers`, or `neva.tools`.
+- `neva.memory` imports only `neva.utils.exceptions` from `utils`.
+- `neva.tools` may import `neva.agents.base`; the reverse direction (`agents` →
+  `tools`) stays under `TYPE_CHECKING` so no runtime import cycle appears.
+
+When a cross-cutting module belongs to a recognisable group - observability,
+persistence, reliability - add it to the matching subpackage under `neva.utils`
+instead of the top level, and keep importing it from the subpackage in new code.
+Compatibility shims may re-export the old path while downstream code migrates.
+
 ## Finding Opportunities to Contribute
 - **Good First Issues:** These are marked as beginner-friendly and are a great place to start if you're new to the project.
 - **Bug Fixes:** If you notice a bug, feel free to fix it or report it.

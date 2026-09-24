@@ -256,6 +256,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAI-compatible path uses `requests`), and the optional dependency manifests
   are cross-checked against each other and against the imports in `neva/` by
   `tests/unit/test_packaging_metadata.py`.
+- The observability modules moved into a subpackage: the implementations now
+  live in `neva.utils.observability.telemetry` and
+  `neva.utils.observability.observer`, while `neva.utils.telemetry` and
+  `neva.utils.observer` remain importable as compatibility shims that alias the
+  implementation modules (so imports *and* module-level attribute mutation on the
+  old paths keep working). Internal imports, the README, and the guides use the
+  new paths; the generated API reference picks them up automatically.
 
 ### Changed
 - `mypy` runs with `disallow_untyped_defs` and `warn_unused_ignores` for

@@ -12,6 +12,7 @@ from neva.agents.base import AIAgent
 from neva.schedulers.base import Scheduler
 from neva.utils.exceptions import SchedulingError
 from neva.utils.failures import FailureLog, FailureRecord
+from neva.utils.observability.telemetry import get_telemetry
 from neva.utils.recovery import RecoveryPolicy, RecoveryState
 from neva.utils.state_management import (
     CheckpointLimits,
@@ -19,7 +20,6 @@ from neva.utils.state_management import (
     SimulationSnapshot,
     create_snapshot,
 )
-from neva.utils.telemetry import get_telemetry
 
 logger = logging.getLogger(__name__)
 
