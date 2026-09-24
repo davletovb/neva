@@ -26,7 +26,7 @@ import random
 import threading
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -91,11 +91,30 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
         if value != value or value in (float("inf"), float("-inf")):
             return str(value)
         return value
+    if isinstance(value, (datetime, date, time)):
+        return {"type": _type_name(value), "isoformat": value.isoformat()}
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_native(item, depth=depth + 1)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        }
+        if all(isinstance(key, str) for key in value):
+            return {
+                key: _json_native(item, depth=depth + 1)
+                for key, item in sorted(value.items())
+            }
+        entries = [
+            [
+                _json_native(key, depth=depth + 1),
+                _json_native(item, depth=depth + 1),
+            ]
+            for key, item in value.items()
+        ]
+        entries.sort(
+            key=lambda pair: json.dumps(
+                pair[0],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
+        return {"__neva_mapping_entries__": entries}
     if isinstance(value, (list, tuple)):
         return [_json_native(item, depth=depth + 1) for item in value]
     if isinstance(value, set):
@@ -154,9 +173,11 @@ def _seed_scheduler(
     if callable(hook):
         hook(scheduler_seed)
         seeded[path] = scheduler_seed
-    elif hasattr(scheduler, "_rng"):
-        setattr(scheduler, "_rng", random.Random(scheduler_seed))
-        seeded[path] = scheduler_seed
+    else:
+        rng = getattr(scheduler, "_rng", None)
+        if rng is random or isinstance(rng, random.Random):
+            setattr(scheduler, "_rng", random.Random(scheduler_seed))
+            seeded[path] = scheduler_seed
 
     children = getattr(scheduler, "_group_schedulers", None)
     if isinstance(children, Mapping):
@@ -177,13 +198,18 @@ def seed_everything(
     scheduler: Optional["Scheduler"] = None,
     agents: Optional[Iterable["AIAgent"]] = None,
     optional_libraries: bool = True,
+    set_child_hash_seed: bool = False,
 ) -> SeedReport:
     """Seed Python, optional numerical runtimes, and Neva-owned RNG hooks."""
 
     seed = _validate_seed(seed)
+    if not isinstance(set_child_hash_seed, bool):
+        raise ReproducibilityError("set_child_hash_seed must be a boolean")
     random.seed(seed)
     hash_seed = seed % (2**32)
-    os.environ["PYTHONHASHSEED"] = str(hash_seed)
+    previous_hash_seed = os.environ.get("PYTHONHASHSEED")
+    if set_child_hash_seed:
+        os.environ["PYTHONHASHSEED"] = str(hash_seed)
 
     optional_status: Dict[str, str] = {}
     if optional_libraries:
@@ -241,8 +267,16 @@ def seed_everything(
         agent_seeds=agent_seeds,
         optional_libraries=optional_status,
         python_hash_seed=(
-            f"set-to-{hash_seed}-for-child-processes; current interpreter hash "
-            "randomization was fixed at interpreter startup"
+            (
+                f"set-to-{hash_seed}-for-child-processes; current interpreter hash "
+                "randomization was fixed at interpreter startup"
+            )
+            if set_child_hash_seed
+            else (
+                "unchanged-for-child-processes"
+                if previous_hash_seed is None
+                else f"unchanged-existing-value-{previous_hash_seed}"
+            )
         ),
     )
 
@@ -371,25 +405,204 @@ def _memory_callable_config(memory: Any) -> Dict[str, Any]:
     return config
 
 
+def _memory_record_config(record: Any) -> Dict[str, Any]:
+    return {
+        "speaker": record.speaker,
+        "message": record.message,
+        "metadata": _json_native(record.metadata),
+    }
+
+
+def _memory_budget_config(budget: Any) -> Any:
+    if budget is None:
+        return None
+    return {
+        "max_records": budget.max_records,
+        "max_tokens": budget.max_tokens,
+        "max_embeddings": budget.max_embeddings,
+        "embedding_calls": getattr(budget, "_embedding_calls", 0),
+        "token_estimator": _callable_name(getattr(budget, "_token_estimator")),
+    }
+
+
+def _capture_manifest_memory(memory: Any) -> Any:
+    from neva.memory import (
+        AdaptiveConversationMemory,
+        CompositeMemory,
+        FaissVectorStoreMemory,
+        ShortTermMemory,
+        SummaryMemory,
+        VectorStoreMemory,
+    )
+
+    base = {"type": _type_name(memory), "label": memory.label}
+
+    if isinstance(memory, ShortTermMemory):
+        base.update(
+            capacity=memory.capacity,
+            records=[_memory_record_config(record) for record in memory._entries],
+        )
+        return base
+
+    if isinstance(memory, SummaryMemory):
+        base.update(
+            summary=memory._summary,
+            records=[_memory_record_config(record) for record in memory._history],
+            summarizer=_callable_name(memory._summarizer),
+        )
+        return base
+
+    if isinstance(memory, CompositeMemory):
+        base["modules"] = [_capture_manifest_memory(module) for module in memory._modules]
+        return base
+
+    if isinstance(memory, FaissVectorStoreMemory):
+        index_sha256 = None
+        if memory._index is not None:
+            serialized = memory._faiss.serialize_index(memory._index)
+            raw = serialized.tobytes() if hasattr(serialized, "tobytes") else bytes(serialized)
+            index_sha256 = hashlib.sha256(raw).hexdigest()
+        base.update(
+            top_k=memory._top_k,
+            index_factory=memory._index_factory,
+            normalize_embeddings=memory._normalize_embeddings,
+            id_counter=memory._id_counter,
+            order=list(memory._order),
+            records=[
+                {
+                    "id": record_id,
+                    "record": _memory_record_config(memory._records[record_id]),
+                }
+                for record_id in memory._order
+                if record_id in memory._records
+            ],
+            index_sha256=index_sha256,
+            embedder=_callable_name(memory._embedder),
+        )
+        return base
+
+    if isinstance(memory, VectorStoreMemory):
+        base.update(
+            top_k=memory._top_k,
+            counter=memory._counter,
+            vectors=[
+                {
+                    "index": index,
+                    "record": _memory_record_config(record),
+                    "vector": list(vector),
+                }
+                for index, record, vector in memory._vectors
+            ],
+            embedder=_callable_name(memory._embedder),
+        )
+        return base
+
+    if isinstance(memory, AdaptiveConversationMemory):
+        base.update(
+            short_term_capacity=memory._short_term_capacity,
+            semantic_top_k=memory._semantic_top_k,
+            initial_summary=memory._initial_summary,
+            id_counter=memory._id_counter,
+            history=[
+                {"id": record_id, "record": _memory_record_config(record)}
+                for record_id, record in memory._history
+            ],
+            token_counts=[
+                {"id": record_id, "tokens": tokens}
+                for record_id, tokens in sorted(memory._token_counts.items())
+            ],
+            vector_cache=[
+                {"id": record_id, "vector": list(vector)}
+                for record_id, vector in sorted(memory._vector_cache.items())
+            ],
+            budget=_memory_budget_config(memory._budget),
+            short_term=_capture_manifest_memory(memory._short_term),
+            summary=_capture_manifest_memory(memory._summary),
+            summarizer=_callable_name(memory._summarizer),
+            embedder=(
+                _callable_name(memory._embedder)
+                if memory._embedder is not None
+                else None
+            ),
+        )
+        return base
+
+    checkpoint_hook = getattr(memory, "checkpoint_state", None)
+    if callable(checkpoint_hook):
+        base["checkpoint_state"] = _json_native(checkpoint_hook())
+        return base
+
+    reproducibility_hook = getattr(memory, "reproducibility_config", None)
+    if callable(reproducibility_hook):
+        base["custom"] = _json_native(reproducibility_hook())
+        return base
+
+    raise ReproducibilityError(
+        f"memory {_type_name(memory)} must expose checkpoint_state() or "
+        "reproducibility_config() for reproducible manifests"
+    )
+
+
 def _memory_config(memory: Any) -> Dict[str, Any]:
     if memory is None:
         return {"type": None}
+    return _json_native(_capture_manifest_memory(memory))
 
-    config: Dict[str, Any] = {"type": _type_name(memory)}
-    try:
-        from neva.utils.checkpoint import _capture_memory
 
-        captured = _capture_memory(memory)
-    except ValueError:
-        captured = None
-    if captured is not None:
-        config["state"] = _without_runtime_timestamps(captured)
+def _argument_schema_config(schema: Any) -> Any:
+    if schema is None:
+        return None
 
-    callables = _memory_callable_config(memory)
-    if callables:
-        config["callables"] = callables
+    fields = getattr(schema, "fields", None)
+    allow_extra = getattr(schema, "allow_extra", None)
+    if isinstance(fields, Mapping) and isinstance(allow_extra, bool):
+        rendered = {}
+        for name, spec in sorted(fields.items()):
+            expected = getattr(spec, "type", None)
+            expected_types = expected if isinstance(expected, tuple) else (expected,)
+            rendered[name] = {
+                "types": [_callable_name(item) for item in expected_types],
+                "required": getattr(spec, "required", None),
+                "min_length": getattr(spec, "min_length", None),
+                "max_length": getattr(spec, "max_length", None),
+                "min_value": getattr(spec, "min_value", None),
+                "max_value": getattr(spec, "max_value", None),
+                "choices": _json_native(getattr(spec, "choices", None)),
+            }
+        return {
+            "type": _type_name(schema),
+            "allow_extra": allow_extra,
+            "fields": rendered,
+        }
 
-    hook = getattr(memory, "reproducibility_config", None)
+    hook = getattr(schema, "reproducibility_config", None)
+    if callable(hook):
+        return {"type": _type_name(schema), "custom": _json_native(hook())}
+    return {
+        "type": _type_name(schema),
+        "state": _json_native(vars(schema)) if hasattr(schema, "__dict__") else None,
+    }
+
+
+def _tool_guard_config(guard: Any) -> Any:
+    if guard is None:
+        return None
+    limits = guard.limits
+    hook = getattr(guard, "reproducibility_config", None)
+    config = {
+        "type": _type_name(guard),
+        "allowed_tools": (
+            sorted(guard.allowed_tools) if guard.allowed_tools is not None else None
+        ),
+        "approve": _callable_name(guard.approve) if guard.approve is not None else None,
+        "limits": {
+            "timeout": limits.timeout,
+            "max_output_chars": limits.max_output_chars,
+            "max_concurrency": limits.max_concurrency,
+            "isolate_process": limits.isolate_process,
+            "max_memory_bytes": limits.max_memory_bytes,
+        },
+    }
     if callable(hook):
         config["custom"] = _json_native(hook())
     return config
@@ -423,6 +636,8 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
             "name": tool.name,
             "description": tool.description,
             "capabilities": list(tool.capabilities),
+            "argument_schema": _argument_schema_config(tool.argument_schema),
+            "tool_guard": _tool_guard_config(tool.tool_guard),
         }
         for tool in sorted(agent.tools, key=lambda item: item.name)
     ]
@@ -447,6 +662,7 @@ def _agent_config(agent: "AIAgent") -> Dict[str, Any]:
         "attributes": _json_native(dict(sorted(agent.attributes.items()))),
         "conversation": conversation,
         "memory": memory_config,
+        "tool_guard": _tool_guard_config(agent.tool_guard),
         "tools": tools,
     }
 
@@ -587,12 +803,34 @@ class RunManifest:
 
     def compatibility_payload(self) -> Dict[str, Any]:
         payload = self.to_dict()
+        for key in (
+            "created_at",
+            "dependencies",
+            "runtime",
+            "seed_report",
+            "metadata",
+            "reproducibility",
+        ):
+            payload.pop(key, None)
+        return payload
+
+    def audit_payload(self) -> Dict[str, Any]:
+        payload = self.to_dict()
         payload.pop("created_at", None)
         return payload
 
     def fingerprint(self) -> str:
         raw = json.dumps(
             self.compatibility_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    def audit_fingerprint(self) -> str:
+        raw = json.dumps(
+            self.audit_payload(),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -685,6 +923,7 @@ def prepare_reproducible_run(
     dependencies: Optional[Iterable[str]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
     optional_libraries: bool = True,
+    set_child_hash_seed: bool = False,
 ) -> RunManifest:
     """Seed a run and immediately capture its manifest."""
 
@@ -692,6 +931,7 @@ def prepare_reproducible_run(
         seed,
         environment=environment,
         optional_libraries=optional_libraries,
+        set_child_hash_seed=set_child_hash_seed,
     )
     return create_run_manifest(
         environment,
@@ -703,15 +943,80 @@ def prepare_reproducible_run(
     )
 
 
+def _record_digest(
+    prompt: str,
+    prompt_sha256: str,
+    response: Optional[str],
+    error_type: Optional[str],
+    error_message: Optional[str],
+) -> str:
+    payload = {
+        "prompt": prompt,
+        "prompt_sha256": prompt_sha256,
+        "response": response,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+    raw = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _manifest_diff_paths(expected: Any, actual: Any, *, prefix: str = "") -> List[str]:
+    differences: List[str] = []
+    if type(expected) is not type(actual):
+        return [prefix or "<root>"]
+    if isinstance(expected, Mapping):
+        keys = sorted(set(expected) | set(actual))
+        for key in keys:
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in expected or key not in actual:
+                differences.append(path)
+                continue
+            differences.extend(
+                _manifest_diff_paths(expected[key], actual[key], prefix=path)
+            )
+            if len(differences) >= 12:
+                break
+        return differences
+    if isinstance(expected, list):
+        if len(expected) != len(actual):
+            differences.append(f"{prefix}.length" if prefix else "length")
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            path = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            differences.extend(_manifest_diff_paths(left, right, prefix=path))
+            if len(differences) >= 12:
+                break
+        return differences
+    if expected != actual:
+        return [prefix or "<root>"]
+    return []
+
+
 @dataclass(frozen=True)
 class ReplayRecord:
-    """One model-boundary call recorded for deterministic offline replay."""
+    """One replay-identity call recorded for deterministic offline replay."""
 
     prompt: str
     prompt_sha256: str
     response: Optional[str] = None
     error_type: Optional[str] = None
     error_message: Optional[str] = None
+    record_sha256: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        digest = self.record_sha256 or _record_digest(
+            self.prompt,
+            self.prompt_sha256,
+            self.response,
+            self.error_type,
+            self.error_message,
+        )
+        object.__setattr__(self, "record_sha256", digest)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -720,6 +1025,7 @@ class ReplayRecord:
             "response": self.response,
             "error_type": self.error_type,
             "error_message": self.error_message,
+            "record_sha256": self.record_sha256,
         }
 
     @classmethod
@@ -745,84 +1051,144 @@ class ReplayRecord:
             raise ReproducibilityError("replay record cannot contain both response and error")
         if response is None and error_type is None:
             raise ReproducibilityError("replay record must contain a response or error")
+        record_digest = payload.get("record_sha256")
+        expected_record_digest = _record_digest(
+            prompt,
+            digest,
+            response,
+            error_type,
+            error_message,
+        )
+        if record_digest != expected_record_digest:
+            raise ReproducibilityError("replay record digest does not match record contents")
         return cls(
             prompt=prompt,
             prompt_sha256=digest,
             response=response,
             error_type=error_type,
             error_message=error_message,
+            record_sha256=record_digest,
         )
 
 
 class ReplayTape:
-    """Thread-safe sequence of exact model prompts and recorded outcomes."""
+    """Thread-safe sequence of exact model-boundary identities and outcomes."""
 
     def __init__(
         self,
         records: Optional[Iterable[ReplayRecord]] = None,
         *,
         manifest_fingerprint: Optional[str] = None,
+        manifest_compatibility: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        self._records: List[ReplayRecord] = list(records or ())
+        self._records: List[Optional[ReplayRecord]] = list(records or ())
         self.manifest_fingerprint = manifest_fingerprint
+        self.manifest_compatibility = (
+            deepcopy(dict(manifest_compatibility))
+            if manifest_compatibility is not None
+            else None
+        )
         self._lock = threading.RLock()
 
     @classmethod
     def for_manifest(cls, manifest: RunManifest) -> "ReplayTape":
-        return cls(manifest_fingerprint=manifest.fingerprint())
+        return cls(
+            manifest_fingerprint=manifest.fingerprint(),
+            manifest_compatibility=manifest.compatibility_payload(),
+        )
 
     @property
     def records(self) -> Sequence[ReplayRecord]:
         with self._lock:
-            return tuple(self._records)
+            if any(record is None for record in self._records):
+                raise ReproducibilityError("replay tape contains an in-flight recording")
+            return tuple(record for record in self._records if record is not None)
 
-    def _append_success(self, prompt: str, response: str) -> None:
-        digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        self._records.append(ReplayRecord(prompt=prompt, prompt_sha256=digest, response=response))
+    def _reserve(self) -> int:
+        with self._lock:
+            index = len(self._records)
+            self._records.append(None)
+            return index
 
-    def _append_error(self, prompt: str, exc: Exception) -> None:
-        digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        self._records.append(
-            ReplayRecord(
-                prompt=prompt,
-                prompt_sha256=digest,
-                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
-                error_message=str(exc),
-            )
-        )
+    def _complete(self, index: int, record: ReplayRecord) -> None:
+        with self._lock:
+            if index >= len(self._records) or self._records[index] is not None:
+                raise ReproducibilityError("replay recording slot is invalid or already complete")
+            self._records[index] = record
 
-    def recording_backend(self, backend: Callable[[str], str]) -> Callable[[str], str]:
-        """Wrap a synchronous backend and record calls in deterministic order."""
+    def recording_backend(
+        self,
+        backend: Callable[[str], str],
+        *,
+        identity: Optional[Callable[[str], str]] = None,
+    ) -> Callable[[str], str]:
+        """Record invocation order without holding the tape lock during model work."""
 
         if not callable(backend):
             raise ReproducibilityError("recording backend must be callable")
+        if identity is not None and not callable(identity):
+            raise ReproducibilityError("recording identity must be callable")
+        identity_fn = identity or (lambda prompt: prompt)
 
         def _record(prompt: str) -> str:
             if not isinstance(prompt, str):
                 raise ReproducibilityError("recorded model prompt must be a string")
-            with self._lock:
-                try:
-                    response = backend(prompt)
-                except Exception as exc:
-                    self._append_error(prompt, exc)
-                    raise
-                if not isinstance(response, str):
-                    error = ReproducibilityError("recorded model response must be a string")
-                    self._append_error(prompt, error)
-                    raise error
-                self._append_success(prompt, response)
-                return response
+            replay_identity = identity_fn(prompt)
+            if not isinstance(replay_identity, str):
+                raise ReproducibilityError("replay identity must be a string")
+            prompt_digest = hashlib.sha256(replay_identity.encode("utf-8")).hexdigest()
+            slot = self._reserve()
+            try:
+                response = backend(prompt)
+            except BaseException as exc:
+                self._complete(
+                    slot,
+                    ReplayRecord(
+                        prompt=replay_identity,
+                        prompt_sha256=prompt_digest,
+                        error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+                        error_message=str(exc),
+                    ),
+                )
+                raise
+            if not isinstance(response, str):
+                error = ReproducibilityError("recorded model response must be a string")
+                self._complete(
+                    slot,
+                    ReplayRecord(
+                        prompt=replay_identity,
+                        prompt_sha256=prompt_digest,
+                        error_type=f"{type(error).__module__}.{type(error).__qualname__}",
+                        error_message=str(error),
+                    ),
+                )
+                raise error
+            self._complete(
+                slot,
+                ReplayRecord(
+                    prompt=replay_identity,
+                    prompt_sha256=prompt_digest,
+                    response=response,
+                ),
+            )
+            return response
 
         return _record
 
     def attach_recording(self, agents: Iterable["AIAgent"]) -> None:
-        """Install recording wrapper factories after every agent validates."""
+        """Install recording wrappers after all model boundaries validate."""
 
         agent_list = list(agents)
+        identities = [agent.replay_identity_resolver() for agent in agent_list]
         for agent in agent_list:
             agent.replayable_backend()
-        for agent in agent_list:
-            agent.set_model_backend_wrapper(self.recording_backend)
+        for agent, identity in zip(agent_list, identities):
+            agent.set_model_backend_wrapper(
+                lambda backend, identity=identity: self.recording_backend(
+                    backend,
+                    identity=identity,
+                )
+            )
 
     def attach_replay(
         self,
@@ -830,12 +1196,14 @@ class ReplayTape:
         *,
         manifest: Optional[RunManifest] = None,
     ) -> "ReplayBackend":
-        """Install one shared replay sequence across all supplied agents."""
+        """Install one shared replay cursor with per-agent request identities."""
 
+        agent_list = list(agents)
+        identities = [agent.replay_identity_resolver() for agent in agent_list]
         backend = self.replay_backend(manifest=manifest)
-        for agent in agents:
+        for agent, identity in zip(agent_list, identities):
             agent.set_model_backend_wrapper(None)
-            agent.set_llm_backend(backend)
+            agent.set_llm_backend(backend.bind_identity(identity))
         return backend
 
     def replay_backend(
@@ -848,15 +1216,30 @@ class ReplayTape:
             and self.manifest_fingerprint is not None
             and manifest.fingerprint() != self.manifest_fingerprint
         ):
-            raise ReplayMismatchError("run manifest does not match replay tape")
+            suffix = ""
+            if self.manifest_compatibility is not None:
+                differences = _manifest_diff_paths(
+                    self.manifest_compatibility,
+                    manifest.compatibility_payload(),
+                )
+                if differences:
+                    suffix = ": differing fields: " + ", ".join(differences[:12])
+            raise ReplayMismatchError("run manifest does not match replay tape" + suffix)
         return ReplayBackend(self)
 
     def to_dict(self) -> Dict[str, Any]:
         with self._lock:
+            if any(record is None for record in self._records):
+                raise ReproducibilityError("cannot persist replay tape with in-flight recordings")
             return {
                 "version": _REPLAY_VERSION,
                 "manifest_fingerprint": self.manifest_fingerprint,
-                "records": [record.to_dict() for record in self._records],
+                "manifest_compatibility": deepcopy(self.manifest_compatibility),
+                "records": [
+                    record.to_dict()
+                    for record in self._records
+                    if record is not None
+                ],
             }
 
     @classmethod
@@ -873,7 +1256,14 @@ class ReplayTape:
         fingerprint = payload.get("manifest_fingerprint")
         if fingerprint is not None and not isinstance(fingerprint, str):
             raise ReproducibilityError("manifest_fingerprint must be a string or null")
-        return cls(records, manifest_fingerprint=fingerprint)
+        compatibility = payload.get("manifest_compatibility")
+        if compatibility is not None and not isinstance(compatibility, Mapping):
+            raise ReproducibilityError("manifest_compatibility must be a JSON object or null")
+        return cls(
+            records,
+            manifest_fingerprint=fingerprint,
+            manifest_compatibility=compatibility,
+        )
 
     def save(self, path: Path | str) -> None:
         _atomic_json_write(Path(path), self.to_dict())
@@ -887,7 +1277,7 @@ class ReplayTape:
 
 
 class ReplayBackend:
-    """Sequential backend that validates exact prompt order and content."""
+    """Sequential backend that validates exact replay-identity order and content."""
 
     def __init__(self, tape: ReplayTape) -> None:
         self._tape = tape
@@ -899,9 +1289,9 @@ class ReplayBackend:
         with self._lock:
             return self._index
 
-    def __call__(self, prompt: str) -> str:
-        if not isinstance(prompt, str):
-            raise ReplayMismatchError("replay prompt must be a string")
+    def _consume(self, replay_identity: str) -> str:
+        if not isinstance(replay_identity, str):
+            raise ReplayMismatchError("replay identity must be a string")
         with self._lock:
             records = self._tape.records
             if self._index >= len(records):
@@ -909,8 +1299,8 @@ class ReplayBackend:
                     f"replay exhausted at call {self._index}; no recorded response remains"
                 )
             record = records[self._index]
-            digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            if digest != record.prompt_sha256 or prompt != record.prompt:
+            digest = hashlib.sha256(replay_identity.encode("utf-8")).hexdigest()
+            if digest != record.prompt_sha256 or replay_identity != record.prompt:
                 raise ReplayMismatchError(
                     f"replay prompt mismatch at call {self._index}: "
                     f"expected sha256={record.prompt_sha256}, got sha256={digest}"
@@ -923,6 +1313,22 @@ class ReplayBackend:
             if record.response is None:
                 raise ReproducibilityError("replay record has neither response nor error")
             return record.response
+
+    def __call__(self, prompt: str) -> str:
+        return self._consume(prompt)
+
+    def bind_identity(
+        self,
+        identity: Callable[[str], str],
+    ) -> Callable[[str], str]:
+        if not callable(identity):
+            raise ReproducibilityError("replay identity must be callable")
+
+        def _bound(prompt: str) -> str:
+            replay_identity = identity(prompt)
+            return self._consume(replay_identity)
+
+        return _bound
 
     def assert_consumed(self) -> None:
         with self._lock:
