@@ -586,6 +586,11 @@ class AIAgent(ABC):
         wrapper = self._model_backend_wrapper
         return wrapper(backend) if wrapper is not None else backend
 
+    def replay_identity_resolver(self) -> Callable[[str], str]:
+        """Return the identity function used to validate record/replay calls."""
+
+        return lambda prompt: prompt
+
     def replayable_backend(
         self,
         *,
