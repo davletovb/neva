@@ -270,9 +270,12 @@ finally:
 The same session supports `async for event in session`; call `await
 session.aclose()` when stopping early. The producer blocks when the bounded
 queue fills. `close()` signals cancellation, but a synchronous provider read
-can take up to `request_timeout` to return. A failure after text is emitted
-raises `StreamInterruptedError` with its partial text; it is never retried or
-cached and is not added to conversation history. Failures before output can
+can take up to `request_timeout` to return. The response enters history and
+cache only when the consumer accepts the `complete` event. A provider call
+that finishes after the consumer closes can still incur and record spend.
+A failure after text is emitted raises `StreamInterruptedError` with its
+partial text; it is never retried or cached and is not added to conversation
+history. Failures before output can
 use configured retries. Completed output is capped by `max_response_chars`
 (default one million characters) in addition to the provider's output-token
 setting. Streaming uses the same shared provider admission, circuit breaker,

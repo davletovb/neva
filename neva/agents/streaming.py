@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
+from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Callable, Iterator, Optional
 
@@ -42,6 +43,7 @@ class StreamSession:
         producer: Callable[[Callable[[str], None], threading.Event], StreamEvent],
         *,
         max_queue_size: int = 8,
+        on_complete: Optional[Callable[[StreamEvent], None]] = None,
     ) -> None:
         if (
             isinstance(max_queue_size, bool)
@@ -52,13 +54,32 @@ class StreamSession:
         self._queue: queue.Queue[object] = queue.Queue(maxsize=max_queue_size)
         self._cancel = threading.Event()
         self._producer = producer
+        self._on_complete = on_complete
         self._started = False
         self._lock = threading.Lock()
+        self._context = copy_context()
+        self._async_waiter: Optional[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = None
+
+    @staticmethod
+    def _wake(waiter: Optional[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]]) -> None:
+        if waiter is not None:
+            loop, future = waiter
+
+            def notify() -> None:
+                if not future.done():
+                    future.set_result(None)
+
+            try:
+                loop.call_soon_threadsafe(notify)
+            except RuntimeError:  # event loop was already closed by its owner
+                pass
 
     def _put(self, item: object) -> None:
         while not self._cancel.is_set():
             try:
                 self._queue.put(item, timeout=0.05)
+                with self._lock:
+                    self._wake(self._async_waiter)
                 return
             except queue.Full:
                 continue
@@ -84,7 +105,25 @@ class StreamSession:
                 except RateLimiterCancelledError:
                     pass
 
-        threading.Thread(target=run, daemon=True, name="neva-stream").start()
+        threading.Thread(
+            target=lambda: self._context.run(run), daemon=True, name="neva-stream"
+        ).start()
+
+    def _accepted(self, item: object) -> StreamEvent:
+        if isinstance(item, BaseException):
+            raise item
+        if not isinstance(item, StreamEvent):
+            raise BackendError("unexpected stream item")
+        if item.kind == "complete":
+            # Serialize terminal acceptance against close(). The provider can
+            # finish and bill even if its consumer abandons the final handoff;
+            # cache/history are committed only after the consumer accepts it.
+            with self._lock:
+                if self._cancel.is_set():
+                    raise RateLimiterCancelledError("Stream delivery cancelled")
+                if self._on_complete is not None:
+                    self._on_complete(item)
+        return item
 
     def __iter__(self) -> Iterator[StreamEvent]:
         self._start()
@@ -98,9 +137,7 @@ class StreamSession:
                     if self._cancel.is_set():
                         raise RateLimiterCancelledError("Stream delivery cancelled")
                     continue
-                if isinstance(item, BaseException):
-                    raise item
-                assert isinstance(item, StreamEvent)
+                item = self._accepted(item)
                 yield item
                 if item.kind == "complete":
                     return
@@ -109,31 +146,45 @@ class StreamSession:
 
     async def __aiter__(self):
         self._start()
-
-        def receive() -> object:
-            while not self._cancel.is_set():
-                try:
-                    return self._queue.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-            raise RateLimiterCancelledError("Stream delivery cancelled")
-
         try:
             while True:
-                if self._cancel.is_set():
-                    raise RateLimiterCancelledError("Stream delivery cancelled")
-                item = await asyncio.to_thread(receive)
-                if isinstance(item, BaseException):
-                    raise item
-                assert isinstance(item, StreamEvent)
+                item = self._accepted(await self._get_async())
                 yield item
                 if item.kind == "complete":
                     return
         finally:
             self.close()
 
+    async def _get_async(self) -> object:
+        loop = asyncio.get_running_loop()
+        while True:
+            if self._cancel.is_set():
+                raise RateLimiterCancelledError("Stream delivery cancelled")
+            try:
+                return self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            future: asyncio.Future[None] = loop.create_future()
+            waiter = (loop, future)
+            with self._lock:
+                if self._cancel.is_set():
+                    raise RateLimiterCancelledError("Stream delivery cancelled")
+                self._async_waiter = waiter
+            try:
+                # Recheck after registration to avoid a lost producer wakeup.
+                try:
+                    return self._queue.get_nowait()
+                except queue.Empty:
+                    await future
+            finally:
+                with self._lock:
+                    if self._async_waiter is waiter:
+                        self._async_waiter = None
+
     def close(self) -> None:
-        self._cancel.set()
+        with self._lock:
+            self._cancel.set()
+            self._wake(self._async_waiter)
 
     async def aclose(self) -> None:
         self.close()

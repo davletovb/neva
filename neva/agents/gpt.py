@@ -676,7 +676,7 @@ class GPTAgent(AIAgent):
             empty_error="Grok provider returned empty content.",
         )
 
-    def _stream_chat_completions(self, prompt: str) -> Iterator[str]:
+    def _stream_chat_completions(self, prompt: str, usage_state: Dict[str, Any]) -> Iterator[str]:
         """Parse bounded SSE frames, closing the socket on every exit path."""
 
         payload: Dict[str, Any] = {
@@ -703,13 +703,17 @@ class GPTAgent(AIAgent):
             data_lines: List[str] = []
             event_bytes = 0
             done = False
-            # A large read size can hold the first token until the buffer fills.
-            for chunk in response.iter_content(chunk_size=1):
-                buffer.extend(chunk)
-                if len(buffer) > 1_048_576:
-                    raise BackendError("Provider SSE frame exceeds 1 MiB")
-                if buffer.endswith(b"\n"):
-                    line = bytes(buffer[:-1])
+            # read1 returns available bytes without waiting for the requested
+            # size; iter_content(None) can wait for EOF on non-chunked SSE.
+            for chunk in iter(lambda: response.raw.read1(65536, decode_content=True), b""):
+                segments = chunk.split(b"\n")
+                for index, segment in enumerate(segments):
+                    buffer.extend(segment)
+                    if len(buffer) > 1_048_576:
+                        raise BackendError("Provider SSE frame exceeds 1 MiB")
+                    if index == len(segments) - 1:
+                        continue
+                    line = bytes(buffer)
                     buffer.clear()
                     line = line.rstrip(b"\r")
                     if not line:
@@ -731,7 +735,7 @@ class GPTAgent(AIAgent):
                             raise BackendError("Provider returned a stream error")
                         usage = event.get("usage")
                         if isinstance(usage, dict):
-                            self._last_provider_usage = {
+                            usage_state["value"] = {
                                 "prompt_tokens": usage.get(
                                     "prompt_tokens", usage.get("input_tokens")
                                 ),
@@ -769,9 +773,9 @@ class GPTAgent(AIAgent):
         finally:
             response.close()
 
-    def _stream_provider(self, prompt: str) -> Iterator[str]:
+    def _stream_provider(self, prompt: str, usage_state: Dict[str, Any]) -> Iterator[str]:
         if self.provider in _CHAT_COMPLETION_URLS:
-            yield from self._stream_chat_completions(prompt)
+            yield from self._stream_chat_completions(prompt, usage_state)
         elif self.provider == "anthropic":
             try:
                 anthropic = importlib.import_module("anthropic")
@@ -793,7 +797,7 @@ class GPTAgent(AIAgent):
                 final = stream.get_final_message()
                 usage = getattr(final, "usage", None)
                 if usage is not None:
-                    self._last_provider_usage = {
+                    usage_state["value"] = {
                         "prompt_tokens": getattr(usage, "input_tokens", 0),
                         "completion_tokens": getattr(usage, "output_tokens", 0),
                     }
@@ -814,7 +818,7 @@ class GPTAgent(AIAgent):
                 for chunk in response:
                     usage = _provider_usage_from_gemini(chunk)
                     if usage:
-                        self._last_provider_usage = usage
+                        usage_state["value"] = usage
                     try:
                         content = chunk.text
                     except ValueError:
@@ -996,14 +1000,18 @@ class GPTAgent(AIAgent):
             or max_response_chars < 1
         ):
             raise ConfigurationError("max_response_chars must be a positive integer")
-        prompt = self.prompt_validator.validate(self.prepare_prompt(message))
+        validated_message = self.prompt_validator.validate(message)
+        prompt = self.prompt_validator.validate(self.prepare_prompt(validated_message))
+        cache_key = self._scoped_key(prompt)
+        completed: Dict[str, Any] = {}
 
         def produce(emit: Callable[[str], None], cancel: threading.Event) -> StreamEvent:
-            cached = self._cache_lookup(prompt)
+            cached = AIAgent._cache_lookup(self, cache_key)
             if cached is not None:
+                if len(cached) > max_response_chars:
+                    raise BackendError("Cached response exceeds max_response_chars")
+                completed["cache_hit"] = True
                 emit(cached)
-                self._remember("system", message)
-                self._remember(self.name, cached)
                 return StreamEvent("complete", cached, 0.0, 0.0)
 
             last_error: Optional[Exception] = None
@@ -1014,6 +1022,7 @@ class GPTAgent(AIAgent):
                 accounted = False
                 actual_cost: Optional[float] = None
                 parts: List[str] = []
+                usage_state: Dict[str, Any] = {}
                 chars = 0
                 first: Optional[float] = None
                 started = perf_counter()
@@ -1038,9 +1047,8 @@ class GPTAgent(AIAgent):
                     if cancel.is_set():
                         raise RateLimiterCancelledError("LLM stream cancelled")
                     started = perf_counter()
-                    self._last_provider_usage = None
                     with self._response_time_tracker.track():
-                        for delta in self._stream_provider(prompt):
+                        for delta in self._stream_provider(prompt, usage_state):
                             if cancel.is_set():
                                 raise RateLimiterCancelledError("LLM stream cancelled")
                             if not isinstance(delta, str):
@@ -1060,7 +1068,7 @@ class GPTAgent(AIAgent):
                         raise BackendError("Provider stream returned no text")
                     duration = perf_counter() - started
                     prompt_tokens, response_tokens = self._token_tracker.record(
-                        self._request_text(prompt), content, usage=self._last_provider_usage
+                        self._request_text(prompt), content, usage=usage_state.get("value")
                     )
                     accounted = True
                     self._cost_tracker.add_usage(
@@ -1087,58 +1095,23 @@ class GPTAgent(AIAgent):
                     finally:
                         released = True
                     self._circuit_breaker.record_success()
-                    self._cache_store(prompt, content)
-                    self._remember("system", message)
-                    self._remember(self.name, content)
-                    telemetry = get_telemetry()
-                    if telemetry is not None:
-                        try:
-                            conversation_id = getattr(
-                                self.environment, "conversation_id", f"agent-{self.id}"
-                            )
-                            telemetry.record_llm_api_call(
-                                conversation_id=conversation_id,
-                                agent_name=self.name,
-                                prompt=prompt,
-                                completion=content,
-                                provider=self.provider,
-                                model=self.model,
-                                latency=duration,
-                                first_token_seconds=first,
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=response_tokens,
-                                metadata={
-                                    "attempt": attempt,
-                                    "stream": True,
-                                    "first_token_seconds": first,
-                                    "completion_seconds": duration,
-                                },
-                                conversation_state=self.conversation_state,
-                            )
-                            telemetry.record_agent_turn(
-                                conversation_id=conversation_id,
-                                agent_name=self.name,
-                                prompt=message,
-                                response=content,
-                                latency=duration,
-                                model=self.model,
-                                metadata={"stream": True, "first_token_seconds": first},
-                                conversation_state=self.conversation_state,
-                            )
-                        except Exception:
-                            self._logger.debug("Failed to emit stream telemetry", exc_info=True)
+                    completed.update(
+                        attempt=attempt,
+                        prompt_tokens=prompt_tokens,
+                        response_tokens=response_tokens,
+                    )
                     return StreamEvent("complete", content, first, duration)
                 except Exception as exc:
                     last_error = exc
                     if not released:
                         # Settle known usage/partial output, otherwise release
                         # the reservation as in the ordinary failure path.
-                        if not accounted and (parts or self._last_provider_usage is not None):
+                        if not accounted and (parts or usage_state.get("value") is not None):
                             try:
                                 p, r = self._token_tracker.record(
                                     self._request_text(prompt),
                                     "".join(parts),
-                                    usage=self._last_provider_usage,
+                                    usage=usage_state.get("value"),
                                 )
                                 self._cost_tracker.add_usage(
                                     self.model, p + r, prompt_tokens=p, response_tokens=r
@@ -1206,7 +1179,58 @@ class GPTAgent(AIAgent):
                     raise BackendError("LLM stream failed") from exc
             raise BackendError("LLM stream failed") from last_error
 
-        return StreamSession(produce, max_queue_size=max_queue_size)
+        def accept(event: StreamEvent) -> None:
+            self._remember("system", validated_message)
+            self._remember(self.name, event.text)
+            if not completed.get("cache_hit"):
+                AIAgent._cache_store(self, cache_key, event.text)
+            if completed.get("cache_hit"):
+                return
+            attempt = completed["attempt"]
+            prompt_tokens = completed["prompt_tokens"]
+            response_tokens = completed["response_tokens"]
+            duration = event.completion_seconds
+            first = event.first_token_seconds
+            content = event.text
+            telemetry = get_telemetry()
+            if telemetry is not None:
+                try:
+                    conversation_id = getattr(
+                        self.environment, "conversation_id", f"agent-{self.id}"
+                    )
+                    telemetry.record_llm_api_call(
+                        conversation_id=conversation_id,
+                        agent_name=self.name,
+                        prompt=prompt,
+                        completion=content,
+                        provider=self.provider,
+                        model=self.model,
+                        latency=duration,
+                        first_token_seconds=first,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=response_tokens,
+                        metadata={
+                            "attempt": attempt,
+                            "stream": True,
+                            "first_token_seconds": first,
+                            "completion_seconds": duration,
+                        },
+                        conversation_state=self.conversation_state,
+                    )
+                    telemetry.record_agent_turn(
+                        conversation_id=conversation_id,
+                        agent_name=self.name,
+                        prompt=validated_message,
+                        response=content,
+                        latency=duration,
+                        model=self.model,
+                        metadata={"stream": True, "first_token_seconds": first},
+                        conversation_state=self.conversation_state,
+                    )
+                except Exception:
+                    self._logger.debug("Failed to emit stream telemetry", exc_info=True)
+
+        return StreamSession(produce, max_queue_size=max_queue_size, on_complete=accept)
 
 
 __all__ = ["GPTAgent"]

@@ -5,13 +5,15 @@ import importlib
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from neva.agents import GPTAgent
 from neva.agents.streaming import StreamInterruptedError
-from neva.utils.exceptions import RateLimiterCancelledError
+from neva.utils.exceptions import BackendError, RateLimiterCancelledError
 from neva.utils.metrics import SpendBudget
 
 
@@ -129,6 +131,109 @@ def test_partial_spend_is_settled_and_cache_is_empty(stream_server):
     assert budget.reserved == 0
     assert budget.spent > 0
     assert agent.conversation_state.turns == []
+
+
+def test_concurrent_streams_settle_their_own_usage(stream_server, monkeypatch):
+    url, _, _ = stream_server
+    budget = SpendBudget(max_cost=1.0)
+    agent = _agent(url, spend_budget=budget)
+    both = threading.Barrier(2)
+
+    def stream(prompt, usage_state):
+        if "alpha" in prompt:
+            usage_state["value"] = {"prompt_tokens": 3, "completion_tokens": 1}
+            yield "alpha"
+        else:
+            usage_state["value"] = {"prompt_tokens": 7, "completion_tokens": 2}
+            yield "beta"
+        both.wait(timeout=2)
+
+    monkeypatch.setattr(agent, "_stream_provider", stream)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(lambda: list(agent.stream_response("alpha"))[-1])
+        second = pool.submit(lambda: list(agent.stream_response("beta"))[-1])
+        assert {first.result(timeout=3).text, second.result(timeout=3).text} == {
+            "alpha",
+            "beta",
+        }
+    assert sorted(agent._token_tracker.records) == [(3, 1), (7, 2)]
+    assert budget.reserved == 0
+    assert budget.spent == pytest.approx(agent._call_cost(prompt_tokens=10, response_tokens=3))
+
+
+def test_closing_after_last_delta_does_not_commit(stream_server, monkeypatch):
+    url, _, _ = stream_server
+    budget = SpendBudget(max_cost=1.0)
+    agent = _agent(url, spend_budget=budget)
+
+    def stream(_prompt, _usage_state):
+        yield "hello "
+        yield "world"
+
+    monkeypatch.setattr(agent, "_stream_provider", stream)
+    session = agent.stream_response("unfinished")
+    iterator = iter(session)
+    assert next(iterator).text == "hello "
+    assert next(iterator).text == "world"
+    session.close()
+    with pytest.raises(RateLimiterCancelledError):
+        next(iterator)
+    assert agent.conversation_state.turns == []
+    assert (
+        agent._cache_lookup(agent.prompt_validator.validate(agent.prepare_prompt("unfinished")))
+        is None
+    )
+    # Provider completion may be billed before the terminal event is accepted.
+    assert budget.reserved == 0
+
+
+def test_cached_stream_respects_the_requested_cap(stream_server):
+    url, calls, _ = stream_server
+    agent = _agent(url)
+    list(agent.stream_response("ping"))
+    agent.conversation_state.turns.clear()
+    with pytest.raises(BackendError, match="Cached response exceeds max_response_chars"):
+        list(agent.stream_response("ping", max_response_chars=5))
+    assert agent.conversation_state.turns == []
+    assert len(calls) == 1
+
+
+def test_stream_saves_validated_message(stream_server):
+    url, _, _ = stream_server
+    agent = _agent(url)
+    list(agent.stream_response("hi\x00there"))
+    assert agent.conversation_state.turns[0].message == "hithere"
+
+
+def test_stream_worker_preserves_caller_context(stream_server, monkeypatch):
+    url, _, _ = stream_server
+    agent = _agent(url)
+    marker: ContextVar[str] = ContextVar("stream_marker", default="missing")
+    token = marker.set("caller")
+
+    def stream(_prompt, _usage_state):
+        yield marker.get()
+
+    monkeypatch.setattr(agent, "_stream_provider", stream)
+    try:
+        assert list(agent.stream_response("context"))[-1].text == "caller"
+    finally:
+        marker.reset(token)
+
+
+def test_async_delivery_does_not_use_executor(stream_server, monkeypatch):
+    url, _, _ = stream_server
+    agent = _agent(url)
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("async stream must not poll through the default executor")
+
+    monkeypatch.setattr(asyncio, "to_thread", forbidden)
+
+    async def consume():
+        return [event async for event in agent.stream_response("async")]
+
+    assert asyncio.run(consume())[-1].text == "Hello world"
 
 
 def test_stream_telemetry_records_both_latencies(stream_server, monkeypatch):

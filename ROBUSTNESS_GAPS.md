@@ -371,7 +371,10 @@ artifact classes accordingly.
   `StreamInterruptedError` with uncommitted partial text, with no replay,
   cache entry, or conversation turn. Provider permits and spend reservations
   are released/settled even on partial failure or cancellation; available
-  usage is recorded. The response accumulation has a character ceiling.
+  usage is recorded per stream. The response accumulation and cached reply
+  have the same per-call character ceiling. Cache/history commit when the
+  consumer accepts the terminal completion event; provider spend can still be
+  incurred if the consumer closes after generation finishes.
 - Completion events report first-token and full-completion seconds separately.
   LLM telemetry records both and identifies interrupted streams. Local HTTP
   integration tests exercise completion, partial EOF, cache/history, bounded
@@ -380,7 +383,9 @@ artifact classes accordingly.
 Boundary: no Python thread can forcibly interrupt a blocked synchronous
 provider read; configured request timeouts limit its lifetime. Backpressure
 bounds pending deltas, while the completed response is accumulated up to the
-configured response-character ceiling. Streaming is not provider-native tool
+configured response-character ceiling. A stream that is abandoned before its
+terminal event cannot be resumed to recover its generated answer. Streaming is
+not provider-native tool
 calling; custom backend/wrapper implementations have no generic stream
 contract and fail explicitly.
 
