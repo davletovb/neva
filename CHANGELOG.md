@@ -257,6 +257,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read from `opentelemetry.trace` when `opentelemetry.context` does not export
   it. Previously the import failure was reported as a missing dependency and
   telemetry silently degraded to the no-op fallback.
+- Configuring telemetry more than once (or again after `reset_telemetry()`) now
+  keeps exporting: the tracer and meter are bound to the manager's own providers
+  instead of the process-global ones, which OpenTelemetry sets only on the first
+  call, so a replacement manager previously recorded spans and metrics into
+  providers that `configure_telemetry()` had already shut down.
 - Custom OpenAI/Grok `api_base` values that are not already a Chat Completions
   endpoint now have `/chat/completions` appended.
 - `RateLimiter.acquire()` sleeps outside its lock so shared limiters are not

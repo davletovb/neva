@@ -443,7 +443,16 @@ class TelemetryManager:
                 modules.trace.set_tracer_provider(tracer_provider)
                 self._owns_tracer_provider = True
             self._tracer_provider = tracer_provider
-            self._tracer = tracer or modules.trace.get_tracer(__name__)
+            if tracer is not None:
+                self._tracer = tracer
+            elif tracer_provider is not None:
+                # Bind to this manager's provider. OpenTelemetry honours only the
+                # first set_tracer_provider() call, so the process-global lookup
+                # returns the provider of an earlier manager - which a
+                # reconfigured manager has already shut down.
+                self._tracer = tracer_provider.get_tracer(__name__)
+            else:  # pragma: no cover - the branch above always creates a provider.
+                self._tracer = modules.trace.get_tracer(__name__)
 
             readers = list(metric_readers or [])
             if meter_provider is None and meter is None:
@@ -453,7 +462,14 @@ class TelemetryManager:
                 modules.metrics.set_meter_provider(meter_provider)
                 self._owns_meter_provider = True
             self._meter_provider = meter_provider
-            self._meter = meter or modules.metrics.get_meter(__name__)
+            if meter is not None:
+                self._meter = meter
+            elif meter_provider is not None:
+                # See the tracer comment above: the global meter provider is also
+                # set only once per process.
+                self._meter = meter_provider.get_meter(__name__)
+            else:  # pragma: no cover - the branch above always creates a provider.
+                self._meter = modules.metrics.get_meter(__name__)
 
             if logger_provider is None and structured_logger is None:
                 logger_provider = modules.logger_provider_cls(resource=resource)

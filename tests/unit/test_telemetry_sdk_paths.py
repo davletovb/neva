@@ -307,6 +307,41 @@ def test_estimate_tokens_returns_zero_for_empty_text():
     assert _estimate_tokens("two words") == 2
 
 
+def test_reconfiguring_exports_through_the_new_manager():
+    """A second ``configure_telemetry()`` must export, not record into dead providers.
+
+    OpenTelemetry honours only the first ``set_tracer_provider()`` /
+    ``set_meter_provider()`` call, so a manager that reads the process-global
+    providers records into the providers the previous configuration has already
+    shut down and the spans are silently dropped.
+    """
+
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    first_exporter = InMemorySpanExporter()
+    first = configure_telemetry(span_exporter=first_exporter)
+    first.record_agent_registration(conversation_id="first", agent_name="agent-first")
+    first.end_conversation("first")
+    first.shutdown()
+    assert [span.name for span in first_exporter.get_finished_spans()] == ["neva.conversation"]
+
+    second_exporter = InMemorySpanExporter()
+    second = configure_telemetry(span_exporter=second_exporter)
+    second.record_agent_registration(conversation_id="second", agent_name="agent-second")
+    second.end_conversation("second")
+    second.shutdown()
+    assert [span.name for span in second_exporter.get_finished_spans()] == ["neva.conversation"]
+    assert len(first_exporter.get_finished_spans()) == 1
+
+    reset_telemetry()
+    third_exporter = InMemorySpanExporter()
+    third = configure_telemetry(span_exporter=third_exporter)
+    third.record_agent_registration(conversation_id="third", agent_name="agent-third")
+    third.end_conversation("third")
+    third.shutdown()
+    assert [span.name for span in third_exporter.get_finished_spans()] == ["neva.conversation"]
+
+
 def test_configure_telemetry_shuts_down_the_previous_global():
     first = configure_telemetry()
     second = configure_telemetry()
