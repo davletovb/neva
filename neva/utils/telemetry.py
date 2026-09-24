@@ -1,25 +1,14 @@
-"""Compatibility shim: the implementation moved to :mod:`neva.utils.observability.telemetry`.
+"""Compatibility shim: ``neva.utils.telemetry`` *is* the implementation module.
 
-Existing ``from neva.utils.telemetry import ...`` imports keep working, including
-the module-level helpers used by tests; new code should import from
-:mod:`neva.utils.observability.telemetry`.
+The implementation moved to :mod:`neva.utils.observability.telemetry`; this
+module rebinds its own name in :data:`sys.modules` to that module object, so
+existing imports *and* module-level attribute mutation on the legacy path
+(``monkeypatch.setattr("neva.utils.telemetry._require_opentelemetry", ...)`` in
+downstream test suites) keep working unchanged.
 """
 
-from .observability.telemetry import (  # noqa: F401
-    TelemetryManager,
-    _content_fields,
-    _estimate_tokens,
-    _extract_reasoning_steps,
-    _normalise_attributes,
-    _require_opentelemetry,
-    configure_telemetry,
-    get_telemetry,
-    reset_telemetry,
-)
+import sys
 
-__all__ = [
-    "TelemetryManager",
-    "configure_telemetry",
-    "get_telemetry",
-    "reset_telemetry",
-]
+from .observability import telemetry as _implementation
+
+sys.modules[__name__] = _implementation

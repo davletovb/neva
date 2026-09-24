@@ -8,7 +8,8 @@ so they live together instead of among the general-purpose ``neva.utils``
 modules.
 
 ``neva.utils.telemetry`` and ``neva.utils.observer`` remain importable as
-compatibility shims that re-export the public objects defined here.
+compatibility shims that alias the implementation modules defined here, so
+imports *and* module-level attribute mutation on the old paths keep working.
 """
 
 from .observer import SimulationObserver

@@ -1,9 +1,13 @@
-"""Compatibility shim: the implementation moved to :mod:`neva.utils.observability.observer`.
+"""Compatibility shim: ``neva.utils.observer`` *is* the implementation module.
 
-Existing ``from neva.utils.observer import ...`` imports keep working; new code
-should import from :mod:`neva.utils.observability.observer`.
+The implementation moved to :mod:`neva.utils.observability.observer`; this
+module rebinds its own name in :data:`sys.modules` to that module object, so
+existing imports and module-level attribute mutation on the legacy path keep
+working unchanged.
 """
 
-from .observability.observer import SimulationObserver  # noqa: F401
+import sys
 
-__all__ = ["SimulationObserver"]
+from .observability import observer as _implementation
+
+sys.modules[__name__] = _implementation

@@ -27,7 +27,8 @@ from typing import (
 )
 
 from neva.utils.exceptions import MissingDependencyError
-from neva.utils.telemetry import get_telemetry
+
+from .telemetry import get_telemetry
 
 
 def _utcnow_naive() -> datetime:
