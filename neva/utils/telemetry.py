@@ -332,6 +332,7 @@ def _extract_reasoning_steps(response: Optional[str]) -> List[str]:
 class _TelemetryInstruments:
     agent_latency: Any = field(default_factory=_NoOpHistogram)
     llm_latency: Any = field(default_factory=_NoOpHistogram)
+    llm_first_token_latency: Any = field(default_factory=_NoOpHistogram)
     tool_latency: Any = field(default_factory=_NoOpHistogram)
     prompt_tokens: Any = field(default_factory=_NoOpCounter)
     completion_tokens: Any = field(default_factory=_NoOpCounter)
@@ -493,6 +494,11 @@ class TelemetryManager:
                 name="neva.llm.api.latency",
                 unit="s",
                 description="Latency of direct LLM API calls.",
+            )
+            instruments.llm_first_token_latency = self._meter.create_histogram(
+                name="neva.llm.first_token.latency",
+                unit="s",
+                description="Time from provider request start to first streamed text.",
             )
             instruments.tool_latency = self._meter.create_histogram(
                 name="neva.tool.invocation.latency",
@@ -749,6 +755,7 @@ class TelemetryManager:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         latency: Optional[float] = None,
+        first_token_seconds: Optional[float] = None,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
@@ -804,6 +811,10 @@ class TelemetryManager:
         try:
             if latency is not None:
                 self._instruments.llm_latency.record(float(latency), attributes=metric_attrs)
+            if first_token_seconds is not None:
+                self._instruments.llm_first_token_latency.record(
+                    float(first_token_seconds), attributes=metric_attrs
+                )
             if prompt_tokens:
                 self._instruments.prompt_tokens.add(int(prompt_tokens), attributes=metric_attrs)
             if completion_tokens:
@@ -822,6 +833,7 @@ class TelemetryManager:
         log_payload = {
             **metric_attrs,
             "llm.latency_seconds": latency,
+            "llm.first_token_seconds": first_token_seconds,
             "llm.prompt_tokens": prompt_tokens,
             "llm.completion_tokens": completion_tokens,
             "llm.total_tokens": total_tokens,

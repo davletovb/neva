@@ -9,11 +9,12 @@ import math
 import threading
 from contextvars import ContextVar
 from time import perf_counter, sleep
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 
 from neva.agents.base import AIAgent, LLMBackend
+from neva.agents.streaming import StreamEvent, StreamInterruptedError, StreamSession
 from neva.memory import MemoryModule
 from neva.utils.caching import LLMCache
 from neva.utils.exceptions import (
@@ -675,6 +676,158 @@ class GPTAgent(AIAgent):
             empty_error="Grok provider returned empty content.",
         )
 
+    def _stream_chat_completions(self, prompt: str) -> Iterator[str]:
+        """Parse bounded SSE frames, closing the socket on every exit path."""
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": self._chat_messages(prompt),
+            "max_tokens": self._max_output_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        response = requests.post(
+            _chat_completions_url(self.api_base, _CHAT_COMPLETION_URLS[self.provider]),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                **self._extra_headers,
+            },
+            json=payload,
+            timeout=self._request_timeout,
+            stream=True,
+        )
+        try:
+            response.raise_for_status()
+            buffer = bytearray()
+            data_lines: List[str] = []
+            event_bytes = 0
+            done = False
+            # A large read size can hold the first token until the buffer fills.
+            for chunk in response.iter_content(chunk_size=1):
+                buffer.extend(chunk)
+                if len(buffer) > 1_048_576:
+                    raise BackendError("Provider SSE frame exceeds 1 MiB")
+                if buffer.endswith(b"\n"):
+                    line = bytes(buffer[:-1])
+                    buffer.clear()
+                    line = line.rstrip(b"\r")
+                    if not line:
+                        if not data_lines:
+                            continue
+                        event_payload = "\n".join(data_lines)
+                        data_lines.clear()
+                        event_bytes = 0
+                        if event_payload == "[DONE]":
+                            done = True
+                            break
+                        try:
+                            event = json.loads(event_payload)
+                        except (ValueError, UnicodeError) as exc:
+                            raise BackendError("Provider returned malformed SSE JSON") from exc
+                        if not isinstance(event, dict):
+                            raise BackendError("Provider returned malformed SSE event")
+                        if "error" in event:
+                            raise BackendError("Provider returned a stream error")
+                        usage = event.get("usage")
+                        if isinstance(usage, dict):
+                            self._last_provider_usage = {
+                                "prompt_tokens": usage.get(
+                                    "prompt_tokens", usage.get("input_tokens")
+                                ),
+                                "completion_tokens": usage.get(
+                                    "completion_tokens", usage.get("output_tokens")
+                                ),
+                            }
+                        choices = event.get("choices", [])
+                        if not isinstance(choices, list):
+                            raise BackendError("Provider returned malformed stream choices")
+                        if choices:
+                            choice = choices[0]
+                            if not isinstance(choice, dict) or not isinstance(
+                                choice.get("delta"), dict
+                            ):
+                                raise BackendError("Provider returned malformed stream delta")
+                            content = choice["delta"].get("content")
+                            if content is not None:
+                                if not isinstance(content, str):
+                                    raise BackendError("Provider returned non-text stream delta")
+                                if content:
+                                    yield content
+                    elif line.startswith(b"data:"):
+                        event_bytes += len(line)
+                        if event_bytes > 1_048_576:
+                            raise BackendError("Provider SSE event exceeds 1 MiB")
+                        try:
+                            data_lines.append(line[5:].lstrip(b" ").decode("utf-8"))
+                        except UnicodeError as exc:
+                            raise BackendError("Provider returned invalid UTF-8 SSE data") from exc
+                if done:
+                    break
+            if not done:
+                raise requests.ConnectionError("Provider stream ended without a completion marker")
+        finally:
+            response.close()
+
+    def _stream_provider(self, prompt: str) -> Iterator[str]:
+        if self.provider in _CHAT_COMPLETION_URLS:
+            yield from self._stream_chat_completions(prompt)
+        elif self.provider == "anthropic":
+            try:
+                anthropic = importlib.import_module("anthropic")
+            except ImportError as exc:
+                raise ConfigurationError(
+                    "Anthropic streaming requires the 'anthropic' package"
+                ) from exc
+            kwargs: Dict[str, Any] = {"api_key": self.api_key, "max_retries": 0}
+            if self.api_base is not None:
+                kwargs["base_url"] = self.api_base
+            client = anthropic.Anthropic(**kwargs)
+            with client.messages.stream(
+                model=self.model,
+                messages=self._chat_messages(prompt),
+                max_tokens=self._max_output_tokens,
+                timeout=self._request_timeout,
+            ) as stream:
+                yield from stream.text_stream
+                final = stream.get_final_message()
+                usage = getattr(final, "usage", None)
+                if usage is not None:
+                    self._last_provider_usage = {
+                        "prompt_tokens": getattr(usage, "input_tokens", 0),
+                        "completion_tokens": getattr(usage, "output_tokens", 0),
+                    }
+        elif self.provider in _GEMINI_PROVIDERS:
+            try:
+                generative_ai = importlib.import_module("google.generativeai")
+            except ImportError as exc:
+                raise ConfigurationError("Gemini streaming requires 'google-generativeai'") from exc
+            generative_ai.configure(api_key=self.api_key)
+            model = generative_ai.GenerativeModel(self.model)
+            response = model.generate_content(
+                self._prompt_with_history(prompt),
+                generation_config={"max_output_tokens": self._max_output_tokens},
+                request_options={"timeout": self._request_timeout, "retry": None},
+                stream=True,
+            )
+            try:
+                for chunk in response:
+                    usage = _provider_usage_from_gemini(chunk)
+                    if usage:
+                        self._last_provider_usage = usage
+                    try:
+                        content = chunk.text
+                    except ValueError:
+                        content = None
+                    if content:
+                        yield content
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+        else:
+            raise ConfigurationError(f"Unsupported provider '{self.provider}'.")
+
     def _turn_text(self, turn: Any) -> str:
         if turn.speaker == self.name or turn.speaker in {"user", "system"}:
             return str(turn.message)
@@ -819,6 +972,241 @@ class GPTAgent(AIAgent):
         response = self.replayable_backend(cancel_event=cancel_event)(validated_prompt)
         self._cache_store(validated_prompt, response)
         return response
+
+    def stream_response(
+        self, message: str, *, max_queue_size: int = 8, max_response_chars: int = 1_000_000
+    ) -> StreamSession:
+        """Stream a reply with bounded queued deltas and a terminal completion event.
+
+        Only completed responses enter conversation state and cache. An error after
+        a delta raises ``StreamInterruptedError`` carrying the uncommitted text.
+        The session supports synchronous and asynchronous iteration; call ``close``
+        or ``aclose`` when abandoning it early.
+        """
+
+        if self.llm_backend is not None or self._model_backend_wrapper is not None:
+            raise ConfigurationError(
+                "Streaming requires a built-in provider without a model wrapper"
+            )
+        if not self.api_key:
+            raise ConfigurationError("Streaming requires an API key")
+        if (
+            isinstance(max_response_chars, bool)
+            or not isinstance(max_response_chars, int)
+            or max_response_chars < 1
+        ):
+            raise ConfigurationError("max_response_chars must be a positive integer")
+        prompt = self.prompt_validator.validate(self.prepare_prompt(message))
+
+        def produce(emit: Callable[[str], None], cancel: threading.Event) -> StreamEvent:
+            cached = self._cache_lookup(prompt)
+            if cached is not None:
+                emit(cached)
+                self._remember("system", message)
+                self._remember(self.name, cached)
+                return StreamEvent("complete", cached, 0.0, 0.0)
+
+            last_error: Optional[Exception] = None
+            for attempt in range(1, self._max_retries + 2):
+                permit: Optional[ProviderPermit] = None
+                reservation: Optional[SpendReservation] = None
+                released = False
+                accounted = False
+                actual_cost: Optional[float] = None
+                parts: List[str] = []
+                chars = 0
+                first: Optional[float] = None
+                started = perf_counter()
+                try:
+                    if cancel.is_set():
+                        raise RateLimiterCancelledError("LLM stream cancelled")
+                    self._circuit_breaker.allow()
+                    reserve_cost = self._spend_preflight(prompt)
+                    if self._rate_limiter is not None:
+                        self._rate_limiter.acquire(cancel_event=cancel)
+                    if self._provider_resources is not None:
+                        permit = self._provider_resources.acquire(
+                            reserve_cost=(
+                                reserve_cost
+                                if self._provider_resources.max_cost is not None
+                                else 0.0
+                            ),
+                            cancel_event=cancel,
+                        )
+                    if self._spend_budget is not None:
+                        reservation = self._spend_budget.reserve(reserve_cost)
+                    if cancel.is_set():
+                        raise RateLimiterCancelledError("LLM stream cancelled")
+                    started = perf_counter()
+                    self._last_provider_usage = None
+                    with self._response_time_tracker.track():
+                        for delta in self._stream_provider(prompt):
+                            if cancel.is_set():
+                                raise RateLimiterCancelledError("LLM stream cancelled")
+                            if not isinstance(delta, str):
+                                raise BackendError("Provider returned non-text stream delta")
+                            if delta:
+                                if chars + len(delta) > max_response_chars:
+                                    raise BackendError("Provider stream exceeds max_response_chars")
+                                emit(delta)  # bounded queue; blocks producer on slow consumer
+                                parts.append(delta)
+                                chars += len(delta)
+                                if first is None:
+                                    first = perf_counter() - started
+                        if cancel.is_set():
+                            raise RateLimiterCancelledError("LLM stream cancelled")
+                    content = "".join(parts)
+                    if not content.strip():
+                        raise BackendError("Provider stream returned no text")
+                    duration = perf_counter() - started
+                    prompt_tokens, response_tokens = self._token_tracker.record(
+                        self._request_text(prompt), content, usage=self._last_provider_usage
+                    )
+                    accounted = True
+                    self._cost_tracker.add_usage(
+                        self.model,
+                        prompt_tokens + response_tokens,
+                        prompt_tokens=prompt_tokens,
+                        response_tokens=response_tokens,
+                    )
+                    actual_cost = (
+                        self._call_cost(
+                            prompt_tokens=prompt_tokens, response_tokens=response_tokens
+                        )
+                        if reservation is not None
+                        or (
+                            self._provider_resources is not None
+                            and self._provider_resources.max_cost is not None
+                        )
+                        else None
+                    )
+                    try:
+                        self._release_attempt_resources(
+                            permit, reservation, actual_cost=actual_cost
+                        )
+                    finally:
+                        released = True
+                    self._circuit_breaker.record_success()
+                    self._cache_store(prompt, content)
+                    self._remember("system", message)
+                    self._remember(self.name, content)
+                    telemetry = get_telemetry()
+                    if telemetry is not None:
+                        try:
+                            conversation_id = getattr(
+                                self.environment, "conversation_id", f"agent-{self.id}"
+                            )
+                            telemetry.record_llm_api_call(
+                                conversation_id=conversation_id,
+                                agent_name=self.name,
+                                prompt=prompt,
+                                completion=content,
+                                provider=self.provider,
+                                model=self.model,
+                                latency=duration,
+                                first_token_seconds=first,
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=response_tokens,
+                                metadata={
+                                    "attempt": attempt,
+                                    "stream": True,
+                                    "first_token_seconds": first,
+                                    "completion_seconds": duration,
+                                },
+                                conversation_state=self.conversation_state,
+                            )
+                            telemetry.record_agent_turn(
+                                conversation_id=conversation_id,
+                                agent_name=self.name,
+                                prompt=message,
+                                response=content,
+                                latency=duration,
+                                model=self.model,
+                                metadata={"stream": True, "first_token_seconds": first},
+                                conversation_state=self.conversation_state,
+                            )
+                        except Exception:
+                            self._logger.debug("Failed to emit stream telemetry", exc_info=True)
+                    return StreamEvent("complete", content, first, duration)
+                except Exception as exc:
+                    last_error = exc
+                    if not released:
+                        # Settle known usage/partial output, otherwise release
+                        # the reservation as in the ordinary failure path.
+                        if not accounted and (parts or self._last_provider_usage is not None):
+                            try:
+                                p, r = self._token_tracker.record(
+                                    self._request_text(prompt),
+                                    "".join(parts),
+                                    usage=self._last_provider_usage,
+                                )
+                                self._cost_tracker.add_usage(
+                                    self.model, p + r, prompt_tokens=p, response_tokens=r
+                                )
+                                if reservation is not None or (
+                                    self._provider_resources is not None
+                                    and self._provider_resources.max_cost is not None
+                                ):
+                                    actual_cost = self._call_cost(
+                                        prompt_tokens=p, response_tokens=r
+                                    )
+                            except Exception:
+                                self._logger.debug(
+                                    "Failed to estimate partial stream cost", exc_info=True
+                                )
+                        self._release_attempt_resources(
+                            permit, reservation, actual_cost=actual_cost
+                        )
+                    if isinstance(exc, RateLimiterCancelledError):
+                        self._circuit_breaker.record_rejected()
+                        raise
+                    if parts:
+                        self._circuit_breaker.record_failure()
+                        telemetry = get_telemetry()
+                        if telemetry is not None:
+                            try:
+                                telemetry.record_llm_api_call(
+                                    conversation_id=getattr(
+                                        self.environment, "conversation_id", f"agent-{self.id}"
+                                    ),
+                                    agent_name=self.name,
+                                    prompt=prompt,
+                                    completion="".join(parts),
+                                    provider=self.provider,
+                                    model=self.model,
+                                    latency=perf_counter() - started,
+                                    first_token_seconds=first,
+                                    metadata={
+                                        "attempt": attempt,
+                                        "stream": True,
+                                        "stream_status": "interrupted",
+                                    },
+                                )
+                            except Exception:
+                                self._logger.debug(
+                                    "Failed to emit partial telemetry", exc_info=True
+                                )
+                        raise StreamInterruptedError(
+                            "Provider stream failed after emitting text",
+                            "".join(parts),
+                            first,
+                        ) from exc
+                    if isinstance(
+                        exc, (ConfigurationError, CircuitOpenError, SpendBudgetExceededError)
+                    ):
+                        self._circuit_breaker.record_rejected()
+                        raise
+                    if _is_retryable_error(exc):
+                        self._circuit_breaker.record_failure()
+                        if attempt <= self._max_retries:
+                            self._wait_retry(min(30.0, self._retry_backoff**attempt), cancel)
+                            continue
+                    else:
+                        self._circuit_breaker.record_rejected()
+                    raise BackendError("LLM stream failed") from exc
+            raise BackendError("LLM stream failed") from last_error
+
+        return StreamSession(produce, max_queue_size=max_queue_size)
 
 
 __all__ = ["GPTAgent"]
