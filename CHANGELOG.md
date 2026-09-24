@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `PRODUCTION_READINESS.md` defines the release-candidate acceptance plan:
+  installable-artifact checks, live-provider acceptance on a declared matrix,
+  the operational envelope (checkpoint scaling, soak, concurrency, import
+  budget), and the deployment threat model, each with recorded evidence and
+  exit criteria.
 - Opt-in `ModelContextBudget` for provider/model-bound request token envelopes:
   a caller-supplied request counter includes message framing, configured
   output tokens reserve context before each call, and an oversized current
