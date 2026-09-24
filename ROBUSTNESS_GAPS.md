@@ -2,7 +2,7 @@
 
 ## Verified baseline and scope
 
-Updated against `main` at `d18ec11` (through PR #75 merged).
+Updated against `main` at `74f055a` (through PR #76 merged).
 
 - Checkpoint file-size limits are merged: opt-in positive UTF-8 byte counts; limited loads read in 64 KiB chunks (total bounded at limit + 1) and reject overflow before decoding or parsing; oversized saves leave existing files untouched. PR #64 additionally streams save serialization into a sibling temporary file instead of materialising the complete JSON string and byte string, fsyncs it, and atomically installs it with `os.replace` so existing checkpoints survive serialization, staging-write, and replacement failures.
 - FAISS PR #53 remains open/deferred, but PR #73 intentionally supersedes its coverage-omit removal and missing-dependency-test changes while adding broader FAISS correctness/integration coverage. PR #53 should be rebased or retired after #73 lands.
@@ -389,9 +389,27 @@ not provider-native tool
 calling; custom backend/wrapper implementations have no generic stream
 contract and fail explicitly.
 
-### 9. Real-provider examples — not implemented
+### 9. Real-provider examples — implemented as an opt-in smoke example
 
-Keep deterministic offline examples, but add an opt-in live-provider example with explicit credentials, cost expectations, and limits. Clearly distinguish scripted behavior from generated behavior.
+- `examples/live_provider_smoke.py` defaults to a labeled, deterministic
+  scripted response with no credentials or provider request. Live generation
+  requires `--live`, a positive finite `--max-spend-usd`, and `OPENAI_API_KEY`.
+- The live path sends one request to the built-in OpenAI provider using
+  `gpt-4o-mini`, at most 128 output tokens, a 2,000-character formatted
+  context cap, a 15-second request timeout, and zero retries. It prints the
+  generated answer, estimated spend, and whether token counts came from the
+  provider. README documents commands, credential setup, expected cost
+  behavior, and current-pricing verification.
+- Tests prove the default path avoids HTTP even with credentials present,
+  invalid or missing live configuration fails before HTTP, a stubbed live
+  response takes the provider request path once with configured limits, and
+  insufficient estimated budget blocks the request. No test needs a real key.
+
+Boundary: Neva's prices and spend reservation are estimates, not an
+authoritative provider billing limit; the character cap is not a model-aware
+token-context guarantee. Live service availability and provider billing are
+external and are not exercised in CI. Existing multi-agent showcases remain
+scripted offline demonstrations.
 
 ### 10. Model-aware context budgeting — partial
 
@@ -403,11 +421,10 @@ The implemented formatted-text character cap is useful, but it is not a universa
 
 ## Recommended next priorities
 
-Sections 1–8 are now implemented at their documented boundaries.
-The remaining priorities are:
+Sections 1–9 are now implemented at their documented boundaries.
+The remaining priority is:
 
 1. Model-aware context/token budgeting and explicit output-token reservations.
-2. Opt-in live-provider examples with explicit credential/cost/limit guidance.
 
 ## Local delivery status
 
@@ -430,5 +447,6 @@ The remaining priorities are:
 - [x] Complete bounded model-driven tool orchestration with schema/guard feedback and termination limits (PR #74).
 - [x] Complete run manifests, unified seeding, and deterministic offline model-boundary replay (PR #75).
 - [x] Add bounded provider streaming, cancellation, partial-failure handling, and separate first-token/completion latency accounting.
+- [x] Add an opt-in live-provider example, deterministic offline mode, credential/cost guidance, and bounded-call tests (section 9).
 
 The abandoned circuit-breaker test and previous gap document are preserved in the named git stash `circuit-breaker TDD test + gap doc`; that obsolete test was not applied to the new branch.

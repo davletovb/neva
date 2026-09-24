@@ -79,6 +79,36 @@ productivity swarms, and a customer support escalation. Every script runs fully
 offline using scripted LLM backends while still triggering the observer’s
 tool-usage metrics.
 
+### Opt-in live-provider smoke example
+
+`examples/live_provider_smoke.py` makes the difference between scripted and
+generated behavior explicit. Its default run is a deterministic offline stub:
+
+```bash
+python examples/live_provider_smoke.py
+```
+
+To generate one answer using OpenAI, provide your own API key and an explicit
+ceiling on Neva's **estimated** spend (USD):
+
+```bash
+export OPENAI_API_KEY="your-key-from-openai"
+python examples/live_provider_smoke.py --live --max-spend-usd 0.01
+```
+
+The live path uses `gpt-4o-mini`, at most 128 output tokens, a 2,000-character
+formatted context cap, a 15-second request timeout, and zero retries. It makes
+one API call and prints the generated answer and estimated spend. The script
+requires both the `--live` flag and the budget; no API call occurs in the
+default mode. Neva's built-in `CostTracker` prices are static estimates, and
+its spend budget reserves based on estimated prompt tokens and configured
+maximum output tokens. Neither the budget nor the context character cap is a
+provider billing or token-context guarantee. Check
+[current OpenAI pricing](https://platform.openai.com/docs/pricing) and your
+account's usage before running the live path; provider charges may differ.
+The test suite stubs the HTTP response and never uses a real key or incurs a
+provider charge.
+
 ### Observability & Experiment Tracking
 
 The :class:`observer.SimulationObserver` now registers a suite of metrics out of
