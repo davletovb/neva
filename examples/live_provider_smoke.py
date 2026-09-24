@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from neva.agents import GPTAgent
-from neva.utils.exceptions import SpendBudgetExceededError
+from neva.utils.exceptions import BackendError, ConfigurationError, SpendBudgetExceededError
 from neva.utils.metrics import CostTracker, SpendBudget, TokenUsageTracker
 
 MODEL = "gpt-4o-mini"
@@ -99,6 +99,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         response = agent.receive(PROMPT)
     except SpendBudgetExceededError:
         parser.error("estimated prompt + maximum output cost exceeds --max-spend-usd")
+    except (BackendError, ConfigurationError):
+        print(
+            "Live request failed. Check OPENAI_API_KEY, account credit, and network access.",
+            file=sys.stderr,
+        )
+        print(
+            f"Recorded estimated spend so far: ${budget.spent:.6f}. "
+            "Provider billing may still include a failed or timed-out request.",
+            file=sys.stderr,
+        )
+        return 1
     print(response)
     print(
         f"Estimated spend for this run: ${budget.spent:.6f} "

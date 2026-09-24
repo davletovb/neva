@@ -1,6 +1,7 @@
 """Keep the live provider example opt-in without using external credentials."""
 
 import pytest
+import requests
 
 from examples import live_provider_smoke as example
 
@@ -97,3 +98,29 @@ def test_insufficient_estimated_budget_prevents_request(monkeypatch, capsys):
         example.main(["--live", "--max-spend-usd", "0.000001"])
     assert exc.value.code == 2
     assert "estimated prompt + maximum output cost" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("failure", ["unauthorized", "timeout"])
+def test_live_provider_failure_reports_hint_and_recorded_spend(monkeypatch, capsys, failure):
+    monkeypatch.setenv("OPENAI_API_KEY", "example-test-secret")
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        if failure == "timeout":
+            raise requests.Timeout("test request timed out")
+        response = requests.Response()
+        response.status_code = 401
+        response.url = "https://api.openai.com/v1/chat/completions"
+        return response
+
+    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    assert example.main(["--live", "--max-spend-usd", "0.01"]) == 1
+    assert len(calls) == 1
+    output = capsys.readouterr()
+    assert "Live request failed" in output.err
+    assert "OPENAI_API_KEY" in output.err
+    assert "Recorded estimated spend so far: $0.000000" in output.err
+    assert "Provider billing may still include" in output.err
+    assert "example-test-secret" not in output.out + output.err
+    assert "Traceback" not in output.err

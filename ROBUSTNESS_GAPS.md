@@ -398,15 +398,19 @@ contract and fail explicitly.
   `gpt-4o-mini`, at most 128 output tokens, a 2,000-character formatted
   context cap, a 15-second request timeout, and zero retries. It prints the
   generated answer, estimated spend, and whether token counts came from the
-  provider. README documents commands, credential setup, expected cost
+  provider on success. Provider failures return a short credential/account/
+  network hint and recorded estimated spend without exposing the API key or
+  printing a traceback. README documents commands, credential setup, expected cost
   behavior, and current-pricing verification.
 - Tests prove the default path avoids HTTP even with credentials present,
   invalid or missing live configuration fails before HTTP, a stubbed live
   response takes the provider request path once with configured limits, and
-  insufficient estimated budget blocks the request. No test needs a real key.
+  insufficient estimated budget blocks the request, and stubbed 401/timeout
+  failures exit cleanly with recorded spend. No test needs a real key.
 
 Boundary: Neva's prices and spend reservation are estimates, not an
-authoritative provider billing limit; the character cap is not a model-aware
+authoritative provider billing limit; a timed-out request might incur charges
+even if Neva records zero spend. The character cap is not a model-aware
 token-context guarantee. Live service availability and provider billing are
 external and are not exercised in CI. Existing multi-agent showcases remain
 scripted offline demonstrations.

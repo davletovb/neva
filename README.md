@@ -98,7 +98,10 @@ python examples/live_provider_smoke.py --live --max-spend-usd 0.01
 
 The live path uses `gpt-4o-mini`, at most 128 output tokens, a 2,000-character
 formatted context cap, a 15-second request timeout, and zero retries. It makes
-one API call and prints the generated answer and estimated spend. The script
+one API call and, on success, prints the generated answer and estimated spend.
+On a provider failure it exits nonzero with a credential/account/network hint
+and the recorded estimated spend; a timed-out request might still be billed.
+The script
 requires both the `--live` flag and the budget; no API call occurs in the
 default mode. Neva's built-in `CostTracker` prices are static estimates, and
 its spend budget reserves based on estimated prompt tokens and configured
