@@ -322,7 +322,10 @@ def _scheduler_config(scheduler: Optional["Scheduler"]) -> Optional[Dict[str, An
             if isinstance(item, tuple) and len(item) == 2:
                 value = getattr(item[1], "name", None)
                 rendered.append(
-                    [_json_native(item[0]), value if isinstance(value, str) else _json_native(item[1])]
+                    [
+                        _json_native(item[0]),
+                        value if isinstance(value, str) else _json_native(item[1]),
+                    ]
                 )
             else:
                 value = getattr(item, "name", None)
