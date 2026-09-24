@@ -139,8 +139,8 @@ agent = GPTAgent(
 )
 ```
 
-Install the optional tokenizer with `pip install tiktoken`; its first encoding
-load may require network access. For offline use, pre-populate tiktoken's
+Install the optional tokenizer with `pip install neva[budgeting]` (or
+`pip install tiktoken`); its first encoding load may require network access. For offline use, pre-populate tiktoken's
 encoding cache and point `TIKTOKEN_CACHE_DIR` at that directory; a missing or
 invalid entry fails closed with a configuration error. The OpenAI helper
 encodes special-token-looking user text as ordinary content and counts the chosen model's
@@ -220,10 +220,12 @@ with the core project. Install additional bundles as needed:
 - **ML experiment tracking** – `poetry install --extras "mlops"`
 - **Additional LLM providers (Anthropic Claude, Google Gemini, xAI Grok)** –
   `poetry install --extras "providers"`
+- **Context-budget token counting** – `poetry install --extras "budgeting"`
 - **Everything** – `poetry install --extras "all" --with dev`
 
 Prefer `pip`? The same extras are available via `pip install .[tools]`,
-`pip install .[providers]`, or `pip install .[all]`. Updated
+`pip install .[providers]`, `pip install .[budgeting]`, or
+`pip install .[all]`. Updated
 `requirements-*.txt` files are provided for
 environments that cannot yet adopt Poetry.
 

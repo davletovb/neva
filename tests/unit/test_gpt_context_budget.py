@@ -101,6 +101,26 @@ def test_special_token_looking_text_in_history_is_counted_as_ordinary_text(monke
         assert agent.respond(message) == "ok"
 
 
+def test_declared_tiktoken_release_maps_the_documented_models():
+    """The tiktoken release we declare must know the models the counter accepts.
+
+    Every other counter test replaces the tiktoken import with a fake, so the
+    declared floor is otherwise never exercised: with tiktoken 0.6.0 (the first
+    pin) ``encoding_for_model("gpt-4o-mini")`` raises KeyError and
+    ``openai_chat_counter`` fails with ConfigurationError.
+    """
+
+    tiktoken = pytest.importorskip("tiktoken")
+
+    assert tiktoken.encoding_name_for_model("gpt-4o-mini") == "o200k_base"
+
+    try:
+        counter = openai_chat_counter("gpt-4o-mini")
+    except ConfigurationError as exc:  # pragma: no cover - needs a reachable encoding download.
+        pytest.skip(f"tiktoken encoding unavailable in this environment: {exc}")
+    assert counter([{"role": "user", "content": "hello world"}]) > 0
+
+
 def test_openai_counter_requires_optional_tokenizer(monkeypatch):
     def missing(name):
         raise ImportError(name)

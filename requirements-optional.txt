@@ -19,6 +19,10 @@ google-generativeai==0.3.2
 faiss-cpu==1.7.4
 numpy==1.26.4
 
+# budgeting extra (optional tokenizer for openai_chat_counter; the gpt-4o
+# model mapping needs tiktoken>=0.7.0)
+tiktoken==0.14.0
+
 # observability extra
 opentelemetry-api==1.23.0
 opentelemetry-sdk==1.23.0
