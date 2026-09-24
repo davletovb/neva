@@ -1412,8 +1412,10 @@ class ReplayBackend:
         with self._lock:
             self._advance()
             if len(self._consumed) != len(self._records):
+                consumed = len(self._consumed)
+                total = len(self._records)
                 raise ReplayMismatchError(
-                    f"replay consumed {len(self._consumed)} of {len(self._records)} recorded model calls"
+                    f"replay consumed {consumed} of {total} recorded model calls"
                 )
 
     def reset(self) -> None:
