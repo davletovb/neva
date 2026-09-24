@@ -5,11 +5,41 @@ from neva.agents.gpt import (
     GPTAgent,
     _chat_completions_url,
     _extract_chat_content,
+    _is_retryable_error,
     _provider_usage_from_gemini,
 )
 from neva.utils.exceptions import BackendError, CircuitOpenError, ConfigurationError
 from neva.utils.metrics import TokenUsageTracker
 from neva.utils.safety import CircuitBreaker
+
+
+def _install_gemini(monkeypatch, responses):
+    """Install a fake ``google.genai`` module and record transport calls."""
+
+    if not isinstance(responses, list):
+        responses = [responses]
+    stub = {"client": None, "calls": []}
+
+    class _Models:
+        def generate_content(self, *, model, contents, config):
+            stub["calls"].append({"model": model, "contents": contents, "config": config})
+            return responses[min(len(stub["calls"]) - 1, len(responses) - 1)]
+
+        def generate_content_stream(self, *, model, contents, config):
+            stub["calls"].append({"model": model, "contents": contents, "config": config})
+            return responses[min(len(stub["calls"]) - 1, len(responses) - 1)]
+
+    class _Client:
+        def __init__(self, **kwargs):
+            stub["client"] = kwargs
+            self.models = _Models()
+
+    module = type("GenAI", (), {"Client": _Client})
+    monkeypatch.setattr(
+        "neva.agents.gpt._import_module",
+        lambda name: module if name == "google.genai" else (_ for _ in ()).throw(ImportError(name)),
+    )
+    return stub
 
 
 class _FakeResponse:
@@ -281,93 +311,34 @@ def test_anthropic_passes_request_timeout(monkeypatch):
     assert captured["max_tokens"] == 1024
 
 
-def test_gemini_passes_request_timeout(monkeypatch):
-    captured = {}
-
-    class _Model:
-        def __init__(self, model):
-            self.model = model
-
-        def generate_content(self, prompt, **kwargs):
-            captured.update(kwargs)
-            return type("Resp", (), {"text": "ok"})()
-
-    class _GenAI:
-        @staticmethod
-        def configure(api_key):
-            del api_key
-
-        GenerativeModel = _Model
-
-    monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
-        lambda name: (
-            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
-        ),
-    )
+def test_gemini_passes_transport_options(monkeypatch):
+    stub = _install_gemini(monkeypatch, type("Resp", (), {"text": "ok"})())
     agent = GPTAgent(api_key="k", provider="gemini", max_retries=0, request_timeout=7.5)
     assert agent._invoke_gemini("hello") == "ok"
-    assert captured["request_options"] == {"timeout": 7.5, "retry": None}
-    assert captured["generation_config"] == {"max_output_tokens": 1024}
+    assert stub["client"] == {
+        "api_key": "k",
+        "http_options": {"timeout": 7500, "retry_options": {"attempts": 1}},
+    }
+    assert stub["calls"][0]["config"] == {"max_output_tokens": 1024}
 
 
 def test_gemini_success_and_candidates(monkeypatch):
-    class _Model:
-        def __init__(self, model):
-            self.model = model
+    class _Resp:
+        def __init__(self, text=None, candidates=None):
+            self.text = text
+            self.candidates = candidates
 
-        def generate_content(self, prompt, **kwargs):
-            del prompt
-            return type("Resp", (), {"text": "gemini-ok"})()
-
-    class _GenAI:
-        configured = []
-
-        @staticmethod
-        def configure(api_key):
-            _GenAI.configured.append(api_key)
-
-        GenerativeModel = _Model
-
-    monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
-        lambda name: (
-            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
-        ),
+    _part = type("P", (), {"text": "from-candidate"})()
+    _content = type("B", (), {"parts": [_part]})()
+    _candidate = type("C", (), {"content": _content})()
+    stub = _install_gemini(
+        monkeypatch,
+        [_Resp(text="gemini-ok"), _Resp(text="", candidates=[_candidate])],
     )
     agent = GPTAgent(api_key="k", provider="gemini", name="Scout", max_retries=0)
     assert agent._invoke_gemini("hello") == "gemini-ok"
-
-    class _Part:
-        text = "from-candidate"
-
-    class _Candidate:
-        content = type("C", (), {"parts": [_Part()]})()
-
-    class _EmptyTextModel:
-        def __init__(self, model):
-            self.model = model
-
-        def generate_content(self, prompt, **kwargs):
-            del prompt
-            return type("Resp", (), {"text": "", "candidates": [_Candidate()]})()
-
-    class _CandidateGenAI:
-        @staticmethod
-        def configure(api_key):
-            del api_key
-
-        GenerativeModel = _EmptyTextModel
-
-    monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
-        lambda name: (
-            _CandidateGenAI
-            if name == "google.generativeai"
-            else (_ for _ in ()).throw(ImportError(name))
-        ),
-    )
     assert agent._invoke_gemini("hello") == "from-candidate"
+    assert stub["client"]["api_key"] == "k"
 
 
 def test_http_error_is_retried_then_fails(monkeypatch):
@@ -634,29 +605,7 @@ def test_gemini_keeps_turns_that_fit_serialized_budget():
 
 
 def test_gemini_invoke_sends_budgeted_text(monkeypatch):
-    captured = []
-
-    class _Model:
-        def __init__(self, model):
-            self.model = model
-
-        def generate_content(self, prompt, **kwargs):
-            captured.append(prompt)
-            return type("Resp", (), {"text": "ok"})()
-
-    class _GenAI:
-        @staticmethod
-        def configure(api_key):
-            del api_key
-
-        GenerativeModel = _Model
-
-    monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
-        lambda name: (
-            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
-        ),
-    )
+    stub = _install_gemini(monkeypatch, type("Resp", (), {"text": "ok"})())
     tight = GPTAgent(
         api_key="k",
         provider="gemini",
@@ -667,9 +616,9 @@ def test_gemini_invoke_sends_budgeted_text(monkeypatch):
     tight._remember("user", "22222222")
     tight._remember("Scout", "ack")
     tight._invoke_gemini("3333")
-    assert captured == ["3333"]
+    assert [call["contents"] for call in stub["calls"]] == ["3333"]
 
-    captured.clear()
+    stub["calls"].clear()
     roomy = GPTAgent(
         api_key="k",
         provider="gemini",
@@ -680,35 +629,13 @@ def test_gemini_invoke_sends_budgeted_text(monkeypatch):
     roomy._remember("user", "22222222")
     roomy._remember("Scout", "ack")
     roomy._invoke_gemini("3333")
-    assert len(captured[0]) == 52
-    assert captured[0] == roomy._request_text("3333")
+    assert len(stub["calls"][0]["contents"]) == 52
+    assert stub["calls"][0]["contents"] == roomy._request_text("3333")
 
 
 def test_gemini_token_tracker_counts_flattened_history(monkeypatch):
     tracker = TokenUsageTracker()
-    captured = []
-
-    class _Model:
-        def __init__(self, model):
-            self.model = model
-
-        def generate_content(self, prompt, **kwargs):
-            captured.append(prompt)
-            return type("Resp", (), {"text": "ok"})()
-
-    class _GenAI:
-        @staticmethod
-        def configure(api_key):
-            del api_key
-
-        GenerativeModel = _Model
-
-    monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
-        lambda name: (
-            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
-        ),
-    )
+    stub = _install_gemini(monkeypatch, type("Resp", (), {"text": "ok"})())
     agent = GPTAgent(
         api_key="k",
         provider="gemini",
@@ -718,7 +645,7 @@ def test_gemini_token_tracker_counts_flattened_history(monkeypatch):
     )
     agent.receive("hello there friend", sender="user")
     agent.receive("follow up question", sender="user")
-    assert "Conversation so far:" in captured[1]
+    assert "Conversation so far:" in stub["calls"][1]["contents"]
     assert tracker.records[1][0] > tracker.records[0][0]
 
 
@@ -729,26 +656,7 @@ def test_gemini_uses_provider_usage_metadata(monkeypatch):
         prompt_token_count = 21
         candidates_token_count = 4
 
-    class _Model:
-        def __init__(self, model):
-            self.model = model
-
-        def generate_content(self, prompt, **kwargs):
-            return type("Resp", (), {"text": "ok", "usage_metadata": _Usage()})()
-
-    class _GenAI:
-        @staticmethod
-        def configure(api_key):
-            del api_key
-
-        GenerativeModel = _Model
-
-    monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
-        lambda name: (
-            _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
-        ),
-    )
+    _install_gemini(monkeypatch, type("Resp", (), {"text": "ok", "usage_metadata": _Usage()})())
     agent = GPTAgent(
         api_key="k",
         provider="gemini",
@@ -759,6 +667,35 @@ def test_gemini_uses_provider_usage_metadata(monkeypatch):
     assert "ok" in agent.respond("hello")
     assert tracker.records[-1] == (21, 4)
     assert tracker.estimated_calls == 0
+
+
+def test_gemini_api_base_reaches_the_client(monkeypatch):
+    stub = _install_gemini(monkeypatch, type("Resp", (), {"text": "ok"})())
+    agent = GPTAgent(
+        api_key="k",
+        provider="gemini",
+        max_retries=0,
+        api_base="http://127.0.0.1:9999/gemini",
+    )
+    assert agent._invoke_gemini("hello") == "ok"
+    assert stub["client"]["http_options"]["base_url"] == "http://127.0.0.1:9999/gemini"
+
+
+def test_gemini_whitespace_only_text_fails_closed(monkeypatch):
+    _install_gemini(monkeypatch, type("Resp", (), {"text": "   ", "candidates": None})())
+    agent = GPTAgent(api_key="k", provider="gemini", max_retries=0)
+    with pytest.raises(BackendError, match="empty content"):
+        agent._invoke_gemini("hello")
+
+
+def test_gemini_api_error_codes_drive_retry_classification():
+    class _ApiError(Exception):
+        def __init__(self, code):
+            self.code = code
+
+    assert _is_retryable_error(_ApiError(429))
+    assert _is_retryable_error(_ApiError(503))
+    assert not _is_retryable_error(_ApiError(400))
 
 
 def test_provider_usage_from_gemini_accepts_dicts_and_objects():
