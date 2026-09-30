@@ -343,10 +343,6 @@ def main() -> int:
         raw_other = sum(duration_minutes(job.get("started_at"), job.get("completed_at")) for job in other)
         print(f"- Other runner groups ({', '.join(groups)}): {fmt_int(raw_other)} raw minutes, excluded from the hosted estimate")
 
-    workflow_runs = Counter(
-        (str(run.get("workflow_id") or run.get("path") or run.get("name") or "unknown"), str(run.get("event", "")))
-        for run in runs
-    )
     by_flow: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {"billed": 0, "count": 0, "raw": 0.0, "name": "", "path": ""}
     )
