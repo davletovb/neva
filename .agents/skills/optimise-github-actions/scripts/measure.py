@@ -131,7 +131,11 @@ def github_timestamp(value: dt.datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def filtered_runs(repo: str, start: dt.datetime, end: dt.datetime) -> tuple[list[dict[str, Any]], int]:
+def filtered_runs(
+    repo: str,
+    start: dt.datetime,
+    end: dt.datetime,
+) -> tuple[list[dict[str, Any]], int]:
     query = f"{github_timestamp(start)}..{github_timestamp(end)}"
     pages = gh_api(f"repos/{repo}/actions/runs?per_page=100&created={query}")
     runs = [run for run in flatten_pages(pages, "workflow_runs") if isinstance(run, dict)]
@@ -264,7 +268,10 @@ def collect_jobs(repo: str, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def print_table(headers: list[str], rows: list[list[str]]) -> None:
     print("| " + " | ".join(headers) + " |")
-    print("|" + "|".join("---:" if i < len(headers) - 1 else "---" for i in range(len(headers))) + "|")
+    alignment = [
+        "---:" if i < len(headers) - 1 else "---" for i in range(len(headers))
+    ]
+    print("|" + "|".join(alignment) + "|")
     for row in rows:
         print("| " + " | ".join(row) + " |")
 
@@ -272,7 +279,12 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", help="OWNER/REPO; defaults to current gh repository")
-    parser.add_argument("--days", type=int, default=14, help="Number of completed UTC days to measure")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=14,
+        help="Number of completed UTC days to measure",
+    )
     parser.add_argument("--out", help="Optional path for raw job JSON")
     args = parser.parse_args()
 
@@ -284,9 +296,11 @@ def main() -> int:
         repo_info_pages = gh_api(f"repos/{repo}")
         repo_info = first_object(repo_info_pages)
         runs, window_start, window_end = collect_runs(repo, args.days)
+        window = (
+            f"{github_timestamp(window_start)} through {github_timestamp(window_end)}"
+        )
         print(
-            f"{len(runs)} runs in {args.days} completed UTC days "
-            f"({github_timestamp(window_start)} through {github_timestamp(window_end)}); reading jobs...",
+            f"{len(runs)} runs in {args.days} completed UTC days ({window}); reading jobs...",
             file=sys.stderr,
         )
         jobs = collect_jobs(repo, runs)
@@ -326,7 +340,10 @@ def main() -> int:
     print(f"# GitHub Actions usage: {repo}, {args.days} completed UTC days\n")
     print(f"- Window: {github_timestamp(window_start)} through {github_timestamp(window_end)}")
     if repo_info.get("private") is False:
-        print("> Public repository: standard hosted runners are generally not a direct minutes charge; use these figures mainly to compare runner usage and speed.\n")
+        print(
+            "> Public repository: standard hosted runners are generally not a direct minutes "
+            "charge; use these figures mainly to compare runner usage and speed.\n"
+        )
 
     print(f"- Runs: {len(runs)}; jobs that ran: {len(ran)}")
     print(
@@ -340,8 +357,14 @@ def main() -> int:
     )
     if other:
         groups = sorted({str(job.get("runner_group_name") or "self-hosted/other") for job in other})
-        raw_other = sum(duration_minutes(job.get("started_at"), job.get("completed_at")) for job in other)
-        print(f"- Other runner groups ({', '.join(groups)}): {fmt_int(raw_other)} raw minutes, excluded from the hosted estimate")
+        raw_other = sum(
+            duration_minutes(job.get("started_at"), job.get("completed_at"))
+            for job in other
+        )
+        print(
+            f"- Other runner groups ({', '.join(groups)}): {fmt_int(raw_other)} raw minutes, "
+            "excluded from the hosted estimate"
+        )
 
     by_flow: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {"billed": 0, "count": 0, "raw": 0.0, "name": "", "path": ""}
@@ -371,7 +394,12 @@ def main() -> int:
 
     print("\n## By workflow and event\n")
     flow_rows: list[list[str]] = []
-    for (workflow_id, event), values in sorted(by_flow.items(), key=lambda item: item[1]["billed"], reverse=True)[:20]:
+    top_flows = sorted(
+        by_flow.items(),
+        key=lambda item: item[1]["billed"],
+        reverse=True,
+    )[:20]
+    for (workflow_id, event), values in top_flows:
         label = values["name"] or workflow_id
         if values["path"]:
             label = f"{label} [{values['path']}]"
@@ -388,11 +416,16 @@ def main() -> int:
 
     print("\n## Top jobs\n")
     job_rows: list[list[str]] = []
-    for (workflow_id, event, name), values in sorted(by_job.items(), key=lambda item: item[1]["billed"], reverse=True)[:30]:
+    top_jobs = sorted(
+        by_job.items(),
+        key=lambda item: item[1]["billed"],
+        reverse=True,
+    )[:30]
+    for (workflow_id, event, name), values in top_jobs:
         run_count = sum(
             max(1, int(run.get("run_attempt") or 1))
             for run in runs
-            if str(run.get("workflow_id") or run.get("path") or run.get("name") or "unknown") == workflow_id
+            if workflow_identity(run)[0] == workflow_id
             and str(run.get("event", "")) == event
         )
         ran_in = len(values["runs"])
