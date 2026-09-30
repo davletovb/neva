@@ -268,9 +268,7 @@ def collect_jobs(repo: str, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def print_table(headers: list[str], rows: list[list[str]]) -> None:
     print("| " + " | ".join(headers) + " |")
-    alignment = [
-        "---:" if i < len(headers) - 1 else "---" for i in range(len(headers))
-    ]
+    alignment = ["---:" if i < len(headers) - 1 else "---" for i in range(len(headers))]
     print("|" + "|".join(alignment) + "|")
     for row in rows:
         print("| " + " | ".join(row) + " |")
@@ -296,9 +294,7 @@ def main() -> int:
         repo_info_pages = gh_api(f"repos/{repo}")
         repo_info = first_object(repo_info_pages)
         runs, window_start, window_end = collect_runs(repo, args.days)
-        window = (
-            f"{github_timestamp(window_start)} through {github_timestamp(window_end)}"
-        )
+        window = f"{github_timestamp(window_start)} through {github_timestamp(window_end)}"
         print(
             f"{len(runs)} runs in {args.days} completed UTC days ({window}); reading jobs...",
             file=sys.stderr,
@@ -327,15 +323,9 @@ def main() -> int:
     )
     rounding = max(0.0, total - raw_weighted)
     cancelled = sum(
-        billed_estimate(job)
-        for job in hosted
-        if job.get("run_conclusion") == "cancelled"
+        billed_estimate(job) for job in hosted if job.get("run_conclusion") == "cancelled"
     )
-    failed = sum(
-        billed_estimate(job)
-        for job in hosted
-        if job.get("run_conclusion") == "failure"
-    )
+    failed = sum(billed_estimate(job) for job in hosted if job.get("run_conclusion") == "failure")
 
     print(f"# GitHub Actions usage: {repo}, {args.days} completed UTC days\n")
     print(f"- Window: {github_timestamp(window_start)} through {github_timestamp(window_end)}")
@@ -358,8 +348,7 @@ def main() -> int:
     if other:
         groups = sorted({str(job.get("runner_group_name") or "self-hosted/other") for job in other})
         raw_other = sum(
-            duration_minutes(job.get("started_at"), job.get("completed_at"))
-            for job in other
+            duration_minutes(job.get("started_at"), job.get("completed_at")) for job in other
         )
         print(
             f"- Other runner groups ({', '.join(groups)}): {fmt_int(raw_other)} raw minutes, "
@@ -425,8 +414,7 @@ def main() -> int:
         run_count = sum(
             max(1, int(run.get("run_attempt") or 1))
             for run in runs
-            if workflow_identity(run)[0] == workflow_id
-            and str(run.get("event", "")) == event
+            if workflow_identity(run)[0] == workflow_id and str(run.get("event", "")) == event
         )
         ran_in = len(values["runs"])
         workflow_label = values["name"] or workflow_id
