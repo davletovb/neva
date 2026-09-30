@@ -116,26 +116,107 @@ def pct(part: float, total: float) -> str:
     return f"{(100.0 * part / total) if total else 0.0:.1f}%"
 
 
-def collect_runs(repo: str, days: int) -> list[dict[str, Any]]:
-    today = dt.datetime.now(dt.timezone.utc).date()
-    dates = [(today - dt.timedelta(days=i)).isoformat() for i in range(days)]
+UTC = dt.timezone.utc
+MAX_FILTERED_RUNS = 1000
 
-    def one_day(date: str) -> list[dict[str, Any]]:
-        pages = gh_api(f"repos/{repo}/actions/runs?per_page=100&created={date}")
-        return flatten_pages(pages, "workflow_runs")
+
+def first_object(pages: Iterable[Any]) -> dict[str, Any]:
+    for page in pages:
+        if isinstance(page, dict):
+            return page
+    return {}
+
+
+def github_timestamp(value: dt.datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def filtered_runs(repo: str, start: dt.datetime, end: dt.datetime) -> tuple[list[dict[str, Any]], int]:
+    query = f"{github_timestamp(start)}..{github_timestamp(end)}"
+    pages = gh_api(f"repos/{repo}/actions/runs?per_page=100&created={query}")
+    runs = [run for run in flatten_pages(pages, "workflow_runs") if isinstance(run, dict)]
+    first = first_object(pages)
+    total_count = int(first.get("total_count") or len(runs))
+    return runs, total_count
+
+
+def collect_interval(repo: str, start: dt.datetime, end: dt.datetime) -> list[dict[str, Any]]:
+    runs, total_count = filtered_runs(repo, start, end)
+    if total_count < MAX_FILTERED_RUNS:
+        return runs
+
+    span_seconds = int((end - start).total_seconds())
+    if span_seconds <= 0:
+        raise RuntimeError(
+            f"GitHub returned at least {MAX_FILTERED_RUNS} runs for one second "
+            f"({github_timestamp(start)}); cannot measure without truncation"
+        )
+
+    midpoint = start + dt.timedelta(seconds=span_seconds // 2)
+    left = collect_interval(repo, start, midpoint)
+    right_start = midpoint + dt.timedelta(seconds=1)
+    right = collect_interval(repo, right_start, end) if right_start <= end else []
+    return left + right
+
+
+def collect_runs(repo: str, days: int) -> tuple[list[dict[str, Any]], dt.datetime, dt.datetime]:
+    # Use completed UTC days so --days N always covers exactly N full days.
+    end_exclusive = dt.datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end_exclusive - dt.timedelta(days=days)
+    end_inclusive = end_exclusive - dt.timedelta(seconds=1)
+    dates = [start.date() + dt.timedelta(days=i) for i in range(days)]
+
+    def one_day(day: dt.date) -> list[dict[str, Any]]:
+        day_start = dt.datetime.combine(day, dt.time.min, tzinfo=UTC)
+        day_end = day_start + dt.timedelta(days=1) - dt.timedelta(seconds=1)
+        return collect_interval(repo, day_start, day_end)
 
     runs: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         for day_runs in pool.map(one_day, dates):
             runs.extend(day_runs)
-    return runs
+
+    # Split queries are adjacent, but de-duplicate defensively by workflow-run id.
+    by_id = {run.get("id"): run for run in runs if run.get("id") is not None}
+    return list(by_id.values()), start, end_inclusive
+
+
+def attempt_conclusion(repo: str, run: dict[str, Any], attempt: int, attempts: int) -> str | None:
+    if attempts == 1:
+        return run.get("conclusion")
+    pages = gh_api(f"repos/{repo}/actions/runs/{run['id']}/attempts/{attempt}")
+    return first_object(pages).get("conclusion")
+
+
+def workflow_identity(run: dict[str, Any]) -> tuple[str, str, str]:
+    workflow_id = str(run.get("workflow_id") or run.get("path") or run.get("name") or "unknown")
+    name = str(run.get("name") or workflow_id)
+    path = str(run.get("path") or "")
+    return workflow_id, name, path
+
+
+def pr_identity(run: dict[str, Any]) -> str:
+    pull_requests = run.get("pull_requests")
+    if isinstance(pull_requests, list) and pull_requests:
+        first = pull_requests[0]
+        if isinstance(first, dict) and first.get("number") is not None:
+            return f"PR #{first['number']}"
+
+    head_repo = run.get("head_repository")
+    if isinstance(head_repo, dict):
+        full_name = head_repo.get("full_name")
+        if full_name:
+            return f"{full_name}:{run.get('head_branch') or '?'}"
+    return f"unknown-repo:{run.get('head_branch') or '?'}"
 
 
 def collect_jobs(repo: str, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def one_run(run: dict[str, Any]) -> list[dict[str, Any]]:
         run_id = run["id"]
         attempts = max(1, int(run.get("run_attempt") or 1))
+        workflow_id, workflow_name, workflow_path = workflow_identity(run)
         result: list[dict[str, Any]] = []
+
         for attempt in range(1, attempts + 1):
             path = f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
             try:
@@ -145,15 +226,22 @@ def collect_jobs(repo: str, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     pages = gh_api(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
                 else:
                     raise
+
+            run_conclusion = attempt_conclusion(repo, run, attempt, attempts)
             for job in flatten_pages(pages, "jobs"):
                 if not isinstance(job, dict):
                     continue
                 result.append(
                     {
                         "run": run_id,
-                        "workflow": run.get("name", ""),
+                        "attempt": attempt,
+                        "run_conclusion": run_conclusion,
+                        "workflow_id": workflow_id,
+                        "workflow": workflow_name,
+                        "workflow_path": workflow_path,
                         "event": run.get("event", ""),
                         "branch": run.get("head_branch", ""),
+                        "pr_identity": pr_identity(run),
                         "job": job.get("name", ""),
                         "conclusion": job.get("conclusion"),
                         "labels": job.get("labels", []),
@@ -184,7 +272,7 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", help="OWNER/REPO; defaults to current gh repository")
-    parser.add_argument("--days", type=int, default=14)
+    parser.add_argument("--days", type=int, default=14, help="Number of completed UTC days to measure")
     parser.add_argument("--out", help="Optional path for raw job JSON")
     args = parser.parse_args()
 
@@ -194,11 +282,15 @@ def main() -> int:
     try:
         repo = args.repo or detect_repo()
         repo_info_pages = gh_api(f"repos/{repo}")
-        repo_info = repo_info_pages[0] if repo_info_pages else {}
-        runs = collect_runs(repo, args.days)
-        print(f"{len(runs)} runs in {args.days} days; reading jobs...", file=sys.stderr)
+        repo_info = first_object(repo_info_pages)
+        runs, window_start, window_end = collect_runs(repo, args.days)
+        print(
+            f"{len(runs)} runs in {args.days} completed UTC days "
+            f"({github_timestamp(window_start)} through {github_timestamp(window_end)}); reading jobs...",
+            file=sys.stderr,
+        )
         jobs = collect_jobs(repo, runs)
-    except (RuntimeError, json.JSONDecodeError) as exc:
+    except (RuntimeError, json.JSONDecodeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -220,33 +312,50 @@ def main() -> int:
         for job in hosted
     )
     rounding = max(0.0, total - raw_weighted)
-    cancelled = sum(billed_estimate(job) for job in hosted if job.get("conclusion") == "cancelled")
-    failed = sum(billed_estimate(job) for job in hosted if job.get("conclusion") == "failure")
+    cancelled = sum(
+        billed_estimate(job)
+        for job in hosted
+        if job.get("run_conclusion") == "cancelled"
+    )
+    failed = sum(
+        billed_estimate(job)
+        for job in hosted
+        if job.get("run_conclusion") == "failure"
+    )
 
-    print(f"# GitHub Actions usage: {repo}, last {args.days} days\n")
+    print(f"# GitHub Actions usage: {repo}, {args.days} completed UTC days\n")
+    print(f"- Window: {github_timestamp(window_start)} through {github_timestamp(window_end)}")
     if repo_info.get("private") is False:
         print("> Public repository: standard hosted runners are generally not a direct minutes charge; use these figures mainly to compare runner usage and speed.\n")
 
     print(f"- Runs: {len(runs)}; jobs that ran: {len(ran)}")
     print(
         "- Standard hosted runner-minute estimate: "
-        f"**{fmt_int(total)}** (about {fmt_int(total * 30 / args.days)} per 30 days)"
+        f"**{fmt_int(total)}** (about {fmt_int(total * 30 / args.days)} per 30 completed UTC days)"
     )
     print(f"- Per-job minute rounding estimate: {fmt_int(rounding)} ({pct(rounding, total)})")
-    print(f"- Cancelled: {fmt_int(cancelled)}; failed: {fmt_int(failed)} estimated runner minutes")
+    print(
+        f"- Jobs in cancelled runs: {fmt_int(cancelled)}; jobs in failed runs: "
+        f"{fmt_int(failed)} estimated runner minutes"
+    )
     if other:
         groups = sorted({str(job.get("runner_group_name") or "self-hosted/other") for job in other})
         raw_other = sum(duration_minutes(job.get("started_at"), job.get("completed_at")) for job in other)
         print(f"- Other runner groups ({', '.join(groups)}): {fmt_int(raw_other)} raw minutes, excluded from the hosted estimate")
 
-    workflow_runs = Counter((run.get("name", ""), run.get("event", "")) for run in runs)
-    by_flow: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"billed": 0, "count": 0, "raw": 0.0})
+    workflow_runs = Counter(
+        (str(run.get("workflow_id") or run.get("path") or run.get("name") or "unknown"), str(run.get("event", "")))
+        for run in runs
+    )
+    by_flow: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {"billed": 0, "count": 0, "raw": 0.0, "name": "", "path": ""}
+    )
     by_job: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(
-        lambda: {"billed": 0, "count": 0, "raw": 0.0, "runs": set()}
+        lambda: {"billed": 0, "count": 0, "raw": 0.0, "runs": set(), "name": "", "path": ""}
     )
 
     for job in hosted:
-        flow_key = (str(job.get("workflow", "")), str(job.get("event", "")))
+        flow_key = (str(job.get("workflow_id", "unknown")), str(job.get("event", "")))
         job_key = (*flow_key, str(job.get("job", "")))
         duration = duration_minutes(job.get("started_at"), job.get("completed_at"))
         estimate = billed_estimate(job)
@@ -254,31 +363,46 @@ def main() -> int:
         by_flow[flow_key]["billed"] += estimate
         by_flow[flow_key]["count"] += 1
         by_flow[flow_key]["raw"] += duration
+        by_flow[flow_key]["name"] = str(job.get("workflow", ""))
+        by_flow[flow_key]["path"] = str(job.get("workflow_path", ""))
 
         by_job[job_key]["billed"] += estimate
         by_job[job_key]["count"] += 1
         by_job[job_key]["raw"] += duration
-        by_job[job_key]["runs"].add(job.get("run"))
+        by_job[job_key]["runs"].add((job.get("run"), job.get("attempt")))
+        by_job[job_key]["name"] = str(job.get("workflow", ""))
+        by_job[job_key]["path"] = str(job.get("workflow_path", ""))
 
     print("\n## By workflow and event\n")
     flow_rows: list[list[str]] = []
-    for (workflow, event), values in sorted(by_flow.items(), key=lambda item: item[1]["billed"], reverse=True)[:20]:
+    for (workflow_id, event), values in sorted(by_flow.items(), key=lambda item: item[1]["billed"], reverse=True)[:20]:
+        label = values["name"] or workflow_id
+        if values["path"]:
+            label = f"{label} [{values['path']}]"
         flow_rows.append(
             [
                 fmt_int(values["billed"]),
                 pct(values["billed"], total),
                 str(values["count"]),
                 f'{values["raw"] / values["count"]:.1f}',
-                f"{workflow} / {event}",
+                f"{label} / {event}",
             ]
         )
     print_table(["Est. min", "Share", "Jobs", "Avg raw min", "Workflow / event"], flow_rows)
 
     print("\n## Top jobs\n")
     job_rows: list[list[str]] = []
-    for (workflow, event, name), values in sorted(by_job.items(), key=lambda item: item[1]["billed"], reverse=True)[:30]:
-        run_count = workflow_runs[(workflow, event)]
+    for (workflow_id, event, name), values in sorted(by_job.items(), key=lambda item: item[1]["billed"], reverse=True)[:30]:
+        run_count = sum(
+            max(1, int(run.get("run_attempt") or 1))
+            for run in runs
+            if str(run.get("workflow_id") or run.get("path") or run.get("name") or "unknown") == workflow_id
+            and str(run.get("event", "")) == event
+        )
         ran_in = len(values["runs"])
+        workflow_label = values["name"] or workflow_id
+        if values["path"]:
+            workflow_label = f"{workflow_label} [{values['path']}]"
         job_rows.append(
             [
                 fmt_int(values["billed"]),
@@ -286,44 +410,59 @@ def main() -> int:
                 str(values["count"]),
                 f'{values["raw"] / values["count"]:.1f}',
                 pct(ran_in, run_count),
-                f"{workflow} / {event} :: {name}",
+                f"{workflow_label} / {event} :: {name}",
             ]
         )
     print_table(["Est. min", "Share", "Jobs", "Avg raw min", "Ran in", "Name"], job_rows)
 
-    durations: dict[tuple[str, str], list[float]] = defaultdict(list)
+    durations: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {"values": [], "name": "", "path": ""}
+    )
     for run in runs:
         if run.get("conclusion") != "success":
             continue
         minutes = duration_minutes(run.get("run_started_at"), run.get("updated_at"))
-        if minutes > 0:
-            durations[(str(run.get("name", "")), str(run.get("event", "")))].append(minutes)
+        if minutes <= 0:
+            continue
+        workflow_id, workflow_name, workflow_path = workflow_identity(run)
+        key = (workflow_id, str(run.get("event", "")))
+        durations[key]["values"].append(minutes)
+        durations[key]["name"] = workflow_name
+        durations[key]["path"] = workflow_path
 
     print("\n## Wall-clock time of successful runs\n")
     duration_rows: list[list[str]] = []
-    for (workflow, event), values in sorted(durations.items(), key=lambda item: len(item[1]), reverse=True)[:15]:
+    for (workflow_id, event), info in sorted(
+        durations.items(), key=lambda item: len(item[1]["values"]), reverse=True
+    )[:15]:
+        values = info["values"]
+        label = info["name"] or workflow_id
+        if info["path"]:
+            label = f"{label} [{info['path']}]"
         duration_rows.append(
             [
                 str(len(values)),
                 f"{statistics.median(values):.1f}",
                 f"{quantile(values, 0.90):.1f}",
-                f"{workflow} / {event}",
+                f"{label} / {event}",
             ]
         )
     print_table(["Runs", "Median min", "p90 min", "Workflow / event"], duration_rows)
 
-    pr_counts = Counter(
-        (str(run.get("name", "")), str(run.get("head_branch", "")))
-        for run in runs
-        if run.get("event") == "pull_request"
-    )
+    pr_counts: Counter[tuple[str, str]] = Counter()
+    for run in runs:
+        if run.get("event") != "pull_request":
+            continue
+        workflow_id, _, _ = workflow_identity(run)
+        pr_counts[(workflow_id, pr_identity(run))] += max(1, int(run.get("run_attempt") or 1))
+
     if pr_counts:
         values = sorted(pr_counts.values())
         print("\n## Pull-request churn\n")
         print(
-            "- Runs per branch/workflow pair: "
+            "- Executions per PR/workflow pair (rerun attempts included): "
             f"median {statistics.median(values):g}, max {max(values)} "
-            f"across {len(values)} branch/workflow pairs"
+            f"across {len(values)} PR/workflow pairs"
         )
 
     return 0
