@@ -160,6 +160,61 @@ def _provider_usage_from_gemini(response: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _gemini_client(
+    genai: Any,
+    *,
+    api_key: Optional[str],
+    api_base: Optional[str],
+    request_timeout: float,
+) -> Any:
+    """Build a ``google-genai`` client with Neva's transport options.
+
+    The SDK expresses timeouts in milliseconds and retries transient statuses
+    internally; Neva owns retries, so SDK-level retries are disabled
+    (``attempts=1``) and the configured timeout is converted to milliseconds.
+    """
+
+    client_cls = getattr(genai, "Client", None)
+    if client_cls is None:  # pragma: no cover - defensive guard
+        raise ConfigurationError("Invalid google-genai client; update the 'google-genai' package.")
+    http_options: Dict[str, Any] = {
+        "timeout": int(request_timeout * 1000),
+        "retry_options": {"attempts": 1},
+    }
+    if api_base is not None:
+        http_options["base_url"] = api_base
+    return client_cls(api_key=api_key, http_options=http_options)
+
+
+def _gemini_response_text(response: Any) -> Optional[str]:
+    """Return stripped text from a Gemini response, or ``None`` when absent."""
+
+    try:
+        text = getattr(response, "text", None)
+    except (AttributeError, ValueError):
+        text = None
+    if text:
+        stripped = str(text).strip()
+        if stripped:
+            return stripped
+    candidates = getattr(response, "candidates", None)
+    if candidates:
+        parts: List[str] = []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            candidate_parts = None
+            if content is not None:
+                candidate_parts = getattr(content, "parts", None)
+            for part in candidate_parts or []:
+                piece = getattr(part, "text", None)
+                if piece:
+                    parts.append(str(piece))
+        joined = "".join(parts).strip()
+        if joined:
+            return joined
+    return None
+
+
 class GPTAgent(AIAgent):
     """Agent that communicates with a large language model provider."""
 
@@ -670,33 +725,28 @@ class GPTAgent(AIAgent):
 
     def _invoke_gemini(self, prompt: str) -> str:
         try:
-            generative_ai = _import_module("google.generativeai")
+            genai = _import_module("google.genai")
         except ImportError as exc:  # pragma: no cover - import guard
             raise ConfigurationError(
-                "Gemini provider requires the 'google-generativeai' package to be installed."
+                "Gemini provider requires the 'google-genai' package to be installed."
             ) from exc
 
-        generative_ai.configure(api_key=self.api_key)
-        model = generative_ai.GenerativeModel(self.model)
-        request_text = self._prompt_with_history(prompt)
-        response = model.generate_content(
-            request_text,
-            generation_config={"max_output_tokens": self._max_output_tokens},
-            request_options={"timeout": self._request_timeout, "retry": None},
+        client = _gemini_client(
+            genai,
+            api_key=self.api_key,
+            api_base=self.api_base,
+            request_timeout=self._request_timeout,
+        )
+        response = client.models.generate_content(
+            model=self.model,
+            contents=self._prompt_with_history(prompt),
+            config={"max_output_tokens": self._max_output_tokens},
         )
         self._last_provider_usage = _provider_usage_from_gemini(response)
-        if hasattr(response, "text") and response.text:
-            return response.text.strip()
-        candidates = getattr(response, "candidates", None)
-        if candidates:
-            for candidate in candidates:
-                content = getattr(candidate, "content", None)
-                if content and getattr(content, "parts", None):
-                    texts = [getattr(part, "text", "") for part in content.parts]
-                    joined = "".join(texts).strip()
-                    if joined:
-                        return joined
-        raise BackendError("Gemini provider returned empty content.")
+        content = _gemini_response_text(response)
+        if not content:
+            raise BackendError("Gemini provider returned empty content.")
+        return content
 
     def _invoke_grok(self, prompt: str) -> str:
         return self._invoke_chat_completions(
@@ -832,30 +882,33 @@ class GPTAgent(AIAgent):
                     }
         elif self.provider in _GEMINI_PROVIDERS:
             try:
-                generative_ai = _import_module("google.generativeai")
+                genai = _import_module("google.genai")
             except ImportError as exc:
-                raise ConfigurationError("Gemini streaming requires 'google-generativeai'") from exc
-            generative_ai.configure(api_key=self.api_key)
-            model = generative_ai.GenerativeModel(self.model)
-            response = model.generate_content(
-                self._prompt_with_history(prompt),
-                generation_config={"max_output_tokens": self._max_output_tokens},
-                request_options={"timeout": self._request_timeout, "retry": None},
-                stream=True,
+                raise ConfigurationError("Gemini streaming requires 'google-genai'") from exc
+            client = _gemini_client(
+                genai,
+                api_key=self.api_key,
+                api_base=self.api_base,
+                request_timeout=self._request_timeout,
+            )
+            stream = client.models.generate_content_stream(
+                model=self.model,
+                contents=self._prompt_with_history(prompt),
+                config={"max_output_tokens": self._max_output_tokens},
             )
             try:
-                for chunk in response:
+                for chunk in stream:
                     usage = _provider_usage_from_gemini(chunk)
                     if usage:
                         usage_state["value"] = usage
                     try:
                         content = chunk.text
-                    except ValueError:
+                    except (AttributeError, ValueError):
                         content = None
                     if content:
                         yield content
             finally:
-                close = getattr(response, "close", None)
+                close = getattr(stream, "close", None)
                 if callable(close):
                     close()
         else:

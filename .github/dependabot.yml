@@ -12,7 +12,7 @@ updates:
           - "anthropic"
           - "deep-translator"
           - "faiss-cpu"
-          - "google-generativeai"
+          - "google-genai"
           - "httpx"
           - "mlflow"
           - "numpy"

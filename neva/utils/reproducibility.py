@@ -51,7 +51,7 @@ _DEFAULT_DEPENDENCIES = (
     "openai",
     "anthropic",
     "httpx",
-    "google-generativeai",
+    "google-genai",
     "transformers",
     "torch",
     "numpy",

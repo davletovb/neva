@@ -230,6 +230,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helpers excluded; the floor is a ratchet to raise as modules are documented).
 
 ### Changed
+- The Google Gemini provider now runs on the `google-genai` SDK, since
+  `google-generativeai` reached end-of-life. The `providers` extra declares
+  `google-genai`, the `anthropic` floor moves to 1.0 (the 0.x line depended on
+  the retired `httpx<0.28` ceiling, which conflicts with the new SDK's transport
+  requirement), and `httpx` relaxes to `>=0.28.1,<1.0`. Gemini requests now honor
+  `api_base` (custom gateways), a response without usable text fails closed like
+  the other providers, SDK-level retries are disabled so Neva's retry policy stays
+  authoritative, and `request_timeout` is converted to the SDK's millisecond
+  transport option.
 - Held `pytest`, `coverage`, and `pytest-cov` at the previous releases: the
   newer trio triggers a double initialization of the faiss/torch C extensions in
   coverage-instrumented FAISS runs, which surfaces as

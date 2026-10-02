@@ -108,12 +108,15 @@ jobs:
       - name: Verify optional integration imports
         run: |
           python - <<'PY'
+          from importlib.metadata import version
+
           import anthropic
           import faiss
           import httpx
           import numpy
           import torch
           import transformers
+          from google import genai  # noqa: F401 - import check only
 
           print("torch", torch.__version__)
           print("transformers", transformers.__version__)
@@ -121,11 +124,13 @@ jobs:
           print("numpy", numpy.__version__)
           print("anthropic", anthropic.__version__)
           print("httpx", httpx.__version__)
+          print("google-genai", version("google-genai"))
           PY
 
       - name: Run real optional integrations
         run: |
           pytest -q -o addopts=""             tests/integration/test_optional_dependencies.py
+          pytest -q -o addopts=""             tests/integration/test_google_genai.py
 
       - name: Measure FAISS implementation coverage
         run: |

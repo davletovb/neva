@@ -29,7 +29,7 @@ IMPORT_NAME = {
     "mlflow": "mlflow",
     "anthropic": "anthropic",
     "httpx": "httpx",
-    "google-generativeai": "google.generativeai",
+    "google-genai": "google.genai",
     "faiss-cpu": "faiss",
     "numpy": "numpy",
     "opentelemetry-api": "opentelemetry",
@@ -41,7 +41,7 @@ IMPORT_NAME = {
 # `neva/`, with the reason they are declared. Everything else must be imported.
 PINNED_WITHOUT_DIRECT_IMPORT = {
     "torch": "runtime backend required by the declared transformers extra",
-    "httpx": "compatibility pin for the declared Anthropic SDK client",
+    "httpx": "compatibility pin for the google-genai SDK transport",
 }
 
 

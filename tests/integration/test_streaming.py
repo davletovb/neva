@@ -386,7 +386,7 @@ def test_real_anthropic_sdk_stream_over_local_http(monkeypatch):
 
 
 def test_gemini_stream_adapter_and_usage(monkeypatch):
-    class Response:
+    class Stream:
         closed = False
 
         def __iter__(self):
@@ -407,26 +407,28 @@ def test_gemini_stream_adapter_and_usage(monkeypatch):
         def close(self):
             self.closed = True
 
-    response = Response()
+    stream = Stream()
+    calls = []
 
-    class Model:
-        def __init__(self, model):
-            assert model == "gemini-test"
+    class Models:
+        def generate_content_stream(self, *, model, contents, config):
+            calls.append({"model": model, "contents": contents, "config": config})
+            return stream
 
-        def generate_content(self, prompt, **kwargs):
-            assert "ping" in prompt
-            assert kwargs["stream"] is True
-            return response
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["api_key"] == "test"
+            self.models = Models()
 
-    module = type(
-        "GenerativeAI", (), {"configure": staticmethod(lambda **_: None), "GenerativeModel": Model}
-    )
+    module = type("GenAI", (), {"Client": Client})
     original = importlib.import_module
     monkeypatch.setattr(
         "neva.agents.gpt._import_module",
-        lambda name: module if name == "google.generativeai" else original(name),
+        lambda name: module if name == "google.genai" else original(name),
     )
     agent = GPTAgent(api_key="test", provider="gemini", model="gemini-test", max_retries=0)
     assert list(agent.stream_response("ping"))[-1].text == "Gemini"
     assert agent._token_tracker.records == [(4, 2)]
-    assert response.closed
+    assert calls[0]["model"] == "gemini-test"
+    assert "ping" in calls[0]["contents"]
+    assert stream.closed
