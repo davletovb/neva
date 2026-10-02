@@ -276,6 +276,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rest of the tree keeps the previous settings until each module is clean.
 
 ### Fixed
+- Process-isolated tool workers now signal readiness before running the tool,
+  so slow interpreter and module startup (optional stacks such as torch can add
+  seconds to every child boot) is no longer charged to the tool's execution
+  timeout — previously a fast tool could raise a spurious `ToolTimeoutError`
+  when worker startup alone exceeded the configured timeout. Worker boot is
+  bounded by a fixed 30 s startup grace; execution and result hand-off stay
+  hard-bounded by `timeout`, and an over-time worker is still terminated.
 - Corrected a malformed `RUN` instruction in the `Dockerfile` that contained a
   stray line continuation.
 - Updated the README "Last Commit" badge to point at the `main` branch.

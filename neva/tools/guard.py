@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 
 _TRUNCATION_MARKER = "...[tool output truncated]"
 
+# A process-isolated worker must boot (interpreter start, module imports,
+# argument unpickling) before its execution timeout can start: those costs are
+# environment-dependent (an optional stack such as torch can add seconds to
+# every child boot), so boot is bounded by a fixed grace rather than the often
+# small execution timeout. A worker that cannot boot within the grace is a
+# broken environment and fails closed.
+_ISOLATED_STARTUP_GRACE = 30.0
+
 
 def _raw_tool_use(tool: Any, payload: str) -> Any:
     """Invoke a tool implementation without re-entering its public wrapper."""
@@ -118,6 +126,9 @@ def _isolated_tool_worker(
             _send_worker_message(connection, ("resource", "unavailable", str(exc)))
             return
 
+        # Boot is finished; the parent starts the execution deadline when it
+        # receives this signal.
+        _send_worker_message(connection, ("ready",))
         try:
             output = _raw_tool_use(tool, payload)
             text = _truncate_output(output, max_output_chars)
@@ -150,9 +161,11 @@ class ToolLimits:
     timeout bounds how long the caller waits. The compatibility default uses
     a daemon thread, which Python cannot forcibly stop after a timeout.
 
-    isolate_process=True turns timeout into a hard process boundary: an
-    over-time worker is terminated. max_memory_bytes adds an RLIMIT_AS
-    address-space ceiling where the platform supports it. max_output_chars is
+    isolate_process=True turns timeout into a hard process boundary: worker
+    startup (interpreter, imports, argument unpickling) is bounded by a fixed
+    30 s startup grace, then the tool execution and result hand-off are bounded
+    by timeout, and an over-time worker is terminated. max_memory_bytes adds an
+    RLIMIT_AS address-space ceiling where the platform supports it. max_output_chars is
     applied inside an isolated worker before IPC, and max_concurrency bounds
     simultaneous executions per tool object for each guard instance.
     """
@@ -394,21 +407,39 @@ class ToolGuard:
             name=f"neva-tool-process-{getattr(tool, 'name', 'tool')}",
         )
         receive_outcome: Dict[str, Any] = {}
+        worker_ready = threading.Event()
 
         def receive_result() -> None:
             try:
-                receive_outcome["message"] = receiver.recv()
+                first = receiver.recv()
             except EOFError:
+                worker_ready.set()
                 receive_outcome["eof"] = True
+                return
             except BaseException as exc:
+                worker_ready.set()
                 receive_outcome["error"] = exc
+                return
+            if isinstance(first, tuple) and first[:1] == ("ready",):
+                worker_ready.set()
+                try:
+                    receive_outcome["message"] = receiver.recv()
+                except EOFError:
+                    receive_outcome["eof"] = True
+                except BaseException as exc:
+                    receive_outcome["error"] = exc
+                return
+            # A worker that fails during setup can still emit its final message
+            # first (for example a resource-limit failure), so a non-ready
+            # first message is treated as the result.
+            worker_ready.set()
+            receive_outcome["message"] = first
 
         reader = threading.Thread(
             target=receive_result,
             name=f"neva-tool-result-{getattr(tool, 'name', 'tool')}",
             daemon=True,
         )
-        deadline = monotonic() + timeout
         try:
             try:
                 process.start()
@@ -421,6 +452,19 @@ class ToolGuard:
                 sender.close()
 
             reader.start()
+            startup_deadline = monotonic() + _ISOLATED_STARTUP_GRACE
+            if not worker_ready.wait(max(0.0, startup_deadline - monotonic())):
+                process.terminate()
+                process.join()
+                if process.is_alive() and hasattr(process, "kill"):
+                    process.kill()
+                    process.join()
+                raise ToolTimeoutError(
+                    f"tool '{tool.name}' isolated worker did not start within the "
+                    f"{_ISOLATED_STARTUP_GRACE:g}s startup grace"
+                )
+
+            deadline = monotonic() + timeout
             process.join(max(0.0, deadline - monotonic()))
             if process.is_alive():
                 process.terminate()
