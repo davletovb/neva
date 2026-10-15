@@ -4,11 +4,11 @@
 # tools extra
 wikipedia==1.4.0
 deep-translator==1.11.4
-transformers==4.35.2
-torch==2.14.0
+transformers==5.19.0
+torch==2.14.1
 
 # mlops extra
-mlflow==3.16.1
+mlflow==3.17.0
 
 # providers extra
 anthropic==1.7.0
