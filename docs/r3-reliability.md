@@ -99,3 +99,5 @@ by local mocks. No Python benchmarks, legacy CI, or new CI matrix.
 
 - The admission reservation accounts for **every serialized model request field**, including tool-call IDs, messages, schemas, sampling and wrapper overhead. Only built-in backends that guarantee an `UnsupportedCapability` result occurs **before any dispatch** may return that reservation to the per-process budget; transport and post-dispatch failures never refund.
 - Intermediate retryable HTTP 429 statuses do not trip the circuit prematurely. A final/exhausted 429 counts as a failure. The regression tests the boundary with a threshold of one and a single allowed retry.
+
+- A timed-out journal call invokes a dedicated backend timeout hook *after dropping the call future*; the HTTP adapter records this as a circuit failure without retry/refund. The timeout receipt retains unknown billing. Both streamed and non-streamed responses treat `tool_calls: null` and an empty array as absent; populated tool calls remain unsupported until an approved executor is used.

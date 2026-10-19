@@ -79,6 +79,12 @@ impl Receipt {
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
+    /// Called *after* the timed-out future has been cancelled. The provider
+    /// may have processed/billed the request, so this only updates breaker
+    /// state; it never retries or refunds the uncertain transaction.
+    fn on_timeout<'a>(&'a self)->Pin<Box<dyn Future<Output=()>+Send+'a>> {
+        Box::pin(async {})
+    }
     /// Explicit guarantee: UnsupportedCapability never follows a dispatch.
     /// Default custom backends are not trusted to make this assertion.
     fn unsupported_is_pre_dispatch(&self) -> bool {
@@ -447,9 +453,12 @@ impl EffectJournal {
                         category: "backend".into(),
                         message: error,
                     },
-                    Err(_) => EffectResult::Failed {
-                        category: "timeout".into(),
-                        message: "effect deadline exceeded".into(),
+                    Err(_) => {
+                        backend.on_timeout().await;
+                        EffectResult::Failed {
+                            category: "timeout".into(),
+                            message: "effect deadline exceeded".into(),
+                        }
                     },
                 };
                 let model = match &response {
@@ -614,6 +623,14 @@ impl OpenAiCompatible {
 }
 
 #[cfg(feature = "live-http")]
+fn has_tool_calls(value: Option<&serde_json::Value>)->bool {
+    value.is_some_and(|v|match v {
+        serde_json::Value::Null=>false,
+        serde_json::Value::Array(values)=>!values.is_empty(),
+        _=>true,
+    })
+}
+#[cfg(feature = "live-http")]
 fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     value.get("usage").filter(|v| !v.is_null()).map(|u| Usage {
         input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()),
@@ -707,7 +724,7 @@ impl SseAccumulator {
                 return Err("stream output exceeds cap".into());
             }
         }
-        if payload.pointer("/choices/0/delta/tool_calls").is_some() {
+        if has_tool_calls(payload.pointer("/choices/0/delta/tool_calls")) {
             return Err("tool call streaming requires explicit tool executor".into());
         }
         Ok(())
@@ -739,6 +756,9 @@ async fn bounded_bytes(mut response: reqwest::Response, cap: usize) -> Result<Ve
 }
 #[cfg(feature = "live-http")]
 impl Backend for OpenAiCompatible {
+    fn on_timeout<'a>(&'a self)->Pin<Box<dyn Future<Output=()>+Send+'a>> {
+        Box::pin(async move { self.failure().await; })
+    }
     fn unsupported_is_pre_dispatch(&self) -> bool {
         true
     }
@@ -874,7 +894,7 @@ impl Backend for OpenAiCompatible {
                             bounded_bytes(response, self.reliability.max_response_bytes).await?;
                         let payload: serde_json::Value = serde_json::from_slice(&body)
                             .map_err(|e| format!("invalid JSON completion: {e}"))?;
-                        if payload.pointer("/choices/0/message/tool_calls").is_some() {
+                        if has_tool_calls(payload.pointer("/choices/0/message/tool_calls")) {
                             return Err(
                                 "tool calls unsupported without an explicitly approved executor"
                                     .into(),
@@ -1170,6 +1190,53 @@ mod http_tests {
             EffectResult::UnsupportedCapability{capability} if capability.contains("circuit"))
         );
         assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn null_and_empty_tool_calls_do_not_reject_normal_completions() {
+        assert!(!has_tool_calls(None));
+        assert!(!has_tool_calls(Some(&serde_json::Value::Null)));
+        assert!(!has_tool_calls(Some(&serde_json::json!([]))));
+        assert!(has_tool_calls(Some(&serde_json::json!([{"id":"call"}]))));
+    }
+
+    #[tokio::test]
+    async fn journal_timeout_records_unknown_billing_and_opens_live_circuit() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr=listener.local_addr().unwrap();
+        let server=thread::spawn(move ||{
+            let (mut socket,_)=listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut packet=[0u8;4096];
+            let _=socket.read(&mut packet).unwrap();
+            thread::sleep(Duration::from_millis(250));
+            let _=write!(socket,"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+        });
+        let live=Arc::new(OpenAiCompatible::new(
+            format!("http://{addr}/chat"),"token".into()
+        ).unwrap().with_reliability(HttpReliability{
+            circuit_threshold:1,..HttpReliability::default()
+        }).unwrap());
+        let dir=std::env::temp_dir().join(format!(
+            "hiyal-r3-timeout-{}",std::process::id()
+        ));
+        let _=std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let request=sample_request("slow");
+        let key=request.key("timeout-trial",0,AgentId(0),0).unwrap();
+        let mut journal=EffectJournal::open(&dir).unwrap();
+        journal.bind_trial("timeout-trial").unwrap();
+        let receipts=journal.resolve_all(
+            vec![(key,request.clone())],live.clone(),1,
+            Duration::from_millis(100),false
+        ).await.unwrap();
+        assert_eq!(receipts[0].billing,BillingDisposition::Unknown);
+        assert!(matches!(receipts[0].result,EffectResult::Failed{ref category,..} if category=="timeout"));
+        assert!(matches!(live.resolve(&request).await.unwrap(),
+            EffectResult::UnsupportedCapability{..}));
+        drop(journal);
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
