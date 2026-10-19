@@ -28,3 +28,12 @@ reported Python figures for independently measured evidence.
 
 The R0 gate remains open until measured figures and platform metadata are
 committed. This script provides the reproducible harness, not invented results.
+
+## Complete R0 evidence collection (manual; no CI)
+
+Run `sh scripts/r0-verify.sh` on a machine with Rust and the archived
+Python core dependencies installed. This runs compiled Rust workspace tests and
+a standalone custom-world consumer, identity-fixture validation, plus observer
+on/off baselines at 20 and 100 agents and increasing steps. Run the archived
+checkpoint benchmark separately. The script does not change repository CI
+configuration. See [acceptance ledger](../docs/r0-verification.md).

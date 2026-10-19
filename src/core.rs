@@ -262,6 +262,11 @@ mod tests {
         let expected: Vec<u64> = fixture["expected_actor_order"]
             .as_array().unwrap().iter().map(|n| n.as_u64().unwrap()).collect();
         assert_eq!(observed, expected);
+        assert_eq!(first.trial.0, fixture["expected_trial_id"].as_str().unwrap());
+        let expected_ids = fixture["expected_event_ids"].as_array().unwrap();
+        for (event, expected_id) in first.events.iter().zip(expected_ids) {
+            assert_eq!(event.event_id, expected_id.as_str().unwrap());
+        }
         assert_eq!(first.world.value, fixture["expected_state"]["value"].as_u64().unwrap());
         assert_eq!(first.events, second.events);
         let mut a = Vec::new();

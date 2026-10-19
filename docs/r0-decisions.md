@@ -1,6 +1,6 @@
 # Issue #103 — R0 decision record and R1 starter boundary
 
-Status: **R0 in progress**. This is a new Rust engine informed by the archived
+Status: **R0 implementation and decision artifacts prepared; execution evidence pending**. This is a new Rust engine informed by the archived
 Python implementation, *not* a line-by-line translation. No Python bindings,
 embedded Python runtime, or required Python analysis stack. The old package
 lives under `hiyal-python/` for benchmarks and fixtures only.
@@ -12,8 +12,16 @@ lives under `hiyal-python/` for benchmarks and fixtures only.
 - Root Rust library package: `hiyal`; package publishing is deliberately
   disabled until name/ownership/legal checks and R0 acceptance. The old Python
   package having the same name is an archive, not a dependency.
-- GitHub handle, domain and trademark checks, crates.io reservation and
-  additional crate names: **unverified/open**; do not claim reserved names.
+- `hiyal.com` is occupied by an unrelated established Uyghur computing site.
+  No domain ownership or affiliation is claimed. A GitHub user/org `hiyal`,
+  authoritative multi-jurisdiction trademark clearance and crates.io publisher
+  ownership remain unverified. The issue's October 19 registry check is a
+  planning observation, not a reservation. See [name diligence](r0-name-diligence.md).
+- **Decision:** Do not publish/reserve empty crates from this prototype; avoid
+  squatting or presenting unreleased APIs as stable. A verified publisher with
+  registry credentials can release the smallest useful crate after acceptance.
+  Only `hiyal` is currently planned for publication; `-core/-cli` are not
+  reserved or promised.
 - One initial crate plus a separate application crate. Split into more crates
   only with a demonstrated API/compilation boundary. Native CLI is planned, not
   present in this first commit.
@@ -66,15 +74,31 @@ transactional file append, canonical JCS hashes, observer projections or CLI.
   for a pinned same-target toolchain/dependencies/RNG/numerical profile; D2
   means statistical invariants across targets/live providers. **This slice
   demonstrates only repeated scripted actor/event ordering, not full D1**.
-- Named RNG streams planned: algorithm **ChaCha20**, pinned crate version and
-  explicit byte-to-index sampling rule, separated by trial/stream name. Persist
-  complete RNG state in checkpoints. No `StdRng` promise, no global RNG.
-  Random scheduler is not implemented in this slice.
-- Canonical events, manifests and request identity: RFC 8785 JCS + SHA-256
-  candidate; verify chosen implementation with published test vectors and
-  reject NaN/infinity plus unsupported JSON number shapes before R1 hashes.
-  **serde_json output here is not claimed canonical.** Floats and parallel
-  reductions remain outside D1 until a numerical profile is pinned.
+- **R0 RNG contract:** trial-owned named `ChaCha20Rng` streams; implementation
+  candidate `rand_chacha 0.9.x` locked to an exact Cargo.lock release for D1.
+  Seed bytes derive from SHA-256 of domain-separated, length-prefixed
+  `(trial seed decimal string, trial ID, stream name)`. Draw `u64` values
+  in explicitly defined byte order; for uniform [0,n), reject values less
+  than `(-n mod 2^64) mod n` and choose `value % n`. This avoids modulo bias.
+  Store full stream state and draws/word position on checkpoint. Separate
+  `scheduler`, `world`, `agent/<id>` and `intervention/<id>` streams.
+  The implementation must pin/test exact upstream RNG output and the
+  byte-to-u64 rule before asserting D1. No `StdRng` promise or global RNG.
+  This is a **design contract, not a shipped random scheduler**.
+- Canonical events, manifests and request identity: **RFC 8785 JCS + SHA-256**.
+  Candidate Rust implementation `serde_json_canonicalizer 0.3.2` (verify RFC
+  vectors independently). Reject duplicate object keys, nonfinite numbers,
+  and JSON integer values outside the exact IEEE-754 safe integer interval
+  `[-9007199254740991, 9007199254740991]`. Encode larger integer/ID
+  quantities as **decimal strings** before canonicalization, not silently
+  rounded floating-point numbers. Forbid normalization of Unicode contents;
+  sort JSON properties under JCS UTF-16 rules. Use versioned hash domains.
+  Tests must include 1 vs 1.0, -0.0, exponent notation, multilingual key order,
+  nonfinite rejection and the large-integer guard.
+  **serde_json output here is not claimed canonical.**
+  For D1, integer and fixed-point transitions are supported initially;
+  floating-point transcendental algorithms, parallel nonassociative reductions
+  and cross-target numerical identity remain D2 until a pinned profile exists.
 - Source version, schema version, profile, seed/stream states, provider
   effective settings, cache setting, tools, costs, snapshot offset and
   environment/platform belong in manifest. The current prototype's
@@ -133,12 +157,25 @@ runtime dependency. Parquet stays optional until needed.
 - [x] Extension/effect/commit conceptual contracts documented.
 - [x] Stable logical IDs and event ordering specified for the first slice.
 - [x] Minimal scripted fixture and Rust tests for identity, staging and eligibility.
-- [x] Python observer-on/off baseline **harness** created.
+- [x] Python observer-on/off baseline **harness** created and acceptance
+      runner authored; prior art and independent name-risk findings recorded.
+- [x] TOML v1 config, effect envelopes, observer and event append boundaries
+      sketched in [contracts](r0-contracts.md).
 - [ ] Independently run Python observer-on/off and snapshot benchmarks with
       hardware/version/provenance details; publish comparable measured results.
-- [ ] Verify GitHub handle/domain/trademark and crates.io publication ownership.
-- [ ] Pin and test named-RNG numerical profile and RFC 8785 test vectors in R1.
+- [x] Domain collision independently checked and documented; publication
+      policy set to unpublished until ownership and legal review.
+- [ ] Authoritative trademark clearance and verified registry publisher account
+      before any public crate publication (external gate, cannot infer clearance
+      from a web search).
+- [x] Choose named RNG/sampling, numerical D1 scope, canonical JSON safe-number
+      contract and explicit conformance fixtures; executable library integration
+      and pinned golden values remain R1.
+- [ ] Run `cargo test --workspace` with an installed Rust toolchain and record
+      the result. This environment has no Rust compiler.
 - [ ] Implement durable replay/resume and confirm independent application gate.
 
-Do not mark R0 complete based only on code review or unexecuted benchmark
-scripts. The root-level Rust files are a beginning of R1, not its completion.
+The engineering **preparation** of R0 is complete, but the R0 **measured
+acceptance gate remains open** until the actual benchmark outputs and toolchain
+run are recorded. Do not invent results, claim legal clearance or mark issue
+#103 closed. The root-level Rust files are a beginning of R1, not its completion.
