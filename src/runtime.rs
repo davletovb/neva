@@ -377,13 +377,6 @@ impl EffectJournal {
         {
             return Err("maximum 8 tool operations per step".into());
         }
-        if specs
-            .iter()
-            .any(|(_, spec)| matches!(spec, EffectSpec::Tool { .. }))
-            && !backend.permits_tools()
-        {
-            return Err("tool backend lacks explicit permissions/approvals".into());
-        }
         // Complete validation comes BEFORE launching any billable request.
         let mut seen = std::collections::BTreeSet::new();
         let mut pending = Vec::new();
@@ -419,6 +412,12 @@ impl EffectJournal {
             } else {
                 pending.push((key, spec));
             }
+        }
+        // Replayed/previously recorded tool effects are inert and need no
+        // live executor permission. Only validate pending executions.
+        if pending.iter().any(|(_,spec)|matches!(spec,EffectSpec::Tool{..}))
+            && !backend.permits_tools() {
+            return Err("tool backend lacks explicit permissions/approvals".into());
         }
         if self.poisoned && !pending.is_empty() {
             return Err("effect ledger poisoned; reopen/recover before generating".into());
@@ -544,10 +543,17 @@ impl OpenAiCompatible {
         if !allowed {
             return Err("live model URL must be HTTPS or parsed loopback HTTP".into());
         }
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| e.to_string())?;
+        // Default environment HTTP_PROXY/HTTPS_PROXY discovery could tunnel
+        // a localhost bearer request through an untrusted proxy, even though
+        // the URL itself is parsed and validated. Force *direct* loopback.
+        let is_loopback = parsed.host_str().is_some_and(|host| {
+            host == "localhost" || host.parse::<std::net::IpAddr>()
+                .is_ok_and(|address|address.is_loopback())
+        });
+        let mut builder=reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none());
+        if is_loopback {builder=builder.no_proxy();}
+        let client=builder.build().map_err(|e|e.to_string())?;
         Ok(Self {
             client,
             url: parsed.to_string(),

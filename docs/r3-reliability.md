@@ -93,3 +93,6 @@ usage/model capture, permission-denied tools, keyed approval consumption,
 budget reservations, and journal failures/replay semantics. Real provider
 billing and optional cross-language process operation **are not verified**
 by local mocks. No Python benchmarks, legacy CI, or new CI matrix.
+
+- Loopback bearer requests bypass all environment proxy settings with a direct HTTP client, preventing token leakage through `HTTP_PROXY` when `NO_PROXY` is unreliable.
+- Permission checks apply only to *pending* tool executions. A strict replay of an already hashed, durable tool receipt can use an inert `ScriptedBackend` without approval or a live executor. A captured keyed-tool replay regression verifies this distinction.

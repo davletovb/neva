@@ -325,6 +325,42 @@ mod tests {
         ));
     }
     #[tokio::test]
+    async fn recorded_side_effect_replays_without_live_tool_permission() {
+        let dir=std::env::temp_dir().join(format!(
+            "hiyal-r3-tool-replay-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec=EffectSpec::Tool{
+            name:"update.record".into(),input:serde_json::json!({"id":1})
+        };
+        let key=spec.key("tool-trial",0,crate::core::AgentId(0),0).unwrap();
+        {
+            let mut journal=crate::runtime::EffectJournal::open(&dir).unwrap();
+            journal.bind_trial("tool-trial").unwrap();
+            let guard=GovernedBackend::new(Arc::new(ScriptedBackend),5)
+                .with_executor(Arc::new(Echo))
+                .allow_tool("update.record",ToolRule{
+                    max_input_bytes:128,requires_approval:true,
+                    has_external_side_effects:true,
+                }).unwrap().approve_call(&key,&spec).unwrap();
+            let receipts=journal.resolve_all(vec![(key.clone(),spec.clone())],
+                Arc::new(guard),1,std::time::Duration::from_secs(2),false)
+                .await.unwrap();
+            assert_eq!(receipts[0].billing,crate::runtime::BillingDisposition::Unknown);
+            assert_eq!(receipts[0].effective_provider,"tool:update.record");
+        }
+        {
+            let mut journal=crate::runtime::EffectJournal::open_existing(&dir).unwrap();
+            journal.bind_trial("tool-trial").unwrap();
+            let receipts=journal.resolve_all(vec![(key,spec)],
+                Arc::new(ScriptedBackend),1,std::time::Duration::from_secs(2),
+                true).await.unwrap();
+            assert!(matches!(receipts[0].result,EffectResult::Tool{..}));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn reservations_are_monotonic_even_after_backend_error() {
         let config = BudgetConfig {
             maximum_micro_usd: 1_000,
