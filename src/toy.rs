@@ -81,7 +81,7 @@ pub fn wealth_total(world: &Society) -> Result<u64, String> {
 pub fn preferential_target(degrees: &[u64], rng: &mut Streams) -> Result<usize, String> {
     let sum = degrees.iter().try_fold(0u64, |sum, value| {
         sum.checked_add(value.checked_add(1).ok_or("degree overflow")?)
-            .ok_or("weight overflow".into())
+            .ok_or("weight overflow")
     })?;
     if sum == 0 {
         return Err("empty degree list".into());

@@ -7,7 +7,7 @@ use crate::{
     experiment::{EffectPolicy, Trial},
     metrics::{CsvMetrics, Metric, MetricProjector},
     runtime::{Backend, ScriptedBackend},
-    scheduler::{Schedule, Scheduling},
+    scheduler::Scheduling,
     storage::{Genesis, ReadOnly, SCHEMA, Store, digest, stable_bytes},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -15,7 +15,7 @@ use std::{
     fs::{self, File},
     future::Future,
     io::Write,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 use tokio::task::JoinSet;
@@ -570,6 +570,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
