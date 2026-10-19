@@ -1,0 +1,9 @@
+[package]
+name = "hiyal-custom-world-example"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+hiyal = { path = "../.." }

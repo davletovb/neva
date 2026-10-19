@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "kind": "scripted_counter_acceptance",
+  "trial_name": "golden-two-agent",
+  "seed": 7,
+  "actors": [0, 1],
+  "committed_steps": 4,
+  "expected_actor_order": [0, 1, 0, 1],
+  "expected_state": {"value": 4},
+  "properties": [
+    "same trial name and seed produces stable event identities",
+    "rejecting an action does not advance scheduler, mutate world or append event",
+    "duplicate registration is an error",
+    "all-paused scheduler returns no eligible actor"
+  ]
+}
