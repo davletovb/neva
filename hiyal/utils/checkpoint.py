@@ -33,6 +33,11 @@ def _type_name(value: Any) -> str:
     return f"{type(value).__module__}.{type(value).__qualname__}"
 
 
+def _normalize_type_name(value: str) -> str:
+    """Accept identifiers written by Neva before the package rename."""
+    return "hiyal." + value[5:] if value.startswith("neva.") else value
+
+
 def _clone_json_native(value: Any) -> Any:
     """Clone native JSON data while matching a dumps/loads roundtrip shape."""
 
@@ -211,7 +216,7 @@ def _restore_memory(
         if memory is not None:
             raise ValueError("Checkpoint memory configuration does not match")
         return
-    if memory is None or state["type"] != _type_name(memory):
+    if memory is None or _normalize_type_name(state["type"]) != _type_name(memory):
         raise ValueError("Checkpoint memory type does not match")
     if type(memory) is ShortTermMemory:
         if state["capacity"] != memory.capacity:
@@ -351,7 +356,7 @@ def restore_runtime(
     agents = {agent.name: agent for agent in environment.agents}
     if len(agents) != len(environment.agents) or set(agents) != set(runtime["agents"]):
         raise ValueError("Checkpoint agent population does not match")
-    if runtime["environment_type"] != _type_name(environment):
+    if _normalize_type_name(runtime["environment_type"]) != _type_name(environment):
         raise ValueError("Checkpoint environment type does not match")
 
     apply_scheduler = prepare_scheduler(environment.scheduler, runtime["scheduler"], agents)
@@ -365,7 +370,7 @@ def restore_runtime(
     budget_updates: Dict[int, Any] = {}
     for name, agent in agents.items():
         payload = runtime["agents"][name]
-        if payload["type"] != _type_name(agent):
+        if _normalize_type_name(payload["type"]) != _type_name(agent):
             raise ValueError("Checkpoint agent type does not match")
         ids[name] = UUID(payload["id"])
         attributes[name] = deepcopy(payload["attributes"])

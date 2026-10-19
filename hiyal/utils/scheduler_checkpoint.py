@@ -60,7 +60,7 @@ def prepare_scheduler(scheduler: Any, payload: Any, agents: Dict[str, Any]) -> A
         if scheduler is not None:
             raise ValueError("Checkpoint scheduler does not match")
         return lambda: None
-    if scheduler is None or payload["type"] != _kind(scheduler):
+    if scheduler is None or (payload["type"].replace("neva.", "hiyal.", 1) if payload["type"].startswith("neva.") else payload["type"]) != _kind(scheduler):
         raise ValueError("Checkpoint scheduler does not match")
     order = payload["order"]
     if len(set(order)) != len(order) or set(order) - set(agents):
