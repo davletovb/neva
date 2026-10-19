@@ -626,7 +626,8 @@ def shared_provider_resources(
 ) -> ProviderResourceCoordinator:
     """Return the process-shared coordinator for a provider/account scope.
 
-    If state_path is omitted, HIYAL_PROVIDER_COORDINATION_DB is honoured,\n    falling back to NEVA_PROVIDER_COORDINATION_DB for existing deployments.
+    If state_path is omitted, HIYAL_PROVIDER_COORDINATION_DB is honoured,
+    falling back to NEVA_PROVIDER_COORDINATION_DB for existing deployments.
     Supplying the same SQLite path in separate processes extends the same scope
     across those processes.
     """
