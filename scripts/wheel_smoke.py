@@ -1,4 +1,4 @@
-"""Smoke-test an installed Neva wheel.
+"""Smoke-test an installed Hiyal wheel.
 
 Run by the ``package`` CI job against a wheel installed into a clean virtual
 environment. The script asserts that the distribution ships the expected
@@ -9,7 +9,7 @@ Run it with the interpreter of the environment that has the wheel installed::
 
     python scripts/wheel_smoke.py
 
-The script never imports the repository checkout: it fails if ``neva`` resolves
+The script never imports the repository checkout: it fails if ``hiyal`` resolves
 to a source tree instead of an installed distribution.
 """
 
@@ -30,11 +30,11 @@ def fail(message: str) -> NoReturn:
 
 
 def check_installed_location() -> pathlib.Path:
-    import neva
+    import hiyal
 
-    root = pathlib.Path(neva.__file__).resolve().parent
+    root = pathlib.Path(hiyal.__file__).resolve().parent
     if (root.parent / "pyproject.toml").is_file() or (root.parent / "setup.py").is_file():
-        fail(f"imported Neva from a source checkout, not an installed wheel: {root}")
+        fail(f"imported Hiyal from a source checkout, not an installed wheel: {root}")
     return root
 
 
@@ -44,20 +44,20 @@ def check_package_data(root: pathlib.Path) -> None:
 
 
 def check_wheel_contents() -> None:
-    files = metadata.files("neva")
+    files = metadata.files("hiyal")
     if not files:
         fail("distribution metadata lists no files")
     unexpected = sorted(
         str(path)
         for path in files
-        if not str(path).startswith("neva/") and ".dist-info/" not in str(path)
+        if not str(path).startswith("hiyal/") and ".dist-info/" not in str(path)
     )
     if unexpected:
-        fail(f"wheel ships files outside neva/: {unexpected[:5]}")
+        fail(f"wheel ships files outside hiyal/: {unexpected[:5]}")
 
 
 def check_extras_metadata() -> None:
-    requires = metadata.requires("neva") or []
+    requires = metadata.requires("hiyal") or []
     optional = [requirement for requirement in requires if "extra ==" in requirement]
     provided = set()
     for requirement in optional:
@@ -72,11 +72,11 @@ def check_extras_metadata() -> None:
 
 
 def run_offline_simulation() -> None:
-    from neva.agents import AgentManager
-    from neva.environments import BasicEnvironment
-    from neva.memory import ShortTermMemory
-    from neva.schedulers import RoundRobinScheduler
-    from neva.utils.context_budget import ModelContextBudget
+    from hiyal.agents import AgentManager
+    from hiyal.environments import BasicEnvironment
+    from hiyal.memory import ShortTermMemory
+    from hiyal.schedulers import RoundRobinScheduler
+    from hiyal.utils.context_budget import ModelContextBudget
 
     def backend(prompt: str) -> str:
         return f"ack: {prompt.split(':')[-1].strip()[:20]}"
@@ -116,7 +116,7 @@ def main() -> None:
     check_wheel_contents()
     check_extras_metadata()
     run_offline_simulation()
-    print(f"wheel smoke: OK (neva {metadata.version('neva')} at {root})")
+    print(f"wheel smoke: OK (hiyal {metadata.version('hiyal')} at {root})")
 
 
 if __name__ == "__main__":

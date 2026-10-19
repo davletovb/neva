@@ -1,6 +1,6 @@
-# Neva Contribution Guide 🧠🤝
+# Hiyal Contribution Guide 🧠🤝
 
-Thank you for considering contributing to Neva! We're excited to have you join our community of developers, researchers, and enthusiasts. Whether you're a seasoned developer or just starting out, your contributions can make a real difference in advancing our project.
+Thank you for considering contributing to Hiyal! We're excited to have you join our community of developers, researchers, and enthusiasts. Whether you're a seasoned developer or just starting out, your contributions can make a real difference in advancing our project.
 
 ## Table of Contents
 - [Understanding the Project](#understanding-the-project)
@@ -10,12 +10,12 @@ Thank you for considering contributing to Neva! We're excited to have you join o
 - [Code of Conduct](#code-of-conduct)
 
 ## Understanding the Project
-Before diving in, we recommend spending some time understanding the goals and architecture of Neva. Check out the README file for an overview and feel free to reach out to our community with any questions.
+Before diving in, we recommend spending some time understanding the goals and architecture of Hiyal. Check out the README file for an overview and feel free to reach out to our community with any questions.
 
 ### Project structure
 
 ```
-neva/
+hiyal/
   agents/         AIAgent implementations and the agent manager
   environments/   simulation loops, recovery policies, checkpoints
   schedulers/     turn-taking and event-driven selection strategies
@@ -27,14 +27,14 @@ neva/
 
 Dependency direction, as the code stands today:
 
-- `neva.utils` may import `neva.memory` (checkpointing) and must not import
-  `neva.agents`, `neva.environments`, `neva.schedulers`, or `neva.tools`.
-- `neva.memory` imports only `neva.utils.exceptions` from `utils`.
-- `neva.tools` may import `neva.agents.base`; the reverse direction (`agents` →
+- `hiyal.utils` may import `hiyal.memory` (checkpointing) and must not import
+  `hiyal.agents`, `hiyal.environments`, `hiyal.schedulers`, or `hiyal.tools`.
+- `hiyal.memory` imports only `hiyal.utils.exceptions` from `utils`.
+- `hiyal.tools` may import `hiyal.agents.base`; the reverse direction (`agents` →
   `tools`) stays under `TYPE_CHECKING` so no runtime import cycle appears.
 
 When a cross-cutting module belongs to a recognisable group - observability,
-persistence, reliability - add it to the matching subpackage under `neva.utils`
+persistence, reliability - add it to the matching subpackage under `hiyal.utils`
 instead of the top level, and keep importing it from the subpackage in new code.
 Compatibility shims may re-export the old path while downstream code migrates.
 
@@ -45,7 +45,7 @@ Compatibility shims may re-export the old path while downstream code migrates.
 - **Documentation:** Improving and expanding our documentation helps everyone.
 
 ## Setting Up the Development Environment
-- **Fork the Repository:** Start by forking the Neva repository to your GitHub account.
+- **Fork the Repository:** Start by forking the Hiyal repository to your GitHub account.
 - **Clone Your Fork:** Clone your fork to your local machine.
 - **Install Dependencies:** Run `poetry install --with dev` (or follow the
   installation guide in the README for alternative workflows).
@@ -55,11 +55,11 @@ Compatibility shims may re-export the old path while downstream code migrates.
 - **Make Your Changes:** Work on your chosen task, adhering to our coding standards.
 - **Test Thoroughly:** Ensure that your changes do not introduce any new bugs.
 - **Commit and Push:** Commit your changes to your branch and push them to GitHub.
-- **Submit a Pull Request (PR):** Open a PR against the main Neva repository. Provide a clear description of your changes.
+- **Submit a Pull Request (PR):** Open a PR against the main Hiyal repository. Provide a clear description of your changes.
 - **Address Review Comments:** Respond to any feedback from the core team.
 
 ## Code of Conduct
 We expect all community members to adhere to our Code of Conduct. Respectful and constructive collaboration is key to our project's success.
 
 ## Thank You!
-Contributing to open-source projects like Neva is a rewarding way to learn, grow, and build connections in the tech community. Your contributions are highly valued, and we look forward to building amazing things together!
+Contributing to open-source projects like Hiyal is a rewarding way to learn, grow, and build connections in the tech community. Your contributions are highly valued, and we look forward to building amazing things together!

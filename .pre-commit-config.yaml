@@ -24,6 +24,6 @@ repos:
     rev: v2.3.1
     hooks:
       - id: mypy
-        files: ^neva/
+        files: ^hiyal/
         additional_dependencies:
           - types-requests==2.33.0.20260906
