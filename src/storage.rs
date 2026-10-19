@@ -272,8 +272,9 @@ where
     pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
         let dir = dir.as_ref();
         let genesis: Genesis<W> = serde_json::from_slice(
-            &fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?
-        ).map_err(|e| e.to_string())?;
+            &fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
             return Err("invalid read-only manifest".into());
         }
@@ -284,42 +285,60 @@ where
         }
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
-            Some(serde_json::from_slice(&fs::read(snap_path).map_err(|e|e.to_string())?)
-                .map_err(|e|e.to_string())?)
-        } else { None };
+            Some(
+                serde_json::from_slice(&fs::read(snap_path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
         let mut state = Projection {
             world: genesis.initial_world.clone(),
             schedule: genesis.initial_schedule.clone(),
             streams: genesis.initial_streams.clone(),
-            sequence: 0, logical_step: 0, chain_head: digest(&genesis)?,
+            sequence: 0,
+            logical_step: 0,
+            chain_head: digest(&genesis)?,
         };
         let mut snapshot_state = if snapshot.as_ref().is_some_and(|s| s.log_bytes == 0) {
             Some(state.clone())
-        } else { None };
+        } else {
+            None
+        };
         let mut offset = 0u64;
-        for line in data.split_inclusive(|b| *b == b'\n').filter(|l| !l.is_empty()) {
-            let event: Entry<W,A> = serde_json::from_slice(line).map_err(|e|e.to_string())?;
+        for line in data
+            .split_inclusive(|b| *b == b'\n')
+            .filter(|l| !l.is_empty())
+        {
+            let event: Entry<W, A> = serde_json::from_slice(line).map_err(|e| e.to_string())?;
             Self::validate_entry(&genesis, &mut state, &event)?;
-            offset = offset.checked_add(line.len() as u64).ok_or("offset overflow")?;
+            offset = offset
+                .checked_add(line.len() as u64)
+                .ok_or("offset overflow")?;
             if snapshot.as_ref().is_some_and(|s| s.log_bytes == offset) {
                 snapshot_state = Some(state.clone());
             }
         }
         if let Some(snapshot) = snapshot {
             let prior = snapshot_state.ok_or("snapshot offset not on event boundary")?;
-            if snapshot.schema != SCHEMA || snapshot.trial_id != genesis.trial_id
+            if snapshot.schema != SCHEMA
+                || snapshot.trial_id != genesis.trial_id
                 || snapshot.sequence != prior.sequence
                 || snapshot.logical_step != prior.logical_step
                 || snapshot.chain_head != prior.chain_head
                 || digest(&snapshot.world)? != digest(&prior.world)?
                 || snapshot.schedule != prior.schedule
-                || snapshot.streams != prior.streams {
+                || snapshot.streams != prior.streams
+            {
                 return Err("read-only snapshot validation failed".into());
             }
         }
         Ok(ReadOnly {
-            genesis, world: state.world, sequence: state.sequence,
-            logical_step: state.logical_step, chain_head: state.chain_head,
+            genesis,
+            world: state.world,
+            sequence: state.sequence,
+            logical_step: state.logical_step,
+            chain_head: state.chain_head,
         })
     }
 
@@ -496,13 +515,18 @@ where
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, String> {
-        if self.poisoned { return Err("writer poisoned; reopen/recover".into()); }
+        if self.poisoned {
+            return Err("writer poisoned; reopen/recover".into());
+        }
         self.schedule.validate()?;
         let mut expected_schedule = self.schedule.clone();
         let mut expected_streams = self.streams.clone();
         if let Outcome::Control { paused } = &outcome {
-            if *paused { expected_schedule.pause(actor)?; }
-            else { expected_schedule.resume(actor)?; }
+            if *paused {
+                expected_schedule.pause(actor)?;
+            } else {
+                expected_schedule.resume(actor)?;
+            }
         } else if expected_schedule.select(&mut expected_streams)? != Some(actor) {
             return Err("unexpected selected actor".into());
         }
@@ -510,27 +534,41 @@ where
             return Err("scheduler or random stream divergence".into());
         }
         let accepted = matches!(&outcome, Outcome::Accepted { .. });
-        let next_step = self.logical_step
-            .checked_add(u64::from(accepted)).ok_or("logical-step overflow")?;
+        let next_step = self
+            .logical_step
+            .checked_add(u64::from(accepted))
+            .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
         let new_world = match &outcome {
-            Outcome::Accepted { world, state_hash, .. } => {
-                if digest(world)? != *state_hash { return Err("staged state hash mismatch".into()); }
+            Outcome::Accepted {
+                world, state_hash, ..
+            } => {
+                if digest(world)? != *state_hash {
+                    return Err("staged state hash mismatch".into());
+                }
                 world.clone()
             }
             Outcome::Rejected { .. } | Outcome::Control { .. } => self.world.clone(),
         };
         let mut event = Entry {
-            schema: SCHEMA, trial_id: self.genesis.trial_id.clone(),
-            sequence: self.sequence, logical_step: self.logical_step,
-            actor, outcome, after_schedule: schedule, after_streams: streams,
-            previous_hash: self.chain_head.clone(), hash: String::new(),
+            schema: SCHEMA,
+            trial_id: self.genesis.trial_id.clone(),
+            sequence: self.sequence,
+            logical_step: self.logical_step,
+            actor,
+            outcome,
+            after_schedule: schedule,
+            after_streams: streams,
+            previous_hash: self.chain_head.clone(),
+            hash: String::new(),
         };
         event.hash = event.compute_hash()?;
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
         let write_result = (|| -> std::io::Result<()> {
-            let mut file = OpenOptions::new().append(true).open(self.dir.join("events.jsonl"))?;
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(self.dir.join("events.jsonl"))?;
             file.write_all(&encoded)?;
             file.sync_all()
         })();
