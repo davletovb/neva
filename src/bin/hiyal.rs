@@ -290,6 +290,11 @@ async fn launch() -> Result<(), String> {
                     store.chain_head
                 );
             } else {
+                // A fork is valid only when its captured, portable source
+                // ancestry and intervention attribution also validate.
+                if dir.join("fork.json").exists() || dir.join("ancestry").exists() {
+                    verify_fork::<Counter>(dir)?;
+                }
                 println!(
                     "valid {} events and {} effects; hash={}",
                     store.sequence, ledger_count, store.chain_head

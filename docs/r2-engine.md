@@ -129,3 +129,6 @@ Python and DuckDB without a Python runtime in Hiyal.
 - Generic Sweep::execute continues to accept arbitrary u64 parameter categories. Overflow rejection is intentionally specific to Sweep::run_counter, which performs checked integer addition.
 
 - Fork placement checks canonicalized source and prospective child paths, including existing symlink ancestors and lexical aliases. A path that resolves under its own source ancestry is rejected before creating a child.
+
+- Reproducible sweep job and trial IDs are derived from a canonical scientific-plan fingerprint (name, base seed, parameter set, replicates, actor count, target attempts and scheduler). The operational worker limit is deliberately excluded so changing parallelism cannot alias distinct science or perturb D1 histories.
+- CLI `validate` checks a fork's ancestry capture and attribution in addition to its child event/effect ledgers; damaged fork metadata or evidence fails validation rather than passing as a standalone simulation.

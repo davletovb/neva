@@ -108,29 +108,40 @@ impl Sweep {
         if !self.parameter_values.iter().all(|v| seen.insert(v)) {
             return Err("duplicate sweep parameter".into());
         }
+        // Stable research identity covers every scientific setting while
+        // excluding the operational worker count (max_parallel).
+        let identity = digest(&(
+            "r2-sweep-identity-v2",
+            &self.name,
+            self.base_seed,
+            &self.parameter_values,
+            self.replicates,
+            self.actors,
+            self.attempts,
+            self.scheduler,
+        ))?;
         let mut jobs = Vec::new();
         for parameter in &self.parameter_values {
             for replicate in 0..self.replicates {
                 let seed_hex = crate::core::derive_id(
                     "r2-replicate",
-                    &[
-                        &self.name,
-                        &self.base_seed.to_string(),
-                        &replicate.to_string(),
-                    ],
+                    &[&identity, &replicate.to_string()],
                 );
                 let seed = u64::from_str_radix(&seed_hex[..16], 16).map_err(|e| e.to_string())?;
                 let id = crate::core::derive_id(
                     "r2-job",
                     &[
-                        &self.name,
+                        &identity,
                         &parameter.to_string(),
                         &replicate.to_string(),
                         &seed.to_string(),
                     ],
                 );
                 jobs.push(Job {
-                    trial_name: format!("{}-p{}-r{}", self.name, parameter, replicate),
+                    trial_name: format!(
+                        "{}-p{}-r{}-{}",
+                        self.name, parameter, replicate, &identity[..16]
+                    ),
                     id,
                     seed,
                     parameter: *parameter,
@@ -701,6 +712,30 @@ mod tests {
             scheduler: Scheduling::Random,
         }
     }
+    #[test]
+    fn scientific_sweep_identity_changes_without_worker_count_aliasing() {
+        let baseline = sweep(1);
+        let base_job = baseline.jobs().unwrap().remove(0);
+        let mut workers = baseline.clone();
+        workers.max_parallel = 4;
+        assert_eq!(base_job, workers.jobs().unwrap().remove(0));
+        for changed in 0..4 {
+            let mut study = baseline.clone();
+            match changed {
+                0 => study.actors += 1,
+                1 => study.attempts += 1,
+                2 => study.scheduler = Scheduling::RoundRobin,
+                _ => study.parameter_values.push(3),
+            }
+            let other = study.jobs().unwrap().remove(0);
+            assert_ne!(base_job.id, other.id);
+            assert_ne!(
+                TrialId::new(&base_job.trial_name, base_job.seed),
+                TrialId::new(&other.trial_name, other.seed)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn sweep_replays_identically_across_parallelism_and_restarts() {
         let a = directory("serial");

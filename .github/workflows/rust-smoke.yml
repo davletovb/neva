@@ -92,6 +92,14 @@ jobs:
           test -s "$work/paired/control/ancestry/events.jsonl"
           test -s "$work/paired/treatment/fork.json"
           cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/paired" 3 8
+          cargo run --locked --quiet -p hiyal -- validate "$work/paired/control"
+          cp "$work/paired/control/fork.json" "$work/fork.backup"
+          printf 'broken attribution' > "$work/paired/control/fork.json"
+          if cargo run --locked --quiet -p hiyal -- validate "$work/paired/control"; then
+            echo "incorrectly validated a corrupt fork" >&2
+            exit 1
+          fi
+          mv "$work/fork.backup" "$work/paired/control/fork.json"
 
           # Restart must reject a different source parent.
           sed 's/name = "counter-demo"/name = "another-parent"/' examples/counter.toml > "$work/other.toml"
