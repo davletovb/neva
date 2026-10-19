@@ -132,3 +132,6 @@ Python and DuckDB without a Python runtime in Hiyal.
 
 - Reproducible sweep job and trial IDs are derived from a canonical scientific-plan fingerprint (name, base seed, parameter set, replicates, actor count, target attempts and scheduler). The operational worker limit is deliberately excluded so changing parallelism cannot alias distinct science or perturb D1 histories.
 - CLI `validate` checks a fork's ancestry capture and attribution in addition to its child event/effect ledgers; damaged fork metadata or evidence fails validation rather than passing as a standalone simulation.
+
+- The fork marker in the genesis RNG profile requires both `fork.json` and `ancestry/` during CLI validation; deleting both artifacts cannot downgrade a fork to an apparently valid standalone trial.
+- Read-only replay verification now reads the event journal with a buffered streaming reader. CSV rebuild remains bounded by the largest record/world and the snapshot, rather than loading the entire source log just to validate it.

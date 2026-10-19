@@ -100,6 +100,14 @@ jobs:
             exit 1
           fi
           mv "$work/fork.backup" "$work/paired/control/fork.json"
+          mv "$work/paired/control/fork.json" "$work/fork.backup"
+          mv "$work/paired/control/ancestry" "$work/ancestry.backup"
+          if cargo run --locked --quiet -p hiyal -- validate "$work/paired/control"; then
+            echo "incorrectly validated a fork with no ancestry artifacts" >&2
+            exit 1
+          fi
+          mv "$work/fork.backup" "$work/paired/control/fork.json"
+          mv "$work/ancestry.backup" "$work/paired/control/ancestry"
 
           # Restart must reject a different source parent.
           sed 's/name = "counter-demo"/name = "another-parent"/' examples/counter.toml > "$work/other.toml"

@@ -292,7 +292,13 @@ async fn launch() -> Result<(), String> {
             } else {
                 // A fork is valid only when its captured, portable source
                 // ancestry and intervention attribution also validate.
-                if dir.join("fork.json").exists() || dir.join("ancestry").exists() {
+                let marked_fork = store.genesis.initial_streams.seed_domain.is_some();
+                let has_manifest = dir.join("fork.json").exists();
+                let has_ancestry = dir.join("ancestry").exists();
+                if marked_fork && (!has_manifest || !has_ancestry) {
+                    return Err("fork evidence missing from committed branch".into());
+                }
+                if marked_fork || has_manifest || has_ancestry {
                     verify_fork::<Counter>(dir)?;
                 }
                 println!(

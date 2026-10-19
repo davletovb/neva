@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
 };
 
@@ -297,10 +297,11 @@ where
             return Err("invalid read-only manifest".into());
         }
         genesis.initial_schedule.validate()?;
-        let data = fs::read(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        if !data.is_empty() && !data.ends_with(b"\n") {
-            return Err("uncommitted final event record; retry inspection".into());
-        }
+        // Verify the authoritative log one committed record at a time.
+        // This keeps read-only inspection and CSV recovery bounded by the
+        // largest event/state, rather than the entire history's byte size.
+        let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(input);
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
             Some(
@@ -324,15 +325,20 @@ where
             None
         };
         let mut offset = 0u64;
-        for line in data
-            .split_inclusive(|b| *b == b'\n')
-            .filter(|l| !l.is_empty())
-        {
-            let event: Entry<W, A> = serde_json::from_slice(line).map_err(|e| e.to_string())?;
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let count = reader.read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            if !line.ends_with(b"\n") {
+                return Err("uncommitted final event record; retry inspection".into());
+            }
+            let event: Entry<W, A> =
+                serde_json::from_slice(&line).map_err(|e| e.to_string())?;
             Self::validate_entry(&genesis, &mut state, &event)?;
-            offset = offset
-                .checked_add(line.len() as u64)
-                .ok_or("offset overflow")?;
+            offset = offset.checked_add(count as u64).ok_or("offset overflow")?;
             if snapshot.as_ref().is_some_and(|s| s.log_bytes == offset) {
                 snapshot_state = Some(state.clone());
             }
