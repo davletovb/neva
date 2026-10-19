@@ -191,11 +191,14 @@ runtime dependency. Parquet stays optional until needed.
 - [x] Choose named RNG/sampling, numerical D1 scope, canonical JSON safe-number
       contract and explicit conformance fixtures; executable library integration
       and pinned golden values remain R1.
-- [ ] Run `cargo test --workspace` with an installed Rust toolchain and record
-      the result. This environment has no Rust compiler.
+- [x] Run `cargo test --workspace` on GitHub's standard Ubuntu Rust runner:
+      [run 39246204608](https://github.com/davletovb/hiyal/actions/runs/39246204608)
+      verified rustfmt, 10 passing Rust tests and the custom-world binary at
+      `e96e523`. The local container lacks Rust; Clippy was not run.
 - [ ] Implement durable replay/resume and confirm independent application gate.
 
-The engineering **preparation** of R0 is complete, but the R0 **measured
-acceptance gate remains open** until the actual benchmark outputs and toolchain
-run are recorded. Do not invent results, claim legal clearance or mark issue
+The engineering **preparation** of R0 is complete and the initial Rust
+toolchain checks have now passed, but the R0 **measured acceptance gate remains
+open** until independently measured Python observer-on/off and snapshot
+benchmark outputs are recorded. Do not invent results, claim legal clearance or mark issue
 #103 closed. The root-level Rust files are a beginning of R1, not its completion.

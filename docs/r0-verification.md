@@ -6,10 +6,10 @@ Implementation work: [PR #106](https://github.com/davletovb/hiyal/pull/106).
 | Requirement | Evidence | Status |
 | --- | --- | --- |
 | Distinct development package and intended brand | Root `Cargo.toml`, [name diligence](r0-name-diligence.md) | Decided (unpublished) |
-| Rust extension model and CLI registration limits | [contracts](r0-contracts.md), `examples/custom_world/` | Specified and code sketched; build unverified |
+| Rust extension model and CLI registration limits | [contracts](r0-contracts.md), `examples/custom_world/` | Specified; Rust custom-world builds and runs in focused CI |
 | Typed world, action, scheduler, model/effect and log boundary | [contracts](r0-contracts.md), `src/core.rs`, `src/effects.rs` | Specified; prototype |
 | IDs, logical time, random streams, numerical profile, JSON hashing | [R0 decisions](r0-decisions.md) | Specified; conformance tests are R1 |
-| Archive defect register and golden cases | `fixtures/golden/`, Rust core tests, R0 decisions | Authored; tests unexecuted |
+| Archive defect register and golden cases | `fixtures/golden/`, Rust core tests, R0 decisions | Authored; 10 Rust tests passed on e96e523 |
 | Python observer-on/off and snapshot benchmark plan | `benchmarks/reference_python.py`, archived checkpoint benchmark, [reviewer-only results](../benchmarks/REVIEWER_REPORTED.md) | Harness authored; independent results missing |
 | Removed/retained features list | [R0 decisions](r0-decisions.md) | Done |
 | Prior art/stop conditions | [prior art](r0-prior-art.md), issue #103 | Done |
@@ -17,10 +17,16 @@ Implementation work: [PR #106](https://github.com/davletovb/hiyal/pull/106).
 
 ## Execution facts
 
-The current agent environment has **Python 3.13.5 but no `rustc`/`cargo`**.
-Its container also cannot connect to github.com to fetch the archived project.
-Consequently **neither `cargo test --workspace` nor independently measured
-Python observer-on/off trials ran here**. Running a simulated Python benchmark
+The local agent container has **Python 3.13.5 but no `rustc`/`cargo`** and
+cannot connect directly to github.com. However the purpose-built Rust smoke
+workflow **ran on GitHub's Ubuntu runner** at commit
+[`e96e523`](https://github.com/davletovb/hiyal/commit/e96e52323b4aad1a6bb2ed3473ded4a3c7f546fe):
+[`run 39246204608`](https://github.com/davletovb/hiyal/actions/runs/39246204608)
+passed `cargo fmt --all -- --check`, `cargo test --workspace` (**10 passed,
+0 failed**), and the standalone custom-world smoke. The extended Clippy
+task was intentionally skipped because this was a low-cost PR verification.
+The independent Python observer-on/off and checkpoint benchmarks **remain unrun**
+with attributable machine/source evidence. Running a simulated Python benchmark
 or posting guessed speedups would not constitute R0 evidence.
 
 The original reviewer figures are preserved with explicit attribution in
@@ -43,10 +49,11 @@ check on selected pull-request lifecycle events and version tags. It does not
 run Python benchmarks or replace the measured R0 evidence requirement.
 
 
-An October 19 review reports independently executing the original branch's
-`cargo test --workspace` (4 tests), consumer binary, fixture checker and
-a short Python benchmark. It also reported formatting and Clippy failures.
-These reviewer-reported runs apply to commit `047b4b9`, **not** to the
-corrected review branch; updated Rust tests are not yet verified with
-`cargo`/`rustfmt` in the agent environment. CI remains deliberately
-low-frequency; re-run on the latest head before merge.
+The October 19 reviewer reported testing the original branch `047b4b9`
+(4 Rust tests passed, formatting and Clippy failed). The revised branch's
+Rust formatting, all 10 tests and standalone example were checked in
+[`run 39246204608`](https://github.com/davletovb/hiyal/actions/runs/39246204608)
+on `e96e523`. Subsequent documentation-only changes do not modify the
+tested Rust sources. Extended Clippy remains unverified until an intentional
+release/manual-extended run. CI is deliberately low-frequency; if code changes,
+re-verify the resulting head before merge.
