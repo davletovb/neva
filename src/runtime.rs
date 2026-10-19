@@ -79,6 +79,29 @@ impl Receipt {
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
+    /// Opt-in only: tool execution requires a backend with explicit guards.
+    fn permits_tools(&self)->bool {false}
+    fn resolve_keyed<'a>(&'a self, _key:&'a EffectCallKey, request:&'a EffectSpec)->BoxResult<'a>{
+        self.resolve(request)
+    }
+    fn billing_disposition(&self, spec:&EffectSpec, response:&EffectResult)->BillingDisposition {
+        if matches!(response,EffectResult::UnsupportedCapability{..})
+            || (self.backend_id()=="scripted" && matches!(spec,EffectSpec::Model(_))) {
+            BillingDisposition::NotCharged
+        } else if matches!(spec,EffectSpec::Tool{..}) {
+            BillingDisposition::Unknown
+        } else if matches!(response,EffectResult::Model{..}) {
+            BillingDisposition::Charged
+        } else {
+            BillingDisposition::Unknown
+        }
+    }
+    fn effective_provider(&self, spec:&EffectSpec)->String {
+        match spec {
+            EffectSpec::Tool{name,..}=>format!("tool:{name}"),
+            _=>self.backend_id().into(),
+        }
+    }
     /// Useful for distinguishing scripted from network-backed billing semantics.
     fn backend_id(&self) -> &'static str {
         "custom"
@@ -332,6 +355,14 @@ impl EffectJournal {
         if concurrency == 0 {
             return Err("concurrency limit must be positive".into());
         }
+        if specs.len()>32 {return Err("maximum 32 effects per step".into());}
+        if specs.iter().filter(|(_,spec)|matches!(spec,EffectSpec::Tool{..})).count()>8 {
+            return Err("maximum 8 tool operations per step".into());
+        }
+        if specs.iter().any(|(_,spec)|matches!(spec,EffectSpec::Tool{..}))
+            && !backend.permits_tools() {
+            return Err("tool backend lacks explicit permissions/approvals".into());
+        }
         // Complete validation comes BEFORE launching any billable request.
         let mut seen = std::collections::BTreeSet::new();
         let mut pending = Vec::new();
@@ -378,7 +409,7 @@ impl EffectJournal {
             let backend = backend.clone();
             jobs.spawn(async move {
                 let _permit = sem.acquire_owned().await.map_err(|e| e.to_string())?;
-                let result = timeout(deadline, backend.resolve(&spec)).await;
+                let result = timeout(deadline, backend.resolve_keyed(&key, &spec)).await;
                 let response = match result {
                     Ok(Ok(value)) => value,
                     Ok(Err(error)) => EffectResult::Failed {
@@ -390,28 +421,20 @@ impl EffectJournal {
                         message: "effect deadline exceeded".into(),
                     },
                 };
-                let backend_kind = backend.backend_id();
                 let model = match &response {
                     EffectResult::Model {
                         effective_model, ..
                     } => Some(effective_model.clone()),
                     _ => None,
                 };
-                let billing = if backend_kind == "scripted"
-                    || matches!(&response, EffectResult::UnsupportedCapability { .. })
-                {
-                    BillingDisposition::NotCharged
-                } else if matches!(&response, EffectResult::Model { .. }) {
-                    BillingDisposition::Charged
-                } else {
-                    BillingDisposition::Unknown
-                };
+                let billing = backend.billing_disposition(&spec, &response);
+                let provider = backend.effective_provider(&spec);
                 Ok::<_, String>(Receipt {
                     key,
                     spec,
                     result: response,
                     billing,
-                    effective_provider: backend_kind.into(),
+                    effective_provider: provider,
                     effective_model: model,
                     content_hash: String::new(),
                 })
@@ -441,14 +464,43 @@ impl EffectJournal {
     }
 }
 
-/// Minimal OpenAI-compatible, opt-in JSON chat adapter, HTTP only via reqwest.
-/// No network requests occur unless the "live-http" feature and backend are
-/// selected explicitly. Provider seed remains best-effort, not D1.
+/// Opt-in OpenAI-compatible HTTP adapter. Network requests are never D1.
+/// Unknown billing after timeout/network error is retained in the journal.
+#[cfg(feature = "live-http")]
+#[derive(Clone, Debug)]
+pub struct HttpReliability {
+    pub max_response_bytes: usize,
+    /// Only an explicit HTTP 429 is retried; transport/timeouts and 5xx may
+    /// already have incurred provider charges and are never auto-retried.
+    pub retry_429: u8,
+    pub retry_delay: Duration,
+    pub circuit_threshold: u32,
+    pub circuit_cooldown: Duration,
+}
+#[cfg(feature = "live-http")]
+impl Default for HttpReliability {
+    fn default()->Self {
+        Self {
+            max_response_bytes: 1024*1024, retry_429: 0,
+            retry_delay: Duration::from_millis(100),
+            circuit_threshold: 3,
+            circuit_cooldown: Duration::from_secs(30),
+        }
+    }
+}
+#[cfg(feature = "live-http")]
+#[derive(Default)]
+struct CircuitState {
+    failures: u32,
+    open_until: Option<tokio::time::Instant>,
+}
 #[cfg(feature = "live-http")]
 pub struct OpenAiCompatible {
     client: reqwest::Client,
     url: String,
     api_key: String,
+    reliability: HttpReliability,
+    circuit: tokio::sync::Mutex<CircuitState>,
 }
 #[cfg(feature = "live-http")]
 impl OpenAiCompatible {
@@ -461,9 +513,7 @@ impl OpenAiCompatible {
             "https" => true,
             "http" => parsed.host_str().is_some_and(|host| {
                 host == "localhost"
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|address| address.is_loopback())
+                    || host.parse::<std::net::IpAddr>().is_ok_and(|address| address.is_loopback())
             }),
             _ => false,
         };
@@ -472,102 +522,241 @@ impl OpenAiCompatible {
         }
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| e.to_string())?;
+            .build().map_err(|e| e.to_string())?;
         Ok(Self {
-            client,
-            url: parsed.to_string(),
-            api_key,
+            client, url: parsed.to_string(), api_key,
+            reliability: HttpReliability::default(),
+            circuit: tokio::sync::Mutex::new(CircuitState::default()),
+        })
+    }
+    pub fn with_reliability(mut self, reliability: HttpReliability)->Result<Self,String>{
+        if reliability.max_response_bytes < 1024
+            || reliability.max_response_bytes > 8*1024*1024
+            || reliability.retry_429 > 2
+            || reliability.circuit_threshold == 0 {
+            return Err("invalid HTTP reliability bounds".into());
+        }
+        self.reliability=reliability;Ok(self)
+    }
+    async fn failure(&self) {
+        let mut state=self.circuit.lock().await;
+        state.failures=state.failures.saturating_add(1);
+        if state.failures>=self.reliability.circuit_threshold {
+            state.open_until=Some(tokio::time::Instant::now()+self.reliability.circuit_cooldown);
+        }
+    }
+    async fn successful(&self) {
+        let mut state=self.circuit.lock().await;
+        state.failures=0;state.open_until=None;
+    }
+    async fn allowed(&self)->bool {
+        let mut state=self.circuit.lock().await;
+        if let Some(end)=state.open_until {
+            if tokio::time::Instant::now()<end {return false;}
+            state.failures=0;state.open_until=None;
+        }
+        true
+    }
+}
+
+#[cfg(feature = "live-http")]
+fn parse_usage(value:&serde_json::Value)->Option<Usage>{
+    value.get("usage").filter(|v|!v.is_null()).map(|u|Usage {
+        input_tokens: u.get("prompt_tokens").and_then(|v|v.as_u64()),
+        output_tokens: u.get("completion_tokens").and_then(|v|v.as_u64()),
+        billed_cost:None,currency:None,
+    })
+}
+#[cfg(feature = "live-http")]
+struct SseAccumulator {
+    line: Vec<u8>,
+    frame: Vec<u8>,
+    text: String,
+    effective_model: Option<String>,
+    usage: Option<Usage>,
+    done:bool,
+    seen_bytes:usize,
+    limit:usize,
+}
+#[cfg(feature = "live-http")]
+impl SseAccumulator {
+    fn new(limit:usize)->Self {
+        Self {line:vec![],frame:vec![],text:String::new(),effective_model:None,
+            usage:None,done:false,seen_bytes:0,limit}
+    }
+    fn feed(&mut self, bytes:&[u8])->Result<(),String>{
+        self.seen_bytes=self.seen_bytes.checked_add(bytes.len())
+            .ok_or("stream response overflow")?;
+        if self.seen_bytes>self.limit{return Err("stream response exceeds byte cap".into());}
+        for &byte in bytes {
+            if self.done {break;}
+            if byte==b'\n' {
+                let mut line=std::mem::take(&mut self.line);
+                if line.last()==Some(&b'\r'){line.pop();}
+                if line.is_empty() {
+                    if !self.frame.is_empty(){
+                        let frame=std::mem::take(&mut self.frame);
+                        self.parse_frame(&frame)?;
+                    }
+                } else if let Some(payload)=line.strip_prefix(b"data:"){
+                    if !self.frame.is_empty(){self.frame.push(b'\n');}
+                    self.frame.extend_from_slice(payload.strip_prefix(b" ").unwrap_or(payload));
+                }
+            } else {
+                self.line.push(byte);
+                if self.line.len()>self.limit{return Err("SSE line too long".into());}
+            }
+        }
+        Ok(())
+    }
+    fn parse_frame(&mut self, frame:&[u8])->Result<(),String>{
+        if frame==b"[DONE]" {self.done=true;return Ok(());}
+        let payload:serde_json::Value=serde_json::from_slice(frame)
+            .map_err(|e|format!("invalid SSE JSON: {e}"))?;
+        if let Some(model)=payload.get("model").and_then(|v|v.as_str()){
+            self.effective_model=Some(model.into());
+        }
+        if let Some(usage)=parse_usage(&payload){self.usage=Some(usage);}
+        if let Some(delta)=payload.pointer("/choices/0/delta/content").and_then(|v|v.as_str()){
+            self.text.push_str(delta);
+            if self.text.len()>self.limit {return Err("stream output exceeds cap".into());}
+        }
+        if payload.pointer("/choices/0/delta/tool_calls").is_some() {
+            return Err("tool call streaming requires explicit tool executor".into());
+        }
+        Ok(())
+    }
+    fn finish(mut self, fallback:&str)->Result<EffectResult,String>{
+        if !self.line.is_empty() || !self.frame.is_empty(){
+            return Err("truncated SSE frame".into());
+        }
+        if !self.done {return Err("stream ended without [DONE]".into());}
+        Ok(EffectResult::Model {
+            content:std::mem::take(&mut self.text),
+            effective_model:self.effective_model.unwrap_or_else(||fallback.into()),
+            usage:self.usage,
         })
     }
 }
 #[cfg(feature = "live-http")]
-impl Backend for OpenAiCompatible {
-    fn backend_id(&self) -> &'static str {
-        "openai-compatible"
+async fn bounded_bytes(mut response:reqwest::Response,cap:usize)->Result<Vec<u8>,String>{
+    let mut raw=Vec::new();
+    while let Some(chunk)=response.chunk().await.map_err(|e|e.to_string())?{
+        if raw.len().checked_add(chunk.len()).is_none_or(|n| n>cap) {
+            return Err("HTTP response exceeds configured byte cap".into());
+        }
+        raw.extend_from_slice(&chunk);
     }
-    fn resolve<'a>(&'a self, spec: &'a EffectSpec) -> BoxResult<'a> {
+    Ok(raw)
+}
+#[cfg(feature = "live-http")]
+impl Backend for OpenAiCompatible {
+    fn backend_id(&self)->&'static str {"openai-compatible"}
+    fn resolve<'a>(&'a self, spec:&'a EffectSpec)->BoxResult<'a>{
         Box::pin(async move {
-            let model = match spec {
-                EffectSpec::Model(m) => m,
-                _ => {
-                    return Ok(EffectResult::UnsupportedCapability {
-                        capability: "HTTP tool".into(),
-                    });
-                }
+            let model=match spec {
+                EffectSpec::Model(m)=>m,
+                _=>return Ok(EffectResult::UnsupportedCapability{
+                    capability:"HTTP tool operations require a separate permitted executor".into()
+                }),
             };
-            if model.streaming || !model.tool_schemas.is_empty() || model.response_format.is_some()
-            {
-                return Ok(EffectResult::UnsupportedCapability {
-                    capability: "streaming/tool schemas/response format (minimal adapter)".into(),
+            if !model.tool_schemas.is_empty() || model.response_format.is_some() {
+                return Ok(EffectResult::UnsupportedCapability{
+                    capability:"tool schemas/structured output unsupported by this adapter".into()
                 });
             }
-            let roles: Vec<_> = model
-                .messages
-                .iter()
-                .map(|m| {
-                    let role = match m.role {
-                        crate::effects::Role::System => "system",
-                        crate::effects::Role::User => "user",
-                        crate::effects::Role::Assistant => "assistant",
-                        crate::effects::Role::Tool => "tool",
-                    };
-                    let mut message = serde_json::json!({"role":role,"content":m.content});
-                    if matches!(m.role, crate::effects::Role::Tool) {
-                        let call_id = m
-                            .tool_call_id
-                            .as_ref()
-                            .ok_or("tool role message requires tool_call_id")?;
-                        message["tool_call_id"] = serde_json::json!(call_id);
-                    }
-                    Ok::<_, String>(message)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut body = serde_json::json!({"model":model.model,"messages":roles,"stream":false});
-            if let Some(t) = model.sampling.temperature {
-                body["temperature"] = serde_json::json!(t);
+            if model.model.trim().is_empty() ||
+                model.sampling.max_output_tokens.is_none_or(|n|n==0 || n>8192) {
+                return Ok(EffectResult::UnsupportedCapability{
+                    capability:"model and bounded max_output_tokens (1..=8192) required".into()
+                });
             }
-            if let Some(p) = model.sampling.top_p {
-                body["top_p"] = serde_json::json!(p);
+            if !self.allowed().await {
+                return Ok(EffectResult::UnsupportedCapability{
+                    capability:"HTTP circuit open; no provider request launched".into()
+                });
             }
-            if let Some(seed) = model.sampling.seed {
-                body["seed"] = serde_json::json!(seed);
-            }
-            if let Some(max) = model.sampling.max_output_tokens {
-                body["max_tokens"] = serde_json::json!(max);
-            }
-            let response = self
-                .client
-                .post(&self.url)
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("HTTP backend status {}", response.status()));
-            }
-            let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-            let text = payload
-                .pointer("/choices/0/message/content")
-                .and_then(|v| v.as_str())
-                .ok_or("missing chat completion content")?;
-            let effective_model = payload
-                .get("model")
-                .and_then(|v| v.as_str())
-                .unwrap_or(model.model.as_str())
-                .to_owned();
-            let usage = payload.get("usage").map(|u| Usage {
-                input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()),
-                output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()),
-                billed_cost: None,
-                currency: None,
+            let roles:Vec<_>=model.messages.iter().map(|m|{
+                let role=match m.role {
+                    crate::effects::Role::System=>"system",
+                    crate::effects::Role::User=>"user",
+                    crate::effects::Role::Assistant=>"assistant",
+                    crate::effects::Role::Tool=>"tool",
+                };
+                let mut message=serde_json::json!({"role":role,"content":m.content});
+                if matches!(m.role,crate::effects::Role::Tool){
+                    let id=m.tool_call_id.as_ref().ok_or(
+                        "tool role message requires tool_call_id"
+                    )?;
+                    message["tool_call_id"]=serde_json::json!(id);
+                }
+                Ok::<_,String>(message)
+            }).collect::<Result<Vec<_>,_>>()?;
+            let mut body=serde_json::json!({
+                "model":model.model,"messages":roles,"stream":model.streaming
             });
-            Ok(EffectResult::Model {
-                content: text.into(),
-                effective_model,
-                usage,
-            })
+            if let Some(t)=model.sampling.temperature{body["temperature"]=serde_json::json!(t);}
+            if let Some(p)=model.sampling.top_p{body["top_p"]=serde_json::json!(p);}
+            if let Some(seed)=model.sampling.seed{body["seed"]=serde_json::json!(seed);}
+            if let Some(max)=model.sampling.max_output_tokens{body["max_tokens"]=serde_json::json!(max);}
+            if model.streaming {
+                body["stream_options"]=serde_json::json!({"include_usage":true});
+            }
+            if serde_json::to_vec(&body).map_err(|e|e.to_string())?.len()>512*1024 {
+                return Ok(EffectResult::UnsupportedCapability{capability:"request exceeds 512 KiB".into()});
+            }
+            for attempt in 0..=self.reliability.retry_429 {
+                let response=self.client.post(&self.url)
+                    .bearer_auth(&self.api_key)
+                    .json(&body).send().await;
+                let response=match response {
+                    Ok(r)=>r,
+                    Err(error)=>{
+                        self.failure().await;
+                        // Transport can fail after delivery: never silently retry.
+                        return Err(format!("transport_unknown_charge: {error}"));
+                    }
+                };
+                let status=response.status();
+                if status.as_u16()==429 && attempt < self.reliability.retry_429 {
+                    self.failure().await;
+                    // Only HTTP 429 is treated as explicitly non-admitted.
+                    // Do not retry timeout, 500, 503, or partial streams.
+                    tokio::time::sleep(self.reliability.retry_delay).await;
+                    continue;
+                }
+                if !status.is_success(){
+                    self.failure().await;
+                    return Err(format!("http_status_{}: provider may have charged", status.as_u16()));
+                }
+                let value = if model.streaming {
+                    let mut stream=response;
+                    let mut parser=SseAccumulator::new(self.reliability.max_response_bytes);
+                    while let Some(chunk)=stream.chunk().await.map_err(|e|e.to_string())? {
+                        parser.feed(&chunk)?;
+                    }
+                    parser.finish(&model.model)
+                } else {
+                    let body=bounded_bytes(response,self.reliability.max_response_bytes).await?;
+                    let payload:serde_json::Value=serde_json::from_slice(&body)
+                        .map_err(|e|format!("invalid JSON completion: {e}"))?;
+                    if payload.pointer("/choices/0/message/tool_calls").is_some(){
+                        return Err("tool calls unsupported without an explicitly approved executor".into());
+                    }
+                    let content=payload.pointer("/choices/0/message/content")
+                        .and_then(|v|v.as_str())
+                        .ok_or("missing chat completion content")?;
+                    Ok(EffectResult::Model{
+                        content:content.into(),
+                        effective_model:payload.get("model").and_then(|v|v.as_str())
+                            .unwrap_or(&model.model).into(),
+                        usage:parse_usage(&payload),
+                    })
+                };
+                if value.is_ok(){self.successful().await;}else{self.failure().await;}
+                return value;
+            }
+            Err("unexpected HTTP retry exit".into())
         })
     }
 }
@@ -745,6 +934,66 @@ mod http_tests {
         assert!(OpenAiCompatible::new("http://192.168.1.10/chat".into(), "token".into()).is_err());
         assert!(OpenAiCompatible::new("http://127.0.0.1:3333/chat".into(), "token".into()).is_ok());
     }
+    #[test]
+    fn sse_parser_handles_fragmented_frames_and_rejects_truncation() {
+        let mut p=SseAccumulator::new(4096);
+        p.feed(b"data: {\"model\":\"v2\",\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n").unwrap();
+        p.feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"B\"}}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n").unwrap();
+        p.feed(b"data: [DO").unwrap();
+        p.feed(b"NE]\n\n").unwrap();
+        assert_eq!(p.finish("fallback").unwrap(),EffectResult::Model{
+            content:"AB".into(),effective_model:"v2".into(),
+            usage:Some(Usage{input_tokens:Some(4),output_tokens:Some(2),
+                billed_cost:None,currency:None}),
+        });
+        let mut truncated=SseAccumulator::new(4096);
+        truncated.feed(b"data: {\"choices\":[]}\n\n").unwrap();
+        assert!(truncated.finish("fallback").is_err());
+        let mut oversized=SseAccumulator::new(3);
+        assert!(oversized.feed(b"data: content\\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn stream_over_loopback_collects_fragmented_sse_and_usage() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let port=listener.local_addr().unwrap().port();
+        let server=thread::spawn(move || {
+            let (mut socket,_) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut received=vec![];
+            let mut chunk=[0u8;4096];
+            loop {
+                let n=socket.read(&mut chunk).unwrap();
+                if n==0 {break;}
+                received.extend_from_slice(&chunk[..n]);
+                if let Some(header)=received.windows(4).position(|c|c==b"\r\n\r\n"){
+                    let headers=String::from_utf8_lossy(&received[..header]);
+                    let len=headers.lines().find_map(|line|line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|c|c.trim().parse::<usize>().ok())).unwrap_or(0);
+                    if received.len()>=header+4+len {break;}
+                }
+            }
+            let message=concat!(
+                "data: {\"model\":\"v2\",\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"B\"}}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":2}}\n\n",
+                "data: [DONE]\n\n"
+            );
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",message.len(),message).unwrap();
+            String::from_utf8(received).unwrap()
+        });
+        let http=OpenAiCompatible::new(format!("http://127.0.0.1:{port}/v1/chat/completions"),"test".into()).unwrap();
+        let mut spec=sample_request("stream");
+        if let EffectSpec::Model(ref mut m)=spec {m.streaming=true;}
+        assert_eq!(http.resolve(&spec).await.unwrap(),EffectResult::Model{
+            content:"AB".into(),effective_model:"v2".into(),
+            usage:Some(Usage{input_tokens:Some(2),output_tokens:Some(2),billed_cost:None,currency:None}),
+        });
+        let wire=server.join().unwrap();
+        assert!(wire.contains("\"stream\":true"));
+        assert!(wire.contains("stream_options"));
+    }
+
     #[tokio::test]
     async fn opt_in_http_chat_adapter_parses_model_and_usage_from_loopback() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

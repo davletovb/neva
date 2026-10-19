@@ -32,7 +32,9 @@ fn help() -> &'static str {
      hiyal validate <trial-dir>\n\
      hiyal sweep <sweep.toml> <output-root>\n\
      hiyal fork <parent-trial> <pair-root> <shock> <attempts>\n\
-     Live mode requires --features live-http, OPENAI_COMPAT_URL and OPENAI_COMPAT_API_KEY.\n"
+     Live mode requires --features live-http, OPENAI_COMPAT_URL and OPENAI_COMPAT_API_KEY.\n\
+     Set HIYAL_LIVE_MAX_MICRO_USD, HIYAL_LIVE_INPUT_MICRO_USD_PER_TOKEN and\n\
+     HIYAL_LIVE_OUTPUT_MICRO_USD_PER_TOKEN for a fail-closed process budget.\n"
 }
 fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
     if live {
@@ -41,7 +43,28 @@ fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
             let url = env::var("OPENAI_COMPAT_URL").map_err(|_| "OPENAI_COMPAT_URL not set")?;
             let api =
                 env::var("OPENAI_COMPAT_API_KEY").map_err(|_| "OPENAI_COMPAT_API_KEY not set")?;
-            return Ok(Arc::new(hiyal::runtime::OpenAiCompatible::new(url, api)?));
+            // Pricing must be explicitly configured for every live process.
+            // Budgets are reservations, not promises of provider settlement.
+            let numeric = |name: &str| -> Result<u64, String> {
+                env::var(name).map_err(|_|format!("{name} required for --live"))?
+                    .parse::<u64>().map_err(|_|format!("invalid {name}"))
+            };
+            let maximum = numeric("HIYAL_LIVE_MAX_MICRO_USD")?;
+            let input_price = numeric("HIYAL_LIVE_INPUT_MICRO_USD_PER_TOKEN")?;
+            let output_price = numeric("HIYAL_LIVE_OUTPUT_MICRO_USD_PER_TOKEN")?;
+            if maximum == 0 || input_price == 0 || output_price == 0 {
+                return Err("live spend cap and declared token rates must be positive".into());
+            }
+            let http = Arc::new(hiyal::runtime::OpenAiCompatible::new(url, api)?);
+            let guard = hiyal::guard::GovernedBackend::new(http, 100)
+                .with_budget(hiyal::guard::BudgetConfig {
+                    maximum_micro_usd: maximum,
+                    prompt_micro_usd_per_token: input_price,
+                    output_micro_usd_per_token: output_price,
+                    max_input_bytes: 64*1024,
+                    max_output_tokens: 2048,
+                });
+            return Ok(Arc::new(guard));
         }
         #[cfg(not(feature = "live-http"))]
         {
