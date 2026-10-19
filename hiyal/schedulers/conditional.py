@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Callable, Dict, cast
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.utils.exceptions import ConfigurationError, SchedulingError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.exceptions import ConfigurationError, SchedulingError
+from hiyal.utils.observability.observer import SimulationObserver
 
 Condition = Callable[[AIAgent], bool]
 

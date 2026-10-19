@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import List
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 class LeastRecentlyUsedScheduler(Scheduler):

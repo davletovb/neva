@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections import deque
 from typing import Deque
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 class EventDrivenScheduler(Scheduler):

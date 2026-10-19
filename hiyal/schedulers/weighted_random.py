@@ -6,10 +6,10 @@ import random
 import sys
 from typing import Any, List, Tuple, cast
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 class WeightedRandomScheduler(Scheduler):
@@ -62,5 +62,5 @@ class WeightedRandomScheduler(Scheduler):
 __all__ = ["WeightedRandomScheduler"]
 
 # Register ``random`` as a submodule so tests can monkeypatch
-# ``neva.schedulers.weighted_random.random`` directly.
+# ``hiyal.schedulers.weighted_random.random`` directly.
 sys.modules.setdefault(__name__ + ".random", random)

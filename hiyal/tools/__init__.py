@@ -1,8 +1,8 @@
-"""Tool implementations used by Neva agents."""
+"""Tool implementations used by Hiyal agents."""
 
 from __future__ import annotations
 
-from neva.agents.base import Tool
+from hiyal.agents.base import Tool
 
 from .guard import ToolGuard, ToolLimits
 from .loop import ToolLoopConfig, ToolLoopResult, ToolLoopStep, run_tool_loop

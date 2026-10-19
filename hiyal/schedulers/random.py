@@ -5,10 +5,10 @@ from __future__ import annotations
 import random
 import sys
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 class RandomScheduler(Scheduler):
@@ -35,7 +35,7 @@ class RandomScheduler(Scheduler):
 
 __all__ = ["RandomScheduler"]
 
-# Allow ``monkeypatch.setattr("neva.schedulers.random.random.choice", ...)``
+# Allow ``monkeypatch.setattr("hiyal.schedulers.random.random.choice", ...)``
 # by registering the standard library ``random`` module as a submodule of this
 # scheduler module.
 sys.modules.setdefault(__name__ + ".random", random)

@@ -1,11 +1,11 @@
-"""Argument schemas shared by Neva's built-in text tools."""
+"""Argument schemas shared by Hiyal's built-in text tools."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from neva.agents.base import TOOL_TEXT_ARGUMENT_KEYS
+from hiyal.agents.base import TOOL_TEXT_ARGUMENT_KEYS
 
 
 class _BuiltInTextArgumentSchema:

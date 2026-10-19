@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.schedulers.round_robin import RoundRobinScheduler
-from neva.utils.exceptions import ConfigurationError, SchedulingError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.schedulers.round_robin import RoundRobinScheduler
+from hiyal.utils.exceptions import ConfigurationError, SchedulingError
+from hiyal.utils.observability.observer import SimulationObserver
 
 if False:  # pragma: no cover - for type checking only
-    from neva.environments.base import Environment
+    from hiyal.environments.base import Environment
 
 
 class CompositeScheduler(Scheduler):
