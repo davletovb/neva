@@ -6,7 +6,7 @@ from collections import OrderedDict
 from threading import RLock
 from typing import Optional
 
-from neva.utils.exceptions import CacheConfigurationError
+from hiyal.utils.exceptions import CacheConfigurationError
 
 
 class LLMCache:

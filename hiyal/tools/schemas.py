@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple, Union
 
-from neva.utils.exceptions import ToolSchemaConfigurationError
+from hiyal.utils.exceptions import ToolSchemaConfigurationError
 
 __all__ = ["ArgumentSchema", "ArgumentSpec"]
 

@@ -1,4 +1,4 @@
-"""Utility subpackage exposing helper modules used across Neva."""
+"""Utility subpackage exposing helper modules used across Hiyal."""
 
 from importlib import import_module as _import_module
 

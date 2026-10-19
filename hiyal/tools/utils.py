@@ -8,7 +8,7 @@ def missing_dependency_message(package: str, *, fallback: str) -> str:
 
     return (
         f"The optional dependency `{package}` is unavailable. {fallback} "
-        f"Install it with `pip install {package}` (or `pip install neva[tools]`) "
+        f"Install it with `pip install {package}` (or `pip install hiyal[tools]`) "
         "or provide a custom factory when constructing the tool to continue "
         "running experiments without network access."
     )

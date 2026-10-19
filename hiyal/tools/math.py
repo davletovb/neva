@@ -7,8 +7,8 @@ import logging
 import operator
 from typing import Callable, Dict
 
-from neva.agents.base import Tool
-from neva.utils.exceptions import ToolExecutionError
+from hiyal.agents.base import Tool
+from hiyal.utils.exceptions import ToolExecutionError
 
 from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
 

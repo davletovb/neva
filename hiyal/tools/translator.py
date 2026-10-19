@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional, Protocol, cast
 
-from neva.agents.base import Tool
-from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
+from hiyal.agents.base import Tool
+from hiyal.utils.exceptions import MissingDependencyError, ToolExecutionError
 
 from ._builtin_schemas import BUILTIN_TEXT_ARGUMENT_SCHEMA
 from .utils import missing_dependency_message

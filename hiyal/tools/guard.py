@@ -2,7 +2,7 @@
 
 Guardrails are enforced in code — allowlists, approval hooks, concurrency
 quotas, and execution limits — so they hold regardless of what a model or
-prompt claims. Direct :class:`~neva.agents.base.Tool` calls and
+prompt claims. Direct :class:`~hiyal.agents.base.Tool` calls and
 :meth:`AIAgent.call_tool` both route through the same execution path.
 """
 
@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any, Callable, Dict, FrozenSet, Iterable, Optional, Sequence, Tuple
 
-from neva.utils.exceptions import (
+from hiyal.utils.exceptions import (
     ToolExecutionError,
     ToolGuardConfigurationError,
     ToolResourceLimitError,
@@ -351,7 +351,7 @@ class ToolGuard:
 
         worker = threading.Thread(
             target=runner,
-            name=f"neva-tool-{getattr(tool, 'name', 'tool')}",
+            name=f"hiyal-tool-{getattr(tool, 'name', 'tool')}",
             daemon=True,
         )
         try:
@@ -391,7 +391,7 @@ class ToolGuard:
                 limits.max_output_chars,
                 sender,
             ),
-            name=f"neva-tool-process-{getattr(tool, 'name', 'tool')}",
+            name=f"hiyal-tool-process-{getattr(tool, 'name', 'tool')}",
         )
         receive_outcome: Dict[str, Any] = {}
 
@@ -405,7 +405,7 @@ class ToolGuard:
 
         reader = threading.Thread(
             target=receive_result,
-            name=f"neva-tool-result-{getattr(tool, 'name', 'tool')}",
+            name=f"hiyal-tool-result-{getattr(tool, 'name', 'tool')}",
             daemon=True,
         )
         deadline = monotonic() + timeout
