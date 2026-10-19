@@ -5,10 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable, List, Optional, Set
 
-from neva.agents.base import AIAgent
+from hiyal.agents.base import AIAgent
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
-    from neva.environments.base import Environment
+    from hiyal.environments.base import Environment
 
 
 class Scheduler(ABC):

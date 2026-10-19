@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 from .base import MemoryRecord
 from .utils import estimate_token_count

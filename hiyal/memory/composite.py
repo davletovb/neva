@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Sequence
 
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 from .base import MemoryModule
 

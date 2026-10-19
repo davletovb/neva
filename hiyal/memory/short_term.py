@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Deque, Dict, Iterable, Optional
 
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 from .base import MemoryModule, MemoryRecord
 

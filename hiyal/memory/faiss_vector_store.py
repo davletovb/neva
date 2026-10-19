@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from neva.memory.base import MemoryModule, MemoryRecord
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.memory.base import MemoryModule, MemoryRecord
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only.
     import faiss  # noqa: F401
@@ -114,7 +114,7 @@ class FaissVectorStoreMemory(MemoryModule):
         vector = self._np.array(vector, dtype="float32", copy=True)
 
         if self._normalize_embeddings:
-            # Normalize in-place on Neva-owned storage.
+            # Normalize in-place on Hiyal-owned storage.
             vector_2d = vector.reshape(1, -1)
             self._faiss.normalize_L2(vector_2d)
             vector = vector_2d.reshape(-1)

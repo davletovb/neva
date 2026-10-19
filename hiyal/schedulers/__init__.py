@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Type, TypeVar, cast
 
-from neva.utils.exceptions import ConfigurationError
+from hiyal.utils.exceptions import ConfigurationError
 
 from .base import Scheduler
 from .composite import CompositeScheduler
