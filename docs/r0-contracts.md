@@ -148,8 +148,9 @@ profile. A numerical result containing NaN or infinity is invalid.
 The provisional event envelope has `schema_version = 2`: event identity is
 `SHA-256(hiyal:id:v1, "event-v2", trial, committed_step, actor,
 SHA-256(JSON-normalized-action), previous_event_id)`, using length-prefixed
-identity components. The action digest sorts JSON object keys via
-`serde_json::Value`; **this is not the final RFC 8785 canonical scheme** and
+identity components. The action digest explicitly sorts object keys **recursively**, regardless
+of a consumer enabling serde_json's `preserve_order` Cargo feature;
+**this is not the final RFC 8785 canonical scheme** and
 does not yet hash a reconstructible resulting-state delta. For scientific
 replay, R1 must replace the prototype with a validated canonical
 transition/state hash and idempotent audited attempt stream. Do not infer
@@ -163,3 +164,8 @@ ones without rewinding the committed-step counter. Values that may exceed
 the IEEE-754 safe integer range are serialized as decimal strings. Model
 sampling floats must be finite or serialization fails, rather than
 silently substituting a provider default.
+
+The Python reference harness records `git_revision` and untracked files in
+`worktree_dirty`; generated benchmark outputs live in ignored
+`benchmarks/results/` and Python bytecode caches are ignored as non-source
+artifacts. Any other untracked source/configuration results in `true`.

@@ -95,12 +95,47 @@ fn hex_digest(bytes: &[u8]) -> String {
     hex
 }
 
-/// Provisional payload digest: serializes JSON Value with sorted object keys.
-/// This is NOT RFC 8785; final canonical action/transition hashing is R1 work.
+/// Explicitly sort object keys *recursively*, independently of the global
+/// serde_json `preserve_order` Cargo feature (which downstream crates can
+/// enable through feature unification). This is NOT RFC 8785/JCS.
+fn stable_json_bytes(value: &serde_json::Value, out: &mut Vec<u8>) -> serde_json::Result<()> {
+    match value {
+        serde_json::Value::Object(object) => {
+            out.push(b'{');
+            let mut keys: Vec<_> = object.keys().collect();
+            keys.sort_unstable();
+            for (position, key) in keys.iter().enumerate() {
+                if position != 0 {
+                    out.push(b',');
+                }
+                serde_json::to_writer(&mut *out, key)?;
+                out.push(b':');
+                stable_json_bytes(&object[key.as_str()], out)?;
+            }
+            out.push(b'}');
+        }
+        serde_json::Value::Array(values) => {
+            out.push(b'[');
+            for (position, value) in values.iter().enumerate() {
+                if position != 0 {
+                    out.push(b',');
+                }
+                stable_json_bytes(value, out)?;
+            }
+            out.push(b']');
+        }
+        scalar => serde_json::to_writer(out, scalar)?,
+    }
+    Ok(())
+}
+
+/// Provisional digest of recursively ordered JSON action data. R1 will use a
+/// verified RFC 8785 canonicalizer and reject unsupported numeric shapes.
 fn action_digest<A: Serialize>(action: &A) -> Result<String, EngineError> {
     let value = serde_json::to_value(action)
         .map_err(|error| EngineError::Serialization(error.to_string()))?;
-    let bytes = serde_json::to_vec(&value)
+    let mut bytes = Vec::new();
+    stable_json_bytes(&value, &mut bytes)
         .map_err(|error| EngineError::Serialization(error.to_string()))?;
     Ok(hex_digest(&Sha256::digest(bytes)))
 }
@@ -599,6 +634,20 @@ mod tests {
         let exported = serde_json::to_value(&event).unwrap();
         assert_eq!(exported["logical_step"], u64::MAX.to_string());
         assert_eq!(exported["agent_id"], u64::MAX.to_string());
+    }
+
+    #[test]
+    fn action_hash_is_independent_of_object_insertion_order() {
+        let mut left = serde_json::Map::new();
+        left.insert("z".into(), serde_json::json!({"b": 2, "a": 1}));
+        left.insert("a".into(), serde_json::json!([{"y": true, "x": false}]));
+        let mut right = serde_json::Map::new();
+        right.insert("a".into(), serde_json::json!([{"x": false, "y": true}]));
+        right.insert("z".into(), serde_json::json!({"a": 1, "b": 2}));
+        assert_eq!(
+            action_digest(&serde_json::Value::Object(left)).unwrap(),
+            action_digest(&serde_json::Value::Object(right)).unwrap()
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ first changing its trigger strategy.
 - One **standard Ubuntu** runner; no platform, toolchain or feature matrix.
 - **10-minute job timeout**. Stale concurrent PR/manual runs are cancelled using the same branch name
   as their group key (`github.head_ref || github.ref_name`).
-- Only formatting, Rust tests and standalone consumer smoke on PRs.
+- Only formatting, Rust tests (including the deterministic map-order feature check) and standalone consumer smoke on PRs.
 - Clippy only for manual extended verification and version-tag releases.
 - No automatic benchmarks, LLM/network smoke, deprecated Python dependencies,
   heavy optional integrations, docs builds, coverage, artifacts or cache churn.

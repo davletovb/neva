@@ -65,6 +65,9 @@ jobs:
             cargo test --workspace
           fi
 
+      - name: Deterministic map-order regression (feature unification)
+        run: cargo test -p hiyal --features serde_json/preserve_order
+
       - name: Standalone external-world smoke
         run: |
           cargo run --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl

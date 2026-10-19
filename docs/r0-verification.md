@@ -57,3 +57,9 @@ on `e96e523`. Subsequent documentation-only changes do not modify the
 tested Rust sources. Extended Clippy remains unverified until an intentional
 release/manual-extended run. CI is deliberately low-frequency; if code changes,
 re-verify the resulting head before merge.
+
+After CI run 39246204608, two additional review threads identified
+downstream `serde_json/preserve_order` feature unification and missing
+untracked-source provenance. Both are addressed in a follow-up code change,
+which requires a fresh targeted Rust smoke run before claiming verification
+for the updated Rust source.

@@ -45,7 +45,7 @@ def _git_revision() -> str:
 def _git_dirty() -> bool | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"],
+            ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
             text=True,
             capture_output=True,
             check=True,
