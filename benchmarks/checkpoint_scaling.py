@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
-from neva.utils.state_management import (
+from hiyal.utils.state_management import (
     ConversationState,
     create_snapshot,
     load_snapshot,
@@ -146,7 +146,7 @@ def run_case(
         benchmark_root.mkdir(parents=True, exist_ok=True)
 
     tempdir = tempfile.TemporaryDirectory(
-        prefix=f"neva-checkpoint-{case.name}-",
+        prefix=f"hiyal-checkpoint-{case.name}-",
         dir=str(benchmark_root) if benchmark_root is not None else None,
     )
     benchmark_dir = Path(tempdir.name)

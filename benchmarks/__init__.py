@@ -1,1 +1,1 @@
-"""Repository-local performance benchmarks for Neva."""
+"""Repository-local performance benchmarks for Hiyal."""

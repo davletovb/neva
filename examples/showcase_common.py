@@ -1,4 +1,4 @@
-"""Shared infrastructure for the Neva showcase examples."""
+"""Shared infrastructure for the Hiyal showcase examples."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import neva.tools as tool_module
-from neva.environments import BasicEnvironment
-from neva.schedulers import RoundRobinScheduler
+import hiyal.tools as tool_module
+from hiyal.environments import BasicEnvironment
+from hiyal.schedulers import RoundRobinScheduler
 
 
 class TranscriptEnvironment(BasicEnvironment):
@@ -41,7 +41,7 @@ class TranscriptEnvironment(BasicEnvironment):
 def install_wikipedia_stub() -> None:
     """Ensure the Wikipedia tool works without the optional dependency."""
 
-    wikipedia_module = import_module("neva.tools.wikipedia")
+    wikipedia_module = import_module("hiyal.tools.wikipedia")
 
     if getattr(wikipedia_module, "wikipedia", None) is not None:
         return

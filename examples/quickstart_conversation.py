@@ -1,6 +1,6 @@
-"""Minimal conversational simulation between two Neva agents.
+"""Minimal conversational simulation between two Hiyal agents.
 
-This script demonstrates the core building blocks of the Neva library:
+This script demonstrates the core building blocks of the Hiyal library:
 
 * ``AgentManager`` for creating agents.
 * ``BasicEnvironment`` to provide shared context.
@@ -22,10 +22,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from neva.agents import AgentManager
-from neva.environments import BasicEnvironment
-from neva.memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
-from neva.schedulers import RoundRobinScheduler
+from hiyal.agents import AgentManager
+from hiyal.environments import BasicEnvironment
+from hiyal.memory import CompositeMemory, MemoryRecord, ShortTermMemory, SummaryMemory
+from hiyal.schedulers import RoundRobinScheduler
 
 
 class ConversationEnvironment(BasicEnvironment):
