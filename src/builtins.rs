@@ -51,10 +51,15 @@ impl EffectPolicy<Counter> for Increment {
     }
 }
 pub fn kind(amount: u64, model: bool, model_id: &str, provider: &str) -> Result<String, String> {
-    if model_id.is_empty() || model_id.contains(':') || !matches!(provider, "scripted" | "openai-compatible") {
+    if model_id.is_empty()
+        || model_id.contains(':')
+        || !matches!(provider, "scripted" | "openai-compatible")
+    {
         return Err("invalid model or provider".into());
     }
-    Ok(format!("{KIND}:amount={amount}:model={model}:model_id={model_id}:provider={provider}"))
+    Ok(format!(
+        "{KIND}:amount={amount}:model={model}:model_id={model_id}:provider={provider}"
+    ))
 }
 pub fn parse_kind(input: &str) -> Result<Increment, String> {
     let tail = input
@@ -80,10 +85,21 @@ pub fn parse_kind(input: &str) -> Result<Increment, String> {
         .ok_or("missing model_id")?
         .strip_prefix("model_id=")
         .ok_or("invalid model_id")?;
-    let provider = parts.next().ok_or("missing provider")?
-        .strip_prefix("provider=").ok_or("invalid provider")?;
-    if parts.next().is_some() || model_id.is_empty() || !matches!(provider, "scripted" | "openai-compatible") {
+    let provider = parts
+        .next()
+        .ok_or("missing provider")?
+        .strip_prefix("provider=")
+        .ok_or("invalid provider")?;
+    if parts.next().is_some()
+        || model_id.is_empty()
+        || !matches!(provider, "scripted" | "openai-compatible")
+    {
         return Err("invalid world kind".into());
     }
-    Ok(Increment { amount, model, model_id: model_id.into(), provider: provider.into() })
+    Ok(Increment {
+        amount,
+        model,
+        model_id: model_id.into(),
+        provider: provider.into(),
+    })
 }

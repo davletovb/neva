@@ -233,7 +233,9 @@ impl Drop for WriterLock {
 }
 pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
-    File::open(dir).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+    File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
@@ -325,20 +327,29 @@ where
         // never a clone of every event's entire world.
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
-            Some(serde_json::from_slice(&fs::read(&snap_path).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?)
-        } else { None };
+            Some(
+                serde_json::from_slice(&fs::read(&snap_path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
         let initial_projection = projected.clone();
         let mut matched = if snapshot.as_ref().is_some_and(|s| s.log_bytes == 0) {
             Some(initial_projection)
-        } else { None };
+        } else {
+            None
+        };
         let mut cursor = 0usize;
         for raw_line in data[..durable_length].split_inclusive(|b| *b == b'\n') {
             let entry: Entry<W, A> = serde_json::from_slice(raw_line)
                 .map_err(|e| format!("corrupt committed log: {e}"))?;
             Self::validate_entry(&genesis, &mut projected, &entry)?;
             cursor += raw_line.len();
-            if snapshot.as_ref().is_some_and(|s| s.log_bytes == cursor as u64) {
+            if snapshot
+                .as_ref()
+                .is_some_and(|s| s.log_bytes == cursor as u64)
+            {
                 matched = Some(projected.clone());
             }
         }

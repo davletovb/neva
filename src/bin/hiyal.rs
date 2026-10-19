@@ -73,7 +73,11 @@ async fn launch() -> Result<(), String> {
             }
             let agents = (0..cfg.actors).map(AgentId).collect();
             let model_id = cfg.model_id.as_deref().unwrap_or("fixed-v1");
-            let provider = if live { "openai-compatible" } else { "scripted" };
+            let provider = if live {
+                "openai-compatible"
+            } else {
+                "scripted"
+            };
             let mut trial = Trial::create(
                 dir,
                 &cfg.name,
@@ -112,7 +116,13 @@ async fn launch() -> Result<(), String> {
             }
             let kind = read_kind(dir)?;
             let policy = parse_kind(&kind)?;
-            if policy.provider != if live { "openai-compatible" } else { "scripted" } {
+            if policy.provider
+                != if live {
+                    "openai-compatible"
+                } else {
+                    "scripted"
+                }
+            {
                 return Err("resume backend differs from saved trial provider".into());
             }
             let mut trial = Trial::resume(dir, &kind, policy, backend(live)?, false)?;
