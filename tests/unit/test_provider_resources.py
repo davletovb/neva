@@ -5,12 +5,12 @@ import time
 
 import pytest
 
-from neva.utils.exceptions import (
+from hiyal.utils.exceptions import (
     ConfigurationError,
     RateLimiterCancelledError,
     SpendBudgetExceededError,
 )
-from neva.utils.provider_resources import (
+from hiyal.utils.provider_resources import (
     ProviderResourceCoordinator,
     _clear_provider_resource_registry_for_tests,
     account_scope,

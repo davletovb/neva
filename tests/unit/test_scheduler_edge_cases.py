@@ -2,10 +2,10 @@
 
 import pytest
 
-from neva.agents.base import AIAgent
-from neva.environments import Environment
-from neva.schedulers import CompositeScheduler, ConditionalScheduler, RoundRobinScheduler
-from neva.utils.exceptions import ConfigurationError, SchedulingError
+from hiyal.agents.base import AIAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import CompositeScheduler, ConditionalScheduler, RoundRobinScheduler
+from hiyal.utils.exceptions import ConfigurationError, SchedulingError
 
 
 def test_composite_add_requires_string_group():

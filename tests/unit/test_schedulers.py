@@ -1,8 +1,8 @@
 import pytest
 
-from neva.agents import AIAgent
-from neva.environments import Environment
-from neva.schedulers import (
+from hiyal.agents import AIAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import (
     CompositeScheduler,
     ConditionalScheduler,
     EventDrivenScheduler,
@@ -15,7 +15,7 @@ from neva.schedulers import (
     register_scheduler,
     unregister_scheduler,
 )
-from neva.utils.exceptions import SchedulingError
+from hiyal.utils.exceptions import SchedulingError
 
 
 class StubAgent(AIAgent):
@@ -211,7 +211,7 @@ def test_weighted_random_scheduler_respects_weights(monkeypatch):
 
     samples = iter([0.5, 3.5])
     monkeypatch.setattr(
-        "neva.schedulers.weighted_random.random.uniform", lambda _a, _b: next(samples)
+        "hiyal.schedulers.weighted_random.random.uniform", lambda _a, _b: next(samples)
     )
 
     assert scheduler.get_next_agent() is light
@@ -224,7 +224,7 @@ def test_random_scheduler_requires_active_agents(monkeypatch):
     agent = StubAgent("solo")
     scheduler.add(agent)
 
-    monkeypatch.setattr("neva.schedulers.random.random.choice", lambda agents: agents[0])
+    monkeypatch.setattr("hiyal.schedulers.random.random.choice", lambda agents: agents[0])
     assert scheduler.get_next_agent() is agent
 
     scheduler.pause(agent)

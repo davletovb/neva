@@ -6,20 +6,20 @@ from datetime import datetime, timezone
 
 import pytest
 
-from neva.agents import GPTAgent, TransformerAgent
-from neva.agents.base import AIAgent, Tool
-from neva.environments import BasicEnvironment, Environment
-from neva.memory import ShortTermMemory
-from neva.schedulers import CompositeScheduler, EventDrivenScheduler, RandomScheduler
-from neva.tools import ArgumentSchema, ArgumentSpec, ToolGuard, ToolLimits
-from neva.utils.caching import LLMCache
-from neva.utils.exceptions import (
+from hiyal.agents import GPTAgent, TransformerAgent
+from hiyal.agents.base import AIAgent, Tool
+from hiyal.environments import BasicEnvironment, Environment
+from hiyal.memory import ShortTermMemory
+from hiyal.schedulers import CompositeScheduler, EventDrivenScheduler, RandomScheduler
+from hiyal.tools import ArgumentSchema, ArgumentSpec, ToolGuard, ToolLimits
+from hiyal.utils.caching import LLMCache
+from hiyal.utils.exceptions import (
     AgentCommunicationError,
     RecordedReplayError,
     ReplayMismatchError,
     ReproducibilityError,
 )
-from neva.utils.reproducibility import (
+from hiyal.utils.reproducibility import (
     ReplayRecord,
     ReplayTape,
     RunManifest,
@@ -27,7 +27,7 @@ from neva.utils.reproducibility import (
     prepare_reproducible_run,
     seed_everything,
 )
-from neva.utils.safety import PromptValidator
+from hiyal.utils.safety import PromptValidator
 
 
 class ManifestTool(Tool):
@@ -166,7 +166,7 @@ def test_manifest_captures_prompts_provider_model_generation_cache_and_dependenc
         seed=9,
         seed_report=report,
         prompts={"system": "Grade carefully", "scenario": "Essay task"},
-        dependencies=["requests", "definitely-not-installed-neva-test-package"],
+        dependencies=["requests", "definitely-not-installed-hiyal-test-package"],
         metadata={"experiment": "baseline"},
     )
     payload = manifest.to_dict()
@@ -186,7 +186,7 @@ def test_manifest_captures_prompts_provider_model_generation_cache_and_dependenc
     assert agent_config["cache"]["enabled"] is True
     assert agent_config["cache"]["max_size"] == 7
     assert payload["dependencies"]["requests"]
-    assert payload["dependencies"]["definitely-not-installed-neva-test-package"] is None
+    assert payload["dependencies"]["definitely-not-installed-hiyal-test-package"] is None
     assert payload["metadata"] == {"experiment": "baseline"}
     assert "super-secret-key" not in json.dumps(payload)
 
@@ -284,7 +284,7 @@ def test_json_native_mapping_preserves_distinct_non_string_and_string_keys():
         metadata={1: "integer", "1": "string"},
     )
 
-    entries = manifest.metadata["__neva_mapping_entries__"]
+    entries = manifest.metadata["__hiyal_mapping_entries__"]
     assert len(entries) == 2
     assert [1, "integer"] in entries
     assert ["1", "string"] in entries
@@ -410,7 +410,7 @@ def test_json_native_encodes_bytes_and_rejects_unsupported_state_values():
     second_manifest = create_run_manifest(second, seed=1, dependencies=[])
 
     assert first_manifest.fingerprint() != second_manifest.fingerprint()
-    assert first_manifest.environment["state"]["blob"] == {"__neva_bytes_hex__": "6669727374"}
+    assert first_manifest.environment["state"]["blob"] == {"__hiyal_bytes_hex__": "6669727374"}
 
     class Unsupported:
         pass
@@ -576,7 +576,7 @@ def test_gpt_replay_identity_detects_different_provider_history(monkeypatch):
             return {"choices": [{"message": {"content": "recorded"}}]}
 
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: Response(),
     )
 
@@ -626,7 +626,7 @@ def test_provider_backed_gpt_can_record_then_replay_offline(monkeypatch):
         calls.append(json)
         return Response()
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
 
     recording_env = BasicEnvironment("provider", "record once", RandomScheduler())
     recording_agent = GPTAgent(

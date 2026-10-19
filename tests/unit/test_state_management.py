@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from neva.utils.state_management import (
+from hiyal.utils.state_management import (
     ConversationState,
     create_snapshot,
     load_snapshot,

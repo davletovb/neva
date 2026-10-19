@@ -2,8 +2,8 @@ import threading
 
 import pytest
 
-from neva.utils.exceptions import RateLimiterCancelledError
-from neva.utils.safety import RateLimiter
+from hiyal.utils.exceptions import RateLimiterCancelledError
+from hiyal.utils.safety import RateLimiter
 
 
 def test_cancellation_exception_remains_compatible():
@@ -66,7 +66,7 @@ def test_real_token_wait_can_be_cancelled():
 
 
 def test_cancelled_waiter_leaves_limiter_healthy_for_subsequent_callers(monkeypatch):
-    from neva.utils import safety
+    from hiyal.utils import safety
 
     now = [0.0]
     waits = []
@@ -94,7 +94,7 @@ def test_cancelled_waiter_leaves_limiter_healthy_for_subsequent_callers(monkeypa
 
 
 def test_unset_event_waits_for_refill(monkeypatch):
-    from neva.utils import safety
+    from hiyal.utils import safety
 
     now = [0.0]
     waits = []
@@ -125,7 +125,7 @@ def test_pre_cancelled_acquire_preserves_available_token():
 
 
 def test_waiting_acquire_is_cancelled_without_consuming_token(monkeypatch):
-    from neva.utils import safety
+    from hiyal.utils import safety
 
     now = [0.0]
     monkeypatch.setattr(safety.time, "monotonic", lambda: now[0])

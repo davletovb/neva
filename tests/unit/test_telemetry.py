@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
 
-from neva.utils.observability.telemetry import (
+from hiyal.utils.observability.telemetry import (
     TelemetryManager,
     _content_fields,
     configure_telemetry,
@@ -127,14 +127,14 @@ def test_record_agent_turn_tracks_metrics_and_traces():
     )
 
     names = [name for name, _ in tracer.started]
-    assert "neva.conversation" in names
-    assert "neva.agent.turn" in names
-    agent_span = next(span for name, span in tracer.started if name == "neva.agent.turn")
+    assert "hiyal.conversation" in names
+    assert "hiyal.agent.turn" in names
+    agent_span = next(span for name, span in tracer.started if name == "hiyal.agent.turn")
     prompt_event = next(event for event in agent_span.events if event[0] == "llm.prompt")
     assert "llm.prompt" not in prompt_event[1]
     assert prompt_event[1]["llm.prompt.chars"] == len("Hello there")
     assert "llm.prompt.sha256" in prompt_event[1]
-    latency_records = meter.histograms["neva.agent.response.latency"].records
+    latency_records = meter.histograms["hiyal.agent.response.latency"].records
     assert pytest.approx(latency_records[0][0]) == 0.42
     log_event, payload = logger.records[-1]
     assert log_event == "agent_turn"
@@ -162,10 +162,10 @@ def test_record_llm_api_call_emits_metrics():
     )
 
     names = [name for name, _ in tracer.started]
-    assert "neva.llm.call" in names
-    llm_latency = meter.histograms["neva.llm.api.latency"].records
+    assert "hiyal.llm.call" in names
+    llm_latency = meter.histograms["hiyal.llm.api.latency"].records
     assert pytest.approx(llm_latency[0][0]) == 1.25
-    token_counts = meter.counters["neva.llm.total.tokens"].records[0][0]
+    token_counts = meter.counters["hiyal.llm.total.tokens"].records[0][0]
     assert token_counts == 25
     log_event, payload = logger.records[-1]
     assert log_event == "llm_call"
@@ -183,19 +183,19 @@ def test_record_tool_call_tracks_usage():
         agent_name="gamma",
         tool_name="search",
         duration=0.1,
-        arguments={"query": "neva"},
-        output="neva project",
+        arguments={"query": "hiyal"},
+        output="hiyal project",
     )
 
     names = [name for name, _ in tracer.started]
-    assert "neva.tool.call" in names
-    invocation_count = meter.counters["neva.tool.invocations"].records[0][0]
+    assert "hiyal.tool.call" in names
+    invocation_count = meter.counters["hiyal.tool.invocations"].records[0][0]
     assert invocation_count == 1
     log_event, payload = logger.records[-1]
     assert log_event == "tool_call"
     assert payload["tool.name"] == "search"
     assert "tool.arguments" not in payload
-    assert payload["tool.arguments.chars"] == len('{"query": "neva"}')
+    assert payload["tool.arguments.chars"] == len('{"query": "hiyal"}')
 
 
 def test_configure_telemetry_controls_global_state():
@@ -219,7 +219,7 @@ def test_record_agent_registration_and_scheduler_decision():
         attributes={"agent.role": "observer"},
     )
 
-    assert tracer.started[0][0] == "neva.conversation"
+    assert tracer.started[0][0] == "hiyal.conversation"
     conversation_span = tracer.started[0][1]
     assert (
         "agent.registered",
@@ -299,7 +299,7 @@ def test_include_content_emits_raw_text():
         response="General Kenobi",
         latency=0.1,
     )
-    agent_span = next(span for name, span in tracer.started if name == "neva.agent.turn")
+    agent_span = next(span for name, span in tracer.started if name == "hiyal.agent.turn")
     assert ("llm.prompt", {"llm.prompt": "Hello there"}) in agent_span.events
     _, payload = logger.records[-1]
     assert payload["agent.prompt"] == "Hello there"
