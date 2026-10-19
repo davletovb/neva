@@ -2,11 +2,11 @@ import threading
 
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.memory import AdaptiveConversationMemory, MemoryBudget, ShortTermMemory, VectorStoreMemory
-from neva.schedulers import RoundRobinScheduler
-from neva.utils.state_management import SimulationSnapshot
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.memory import AdaptiveConversationMemory, MemoryBudget, ShortTermMemory, VectorStoreMemory
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.utils.state_management import SimulationSnapshot
 
 
 def _embed(text):

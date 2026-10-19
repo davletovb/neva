@@ -5,12 +5,12 @@ from enum import IntEnum
 
 import pytest
 
-import neva.utils.checkpoint as checkpoint
-import neva.utils.state_management as state_management
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.schedulers import RoundRobinScheduler
-from neva.utils.state_management import (
+import hiyal.utils.checkpoint as checkpoint
+import hiyal.utils.state_management as state_management
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.utils.state_management import (
     CheckpointLimits,
     ConversationState,
     SimulationSnapshot,

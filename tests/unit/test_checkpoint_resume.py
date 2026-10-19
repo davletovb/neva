@@ -1,10 +1,10 @@
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.memory import CompositeMemory, ShortTermMemory, SummaryMemory
-from neva.schedulers import RoundRobinScheduler
-from neva.utils.state_management import SimulationSnapshot
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.memory import CompositeMemory, ShortTermMemory, SummaryMemory
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.utils.state_management import SimulationSnapshot
 
 
 def test_completed_turn_metrics_recorded_after_step():

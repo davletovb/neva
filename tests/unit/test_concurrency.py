@@ -1,9 +1,9 @@
 import asyncio
 import threading
 
-from neva.agents import AgentManager
-from neva.agents.base import ParallelExecutionConfig
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents import AgentManager
+from hiyal.agents.base import ParallelExecutionConfig
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 class _NamedStubAgent:

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from neva.utils.state_management import ConversationState, ConversationTurn
+from hiyal.utils.state_management import ConversationState, ConversationTurn
 
 
 def test_retention_keeps_latest_messages_without_changing_default():
@@ -44,10 +44,10 @@ def test_serialization_preserves_limit_and_legacy_payloads():
 
 
 def test_environment_checkpoint_keeps_retention_policy():
-    from neva.agents import TransformerAgent
-    from neva.environments import Environment
-    from neva.schedulers import RoundRobinScheduler
-    from neva.utils.state_management import SimulationSnapshot
+    from hiyal.agents import TransformerAgent
+    from hiyal.environments import Environment
+    from hiyal.schedulers import RoundRobinScheduler
+    from hiyal.utils.state_management import SimulationSnapshot
 
     env = Environment(RoundRobinScheduler())
     agent = TransformerAgent(name="agent", llm_backend=lambda _: "reply")
@@ -164,7 +164,7 @@ def test_turn_and_byte_limits_compose():
 
 
 def test_agent_returns_full_response_while_storing_bounded_history():
-    from neva.agents import TransformerAgent
+    from hiyal.agents import TransformerAgent
 
     full_response = "r" * 100
     state = ConversationState("agent", max_turn_bytes=24)
@@ -180,10 +180,10 @@ def test_agent_returns_full_response_while_storing_bounded_history():
 
 
 def test_environment_checkpoint_keeps_turn_byte_policy():
-    from neva.agents import TransformerAgent
-    from neva.environments import Environment
-    from neva.schedulers import RoundRobinScheduler
-    from neva.utils.state_management import SimulationSnapshot
+    from hiyal.agents import TransformerAgent
+    from hiyal.environments import Environment
+    from hiyal.schedulers import RoundRobinScheduler
+    from hiyal.utils.state_management import SimulationSnapshot
 
     env = Environment(RoundRobinScheduler())
     agent = TransformerAgent(name="agent", llm_backend=lambda _: "r" * 100)
@@ -214,7 +214,7 @@ def test_surrogate_replacement_is_explicit_and_per_code_unit():
 
 
 def test_bounded_agent_history_normalizes_unpaired_surrogates_without_failing():
-    from neva.agents import TransformerAgent
+    from hiyal.agents import TransformerAgent
 
     surrogate = json.loads('"\\ud800"')
     full_response = surrogate + ("r" * 40)
@@ -326,10 +326,10 @@ def test_history_byte_limit_reconciles_message_mutation_before_persistence():
 
 
 def test_environment_checkpoint_keeps_history_byte_policy():
-    from neva.agents import TransformerAgent
-    from neva.environments import Environment
-    from neva.schedulers import RoundRobinScheduler
-    from neva.utils.state_management import SimulationSnapshot
+    from hiyal.agents import TransformerAgent
+    from hiyal.environments import Environment
+    from hiyal.schedulers import RoundRobinScheduler
+    from hiyal.utils.state_management import SimulationSnapshot
 
     env = Environment(RoundRobinScheduler())
     agent = TransformerAgent(name="agent", llm_backend=lambda _: "r" * 40)
