@@ -179,9 +179,14 @@ impl EffectJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let lock_path = dir.as_ref().join(".effects-writer.lock");
         let lock_file = OpenOptions::new()
-            .write(true).create_new(true).open(&lock_path)
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
             .map_err(|e| format!("effect journal already open or stale lock: {e}"))?;
-        let lock = EffectWriterLock { path: lock_path, file: lock_file };
+        let lock = EffectWriterLock {
+            path: lock_path,
+            file: lock_file,
+        };
         let path = dir.as_ref().join("effects.jsonl");
         if !path.exists() {
             OpenOptions::new()

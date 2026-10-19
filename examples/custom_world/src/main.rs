@@ -103,9 +103,7 @@ async fn run() -> Result<(), String> {
                 let store = Store::<Society, u64>::inspect_read_only(path)?;
                 println!(
                     "actions={} events={} hash={}",
-                    store.world.total_actions,
-                    store.sequence,
-                    store.chain_head
+                    store.world.total_actions, store.sequence, store.chain_head
                 );
             }
             _ => return Err("use run|resume|inspect <dir> [steps]".into()),
