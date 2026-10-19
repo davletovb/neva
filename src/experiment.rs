@@ -380,8 +380,13 @@ mod tests {
         assert!(!path.join(".writer.lock").exists());
         std::fs::write(&file, original).unwrap();
         let valid = Trial::resume(
-            &path, "counter", Policy { effects: false }, Arc::new(ScriptedBackend), false,
-        ).unwrap();
+            &path,
+            "counter",
+            Policy { effects: false },
+            Arc::new(ScriptedBackend),
+            false,
+        )
+        .unwrap();
         assert_eq!(valid.store.sequence, 4);
         drop(valid);
         std::fs::remove_dir_all(path).unwrap();
