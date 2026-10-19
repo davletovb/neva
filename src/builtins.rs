@@ -25,14 +25,18 @@ impl World for Counter {
 pub struct Increment {
     pub amount: u64,
     pub model: bool,
+    pub model_id: String,
 }
 impl EffectPolicy<Counter> for Increment {
     fn requests(&self, actor: AgentId, obs: &u64) -> Result<Vec<EffectSpec>, String> {
         if self.model {
-            Ok(vec![sample_request(&format!(
-                "actor={} observed={obs}",
-                actor.0
-            ))])
+            let mut request = sample_request(&format!("actor={} observed={obs}", actor.0));
+            let EffectSpec::Model(ref mut message) = request else {
+                return Err("scripted request must be a model".into());
+            };
+            message.model = self.model_id.clone();
+            message.provider = "openai-compatible".into();
+            Ok(vec![request])
         } else {
             Ok(vec![])
         }
@@ -44,30 +48,27 @@ impl EffectPolicy<Counter> for Increment {
         Ok(self.amount)
     }
 }
-pub fn kind(amount: u64, model: bool) -> String {
-    format!("{KIND}:amount={amount}:model={model}")
+pub fn kind(amount: u64, model: bool, model_id: &str) -> Result<String, String> {
+    if model_id.is_empty() || model_id.contains(':') {
+        return Err("model_id must be non-empty and must not contain ':'".into());
+    }
+    Ok(format!("{KIND}:amount={amount}:model={model}:model_id={model_id}"))
 }
 pub fn parse_kind(input: &str) -> Result<Increment, String> {
     let tail = input
         .strip_prefix(&format!("{KIND}:"))
         .ok_or("unsupported built-in world")?;
     let mut parts = tail.split(':');
-    let amount = parts
-        .next()
-        .ok_or("missing amount")?
-        .strip_prefix("amount=")
-        .ok_or("invalid amount")?
-        .parse::<u64>()
-        .map_err(|e| e.to_string())?;
-    let model = parts
-        .next()
-        .ok_or("missing model")?
-        .strip_prefix("model=")
-        .ok_or("invalid model")?
-        .parse::<bool>()
-        .map_err(|e| e.to_string())?;
-    if parts.next().is_some() {
+    let amount = parts.next().ok_or("missing amount")?
+        .strip_prefix("amount=").ok_or("invalid amount")?
+        .parse::<u64>().map_err(|e| e.to_string())?;
+    let model = parts.next().ok_or("missing model")?
+        .strip_prefix("model=").ok_or("invalid model")?
+        .parse::<bool>().map_err(|e| e.to_string())?;
+    let model_id = parts.next().ok_or("missing model_id")?
+        .strip_prefix("model_id=").ok_or("invalid model_id")?;
+    if parts.next().is_some() || model_id.is_empty() {
         return Err("invalid world kind".into());
     }
-    Ok(Increment { amount, model })
+    Ok(Increment { amount, model, model_id: model_id.into() })
 }

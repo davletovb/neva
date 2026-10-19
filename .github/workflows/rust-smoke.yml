@@ -68,6 +68,21 @@ jobs:
       - name: Deterministic map-order regression (feature unification)
         run: cargo test -p hiyal --features serde_json/preserve_order
 
+      - name: Opt-in HTTP adapter compile
+        run: cargo check -p hiyal --features live-http
+
+      - name: Native CLI run and resume smoke
+        run: |
+          work="$(mktemp -d)"
+          cargo run --quiet -p hiyal -- run examples/counter.toml "$work/builtin"
+          cargo run --quiet -p hiyal -- inspect "$work/builtin"
+          cargo run --quiet -p hiyal -- resume "$work/builtin" 3
+          cargo run --quiet -p hiyal -- validate "$work/builtin"
+          cargo run --quiet -p hiyal-custom-world-example -- run "$work/custom" 5
+          cargo run --quiet -p hiyal-custom-world-example -- resume "$work/custom" 5
+          cargo run --quiet -p hiyal-custom-world-example -- inspect "$work/custom"
+          rm -rf "$work"
+
       - name: Standalone external-world smoke
         run: |
           cargo run --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl

@@ -72,14 +72,16 @@ Backends:
   streaming/tool-schema/output-schema capabilities. HTTPS is required except
   local loopback servers. Live provider generation is **D2**, not bitwise D1.
 
-Live CLI example (requires a compatible chat model configured by the caller):
+Live CLI example (set `model = true` and `model_id = "your-compatible-model"`
+in the TOML; no model/API key is hard-coded):
 ```sh
 OPENAI_COMPAT_URL=https://example.com/v1/chat/completions \
 OPENAI_COMPAT_API_KEY=secret \
 cargo run -p hiyal --features live-http -- run examples/counter.toml /tmp/live-trial --live
 ```
-Do not commit credentials. Actual remote model IDs/capabilities depend on the
-provider; the built-in demo's scripted model name is only an offline example.
+Do not commit credentials. Actual remote model IDs/capabilities depend on the provider; the built-in
+demo defaults to an offline mock and requires explicit `model=true` plus
+`--live` to contact a remote service.
 
 ## Guarantees, scope and known limits
 

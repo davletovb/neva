@@ -21,6 +21,7 @@ struct Config {
     amount: u64,
     scheduler: Scheduling,
     model: bool,
+    model_id: Option<String>,
 }
 fn help() -> &'static str {
     "hiyal run <config.toml> <trial-dir> [--live]\n\
@@ -71,15 +72,17 @@ async fn launch() -> Result<(), String> {
                 return Err("actors must be 1..=100000".into());
             }
             let agents = (0..cfg.actors).map(AgentId).collect();
+            let model_id = cfg.model_id.as_deref().unwrap_or("fixed-v1");
             let mut trial = Trial::create(
                 dir,
                 &cfg.name,
                 cfg.seed,
-                &kind(cfg.amount, cfg.model),
+                &kind(cfg.amount, cfg.model, model_id)?,
                 Counter { total: 0 },
                 Increment {
                     amount: cfg.amount,
                     model: cfg.model,
+                    model_id: model_id.to_owned(),
                 },
                 backend(live)?,
                 agents,

@@ -365,7 +365,8 @@ mod tests {
         let mut json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         json["sequence"] = serde_json::json!("777");
-        std::fs::write(file, serde_json::to_vec(&json).unwrap()).unwrap();
+        let original = std::fs::read(&file).unwrap();
+        std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
         assert!(
             Trial::resume(
                 &path,
@@ -376,6 +377,13 @@ mod tests {
             )
             .is_err()
         );
+        assert!(!path.join(".writer.lock").exists());
+        std::fs::write(&file, original).unwrap();
+        let valid = Trial::resume(
+            &path, "counter", Policy { effects: false }, Arc::new(ScriptedBackend), false,
+        ).unwrap();
+        assert_eq!(valid.store.sequence, 4);
+        drop(valid);
         std::fs::remove_dir_all(path).unwrap();
     }
     #[tokio::test]

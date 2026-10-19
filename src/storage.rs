@@ -182,7 +182,7 @@ where
     pub log_bytes: u64,
     poisoned: bool,
     /// Exclusive single-writer lock, removed on clean close.
-    lock: File,
+    _lock: WriterLock,
     _action: std::marker::PhantomData<A>,
 }
 
@@ -206,14 +206,27 @@ fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn lock_dir(dir: &Path) -> Result<File, String> {
-    OpenOptions::new()
+/// RAII lock: even a malformed manifest/snapshot never strands a lock.
+struct WriterLock {
+    file: File,
+    path: PathBuf,
+}
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        let _ = self.file.sync_all();
+        let _ = fs::remove_file(&self.path);
+    }
+}
+fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
+    let path = dir.join(".writer.lock");
+    let file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(dir.join(".writer.lock"))
+        .open(&path)
         .map_err(|e| {
             format!("trial already open or stale lock (remove ONLY after verifying no writer): {e}")
-        })
+        })?;
+    Ok(WriterLock { file, path })
 }
 
 impl<W, A> Store<W, A>
@@ -249,7 +262,7 @@ where
             chain_head: digest(&genesis)?,
             log_bytes: 0,
             poisoned: false,
-            lock,
+            _lock: lock,
             genesis,
             _action: std::marker::PhantomData,
         })
@@ -341,7 +354,7 @@ where
             chain_head: projected.chain_head,
             log_bytes: durable_length as u64,
             poisoned: false,
-            lock,
+            _lock: lock,
             _action: std::marker::PhantomData,
         })
     }
@@ -471,15 +484,5 @@ where
             .filter(|line| !line.is_empty())
             .map(|line| serde_json::from_slice(line).map_err(|e| e.to_string()))
             .collect()
-    }
-}
-impl<W: World + Serialize + DeserializeOwned, A: Serialize + DeserializeOwned + Clone> Drop
-    for Store<W, A>
-where
-    W: World<Action = A>,
-{
-    fn drop(&mut self) {
-        let _ = self.lock.sync_all();
-        let _ = fs::remove_file(self.dir.join(".writer.lock"));
     }
 }

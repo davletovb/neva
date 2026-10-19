@@ -6,3 +6,4 @@ attempts = 20
 amount = 1
 scheduler = "random"
 model = false
+model_id = "gpt-4o-mini" # Only used when model=true
