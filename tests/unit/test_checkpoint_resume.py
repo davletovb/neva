@@ -126,3 +126,21 @@ def test_checkpoint_rejects_unsupported_custom_state():
     env.unserializable = object()
     with pytest.raises(ValueError, match="checkpoint"):
         env.snapshot()
+
+
+def test_checkpoint_restores_legacy_neva_type_identifiers():
+    original = make_environment()
+    original.agents[0].set_memory(ShortTermMemory(capacity=2))
+    snapshot = original.snapshot()
+    runtime = snapshot.runtime_state
+    assert runtime is not None
+    runtime["environment_type"] = runtime["environment_type"].replace("hiyal.", "neva.", 1)
+    runtime["scheduler"]["type"] = runtime["scheduler"]["type"].replace("hiyal.", "neva.", 1)
+    for agent in runtime["agents"].values():
+        agent["type"] = agent["type"].replace("hiyal.", "neva.", 1)
+        if agent["memory"] is not None:
+            agent["memory"]["type"] = agent["memory"]["type"].replace("hiyal.", "neva.", 1)
+    restored = make_environment()
+    restored.agents[0].set_memory(ShortTermMemory(capacity=2))
+    restored.restore(SimulationSnapshot.from_json(snapshot.to_json()))
+    assert restored.agents[0].id == original.agents[0].id

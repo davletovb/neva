@@ -333,3 +333,17 @@ def test_sqlite_waiter_cleanup_retries_and_surfaces_failure(tmp_path, monkeypatc
         coordinator._remove_sqlite_waiter("stale-owner")
 
     assert len(attempts) == 3
+
+
+def test_legacy_provider_coordination_setting_and_new_precedence(tmp_path, monkeypatch):
+    legacy = tmp_path / "legacy.sqlite3"
+    current = tmp_path / "current.sqlite3"
+    monkeypatch.setenv("NEVA_PROVIDER_COORDINATION_DB", str(legacy))
+    monkeypatch.delenv("HIYAL_PROVIDER_COORDINATION_DB", raising=False)
+    first = shared_provider_resources(provider="openai", api_key="legacy-test")
+    assert first._state_path == legacy or str(first._state_path) == str(legacy)
+
+    _clear_provider_resource_registry_for_tests()
+    monkeypatch.setenv("HIYAL_PROVIDER_COORDINATION_DB", str(current))
+    second = shared_provider_resources(provider="openai", api_key="new-test")
+    assert second._state_path == current or str(second._state_path) == str(current)
