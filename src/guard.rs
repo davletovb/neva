@@ -28,10 +28,17 @@ impl BudgetConfig {
         // Serialize *every* caller controlled field, including role and
         // tool-call identifiers. Reserve additional framing bytes for the
         // wire format (chat message wrappers and model API envelope).
-        let serialized=serde_json::to_vec(request).map_err(|e|e.to_string())?.len();
-        let overhead=request.messages.len().checked_mul(64)
-            .and_then(|n|n.checked_add(256)).ok_or("prompt overhead overflow")?;
-        let total=serialized.checked_add(overhead)
+        let serialized = serde_json::to_vec(request)
+            .map_err(|e| e.to_string())?
+            .len();
+        let overhead = request
+            .messages
+            .len()
+            .checked_mul(64)
+            .and_then(|n| n.checked_add(256))
+            .ok_or("prompt overhead overflow")?;
+        let total = serialized
+            .checked_add(overhead)
             .ok_or("request size overflow")?;
         if total > self.max_input_bytes {
             return Err("prompt exceeds configured byte limit".into());
@@ -152,7 +159,7 @@ impl GovernedBackend {
             .is_ok()
     }
     fn admit(&self, key: Option<&EffectCallKey>, spec: &EffectSpec) -> Result<Option<u64>, String> {
-        let mut reserved=None;
+        let mut reserved = None;
         match spec {
             EffectSpec::Model(request) => {
                 if let Some(config) = &self.budget {
@@ -160,7 +167,7 @@ impl GovernedBackend {
                     if !Self::reserve(&self.remaining, cost) {
                         return Err("spend cap exhausted".into());
                     }
-                    reserved=Some(cost);
+                    reserved = Some(cost);
                 }
             }
             EffectSpec::Tool { name, input } => {
@@ -214,21 +221,23 @@ impl GovernedBackend {
                 capability: "effect quota exceeded".into(),
             });
         }
-        let reserved=match self.admit(key,spec) {
-            Ok(held)=>held,
-            Err(reason)=>return Ok(EffectResult::UnsupportedCapability{capability:reason}),
+        let reserved = match self.admit(key, spec) {
+            Ok(held) => held,
+            Err(reason) => return Ok(EffectResult::UnsupportedCapability { capability: reason }),
         };
         match spec {
             EffectSpec::Model(_) => {
-                let result=self.backend.resolve(spec).await;
-                if let (Some(cost),Ok(EffectResult::UnsupportedCapability{..}))=(reserved,&result) {
+                let result = self.backend.resolve(spec).await;
+                if let (Some(cost), Ok(EffectResult::UnsupportedCapability { .. })) =
+                    (reserved, &result)
+                {
                     if self.backend.unsupported_is_pre_dispatch() {
                         // Only explicitly trusted backends may certify no launch.
-                        self.remaining.fetch_add(cost,Ordering::SeqCst);
+                        self.remaining.fetch_add(cost, Ordering::SeqCst);
                     }
                 }
                 result
-            },
+            }
             EffectSpec::Tool { name, input } => {
                 self.executor
                     .as_ref()
@@ -334,35 +343,48 @@ mod tests {
     }
     struct PreflightRefusal;
     impl Backend for PreflightRefusal {
-        fn unsupported_is_pre_dispatch(&self)->bool {true}
-        fn resolve<'a>(&'a self,_:&'a EffectSpec)->BoxResult<'a>{
-            Box::pin(async {Ok(EffectResult::UnsupportedCapability{
-                capability:"no provider dispatch".into()
-            })})
+        fn unsupported_is_pre_dispatch(&self) -> bool {
+            true
+        }
+        fn resolve<'a>(&'a self, _: &'a EffectSpec) -> BoxResult<'a> {
+            Box::pin(async {
+                Ok(EffectResult::UnsupportedCapability {
+                    capability: "no provider dispatch".into(),
+                })
+            })
         }
     }
     #[tokio::test]
-    async fn rejected_pre_dispatch_requests_refund_only_admission_reservations(){
-        let cfg=BudgetConfig{maximum_micro_usd:10_000,
-            prompt_micro_usd_per_token:1,output_micro_usd_per_token:1,
-            max_input_bytes:4096,max_output_tokens:80};
-        let guard=GovernedBackend::new(Arc::new(PreflightRefusal),4)
-            .with_budget(cfg);
-        let spec=sample_request("safe");
+    async fn rejected_pre_dispatch_requests_refund_only_admission_reservations() {
+        let cfg = BudgetConfig {
+            maximum_micro_usd: 10_000,
+            prompt_micro_usd_per_token: 1,
+            output_micro_usd_per_token: 1,
+            max_input_bytes: 4096,
+            max_output_tokens: 80,
+        };
+        let guard = GovernedBackend::new(Arc::new(PreflightRefusal), 4).with_budget(cfg);
+        let spec = sample_request("safe");
         for _ in 0..3 {
-            assert!(matches!(guard.resolve(&spec).await.unwrap(),
-                EffectResult::UnsupportedCapability{..}));
+            assert!(matches!(
+                guard.resolve(&spec).await.unwrap(),
+                EffectResult::UnsupportedCapability { .. }
+            ));
         }
-        assert_eq!(guard.remaining_micro_usd(),Some(10_000));
+        assert_eq!(guard.remaining_micro_usd(), Some(10_000));
     }
     #[test]
-    fn full_message_framing_and_tool_ids_are_budgeted(){
-        let mut spec=sample_request("x");
-        if let EffectSpec::Model(ref mut m)=spec {
-            m.messages[0].tool_call_id=Some("a".repeat(1000));
-            let cfg=BudgetConfig{maximum_micro_usd:1_000_000,
-                prompt_micro_usd_per_token:1,output_micro_usd_per_token:1,
-                max_input_bytes:512,max_output_tokens:100};
+    fn full_message_framing_and_tool_ids_are_budgeted() {
+        let mut spec = sample_request("x");
+        if let EffectSpec::Model(ref mut m) = spec {
+            m.messages[0].tool_call_id = Some("a".repeat(1000));
+            let cfg = BudgetConfig {
+                maximum_micro_usd: 1_000_000,
+                prompt_micro_usd_per_token: 1,
+                output_micro_usd_per_token: 1,
+                max_input_bytes: 512,
+                max_output_tokens: 100,
+            };
             assert!(cfg.reserve_amount(m).is_err());
         }
     }

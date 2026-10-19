@@ -81,7 +81,9 @@ pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String
 pub trait Backend: Send + Sync {
     /// Explicit guarantee: UnsupportedCapability never follows a dispatch.
     /// Default custom backends are not trusted to make this assertion.
-    fn unsupported_is_pre_dispatch(&self)->bool {false}
+    fn unsupported_is_pre_dispatch(&self) -> bool {
+        false
+    }
     /// Opt-in only: tool execution requires a backend with explicit guards.
     fn permits_tools(&self) -> bool {
         false
@@ -127,7 +129,9 @@ pub trait Backend: Send + Sync {
 #[derive(Default)]
 pub struct ScriptedBackend;
 impl Backend for ScriptedBackend {
-    fn unsupported_is_pre_dispatch(&self)->bool {true}
+    fn unsupported_is_pre_dispatch(&self) -> bool {
+        true
+    }
     fn backend_id(&self) -> &'static str {
         "scripted"
     }
@@ -735,7 +739,9 @@ async fn bounded_bytes(mut response: reqwest::Response, cap: usize) -> Result<Ve
 }
 #[cfg(feature = "live-http")]
 impl Backend for OpenAiCompatible {
-    fn unsupported_is_pre_dispatch(&self)->bool {true}
+    fn unsupported_is_pre_dispatch(&self) -> bool {
+        true
+    }
     fn backend_id(&self) -> &'static str {
         "openai-compatible"
     }
