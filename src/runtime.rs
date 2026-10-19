@@ -155,8 +155,21 @@ impl ReplayBackend {
     }
 }
 
+/// Single-writer file lease for standalone effect journals.
+struct EffectWriterLock {
+    path: PathBuf,
+    file: std::fs::File,
+}
+impl Drop for EffectWriterLock {
+    fn drop(&mut self) {
+        let _ = self.file.sync_all();
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 pub struct EffectJournal {
     pub path: PathBuf,
+    _lock: EffectWriterLock,
     pub(crate) receipts: BTreeMap<EffectCallKey, Receipt>,
     poisoned: bool,
     owning_trial: Option<String>,
@@ -164,6 +177,11 @@ pub struct EffectJournal {
 
 impl EffectJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
+        let lock_path = dir.as_ref().join(".effects-writer.lock");
+        let lock_file = OpenOptions::new()
+            .write(true).create_new(true).open(&lock_path)
+            .map_err(|e| format!("effect journal already open or stale lock: {e}"))?;
+        let lock = EffectWriterLock { path: lock_path, file: lock_file };
         let path = dir.as_ref().join("effects.jsonl");
         if !path.exists() {
             OpenOptions::new()
@@ -213,6 +231,7 @@ impl EffectJournal {
         }
         Ok(Self {
             path,
+            _lock: lock,
             receipts,
             poisoned: false,
             owning_trial: None,
@@ -623,6 +642,20 @@ mod batch_regression_tests {
             self.launches.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Err("provider connection interrupted after sending".into()) })
         }
+    }
+    #[test]
+    fn standalone_writable_journals_have_an_exclusive_writer_lease() {
+        let path = std::env::temp_dir().join(format!("hiyal-journal-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let first = EffectJournal::open(&path).unwrap();
+        assert!(EffectJournal::open(&path).is_err());
+        assert!(path.join(".effects-writer.lock").exists());
+        drop(first);
+        assert!(!path.join(".effects-writer.lock").exists());
+        let second = EffectJournal::open_existing(&path).unwrap();
+        drop(second);
+        fs::remove_dir_all(&path).unwrap();
     }
     #[tokio::test]
     async fn duplicate_batch_is_rejected_before_any_provider_launch() {
