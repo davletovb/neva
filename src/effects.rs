@@ -11,10 +11,7 @@ mod finite_option_f64 {
         Deserialize, Deserializer, Serialize, Serializer, de::Error as _, ser::Error as _,
     };
 
-    pub fn serialize<S: Serializer>(
-        value: &Option<f64>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error> {
         if value.is_some_and(|number| !number.is_finite()) {
             return Err(S::Error::custom("non-finite model sampling parameter"));
         }

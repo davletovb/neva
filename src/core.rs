@@ -21,7 +21,9 @@ pub mod decimal_u64 {
         let text = String::deserialize(deserializer)?;
         let number = text.parse::<u64>().map_err(D::Error::custom)?;
         if text != number.to_string() {
-            return Err(D::Error::custom("expected canonical unsigned decimal string"));
+            return Err(D::Error::custom(
+                "expected canonical unsigned decimal string",
+            ));
         }
         Ok(number)
     }
@@ -47,7 +49,9 @@ pub mod decimal_u64 {
             text.map(|text| {
                 let value = text.parse::<u64>().map_err(D::Error::custom)?;
                 if text != value.to_string() {
-                    return Err(D::Error::custom("expected canonical unsigned decimal string"));
+                    return Err(D::Error::custom(
+                        "expected canonical unsigned decimal string",
+                    ));
                 }
                 Ok(value)
             })
@@ -299,7 +303,10 @@ impl<W: World, P: Policy<W>> Engine<W, P> {
     /// Rejections DO advance the schedule and append an audit record but do
     /// NOT commit any world change or world event.
     pub fn step(&mut self) -> Result<Option<CommittedEvent<W::Action>>, EngineError> {
-        let next_attempt = self.next_attempt.checked_add(1).ok_or(EngineError::Exhausted)?;
+        let next_attempt = self
+            .next_attempt
+            .checked_add(1)
+            .ok_or(EngineError::Exhausted)?;
         let next_committed = self
             .committed_step
             .checked_add(1)
@@ -332,7 +339,12 @@ impl<W: World, P: Policy<W>> Engine<W, P> {
                     schema_version: 2,
                     rejection_id: derive_id(
                         "rejection-v1",
-                        &[&self.trial.0, &attempt.to_string(), &actor.0.to_string(), &reason],
+                        &[
+                            &self.trial.0,
+                            &attempt.to_string(),
+                            &actor.0.to_string(),
+                            &reason,
+                        ],
                     ),
                     trial_id: self.trial.0.clone(),
                     attempt_index: attempt,
@@ -560,7 +572,10 @@ mod tests {
         let newer = first.step().unwrap().unwrap();
         assert_eq!(newer.logical_step, 1);
         assert_ne!(newer.event_id, old[0].event_id);
-        assert_eq!(newer.previous_event_id.as_deref(), Some(old[0].event_id.as_str()));
+        assert_eq!(
+            newer.previous_event_id.as_deref(),
+            Some(old[0].event_id.as_str())
+        );
     }
 
     #[test]
