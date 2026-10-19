@@ -249,7 +249,9 @@ impl GovernedBackend {
     }
 }
 impl Backend for GovernedBackend {
-    fn on_timeout<'a>(&'a self)->std::pin::Pin<Box<dyn std::future::Future<Output=()>+Send+'a>> {
+    fn on_timeout<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         self.backend.on_timeout()
     }
     fn permits_tools(&self) -> bool {
