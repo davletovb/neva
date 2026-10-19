@@ -167,7 +167,18 @@ impl Sweep {
         // Validate all limits before persisting the study's immutable plan.
         let _ = self.jobs()?;
         let plan_path = root.join("sweep-plan.json");
-        let planned = stable_bytes(self)?;
+        // Worker count is an operational resource limit, not scientific
+        // experiment identity. Switching 1 -> 16 workers must be restartable.
+        let planned = stable_bytes(&(
+            "r2-plan-v1",
+            &self.name,
+            self.base_seed,
+            &self.parameter_values,
+            self.replicates,
+            self.actors,
+            self.attempts,
+            self.scheduler,
+        ))?;
         if plan_path.exists() {
             if fs::read(&plan_path).map_err(|e| e.to_string())? != planned {
                 return Err("cannot restart a sweep with different parameters".into());

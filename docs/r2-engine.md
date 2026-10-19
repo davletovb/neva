@@ -31,8 +31,10 @@ parameter values, replicates, actor count, target attempts, maximum parallel
 jobs, and random/round-robin scheduling. Jobs are deterministic and sorted by
 stable SHA-256-derived identity. The per-replicate seed is fixed, independent
 of worker completion order. Job directories use their exact hash IDs.
-The plan is frozen in `sweep-plan.json`; attempts to restart with different
-settings fail, rather than mixing results.
+Scientific settings are frozen in `sweep-plan.json`; attempts to restart with
+changed seeds, parameters, actors, step targets or scheduler fail. The
+operational `max_parallel` worker limit may change between restarts without
+altering a trial's scientific identity or results.
 
 Resource limits: maximum 512 jobs, maximum 16 parallel jobs, maximum 1,000
 actors/job and 100,000 attempts/job. The worker pool drains already running
