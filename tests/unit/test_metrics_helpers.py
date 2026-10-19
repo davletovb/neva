@@ -1,6 +1,6 @@
 import pytest
 
-from neva.utils.metrics import (
+from hiyal.utils.metrics import (
     CostTracker,
     ResponseTimeTracker,
     TokenUsageTracker,

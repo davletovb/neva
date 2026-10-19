@@ -2,8 +2,8 @@ from typing import List, Sequence
 
 import pytest
 
-from neva.agents import AIAgent
-from neva.memory import (
+from hiyal.agents import AIAgent
+from hiyal.memory import (
     AdaptiveConversationMemory,
     CompositeMemory,
     MemoryBudget,
@@ -12,7 +12,7 @@ from neva.memory import (
     SummaryMemory,
     VectorStoreMemory,
 )
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 
 class EchoAgent(AIAgent):

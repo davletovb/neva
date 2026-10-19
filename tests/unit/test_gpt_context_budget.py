@@ -3,10 +3,10 @@
 import pytest
 import requests
 
-from neva.agents.gpt import _RAW_PROMPT_MODE, GPTAgent
-from neva.utils.context_budget import ModelContextBudget, openai_chat_counter
-from neva.utils.exceptions import ConfigurationError, SpendBudgetExceededError
-from neva.utils.metrics import CostTracker, SpendBudget
+from hiyal.agents.gpt import _RAW_PROMPT_MODE, GPTAgent
+from hiyal.utils.context_budget import ModelContextBudget, openai_chat_counter
+from hiyal.utils.exceptions import ConfigurationError, SpendBudgetExceededError
+from hiyal.utils.metrics import CostTracker, SpendBudget
 
 
 def chat_tokens(request):
@@ -62,7 +62,7 @@ def test_openai_counter_uses_selected_model_encoding_and_message_framing(monkeyp
             seen.append(model)
             return Encoding()
 
-    monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
+    monkeypatch.setattr("hiyal.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
     counter = openai_chat_counter("gpt-4o-mini")
     assert seen == ["gpt-4o-mini"]
     assert counter([{"role": "user", "content": "hello"}]) == 3 + 3 + 4 + 5
@@ -86,7 +86,7 @@ def test_special_token_looking_text_in_history_is_counted_as_ordinary_text(monke
         def encoding_for_model(model):
             return Encoding()
 
-    monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
+    monkeypatch.setattr("hiyal.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
     agent = GPTAgent(
         name="Scout",
         llm_backend=lambda prompt: "ok",
@@ -125,7 +125,7 @@ def test_openai_counter_requires_optional_tokenizer(monkeypatch):
     def missing(name):
         raise ImportError(name)
 
-    monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", missing)
+    monkeypatch.setattr("hiyal.utils.context_budget.importlib.import_module", missing)
     with pytest.raises(ConfigurationError, match="requires tiktoken"):
         openai_chat_counter("gpt-4o-mini")
 
@@ -136,7 +136,7 @@ def test_encoding_cache_network_failure_is_configuration_error(monkeypatch):
         def encoding_for_model(model):
             raise requests.exceptions.ProxyError("offline")
 
-    monkeypatch.setattr("neva.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
+    monkeypatch.setattr("hiyal.utils.context_budget.importlib.import_module", lambda _: Tiktoken)
     with pytest.raises(ConfigurationError, match="encoding cache, and network"):
         openai_chat_counter("gpt-4o-mini")
 
@@ -167,7 +167,7 @@ def test_history_trimming_includes_roles_overhead_and_output_reservation():
 
 def test_current_request_that_cannot_fit_rejects_before_http_or_cache(monkeypatch):
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: pytest.fail("unexpected HTTP request"),
     )
     agent = GPTAgent(
@@ -193,7 +193,7 @@ def test_provider_payload_matches_budgeted_request(monkeypatch):
         seen.append(json)
         return Response()
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", post)
     agent = GPTAgent(
         api_key="test",
         name="Scout",
@@ -269,7 +269,7 @@ def test_long_history_counts_logarithmically_many_requests(monkeypatch):
         def json(self):
             return {"choices": [{"message": {"content": "ok"}}]}
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", lambda *args, **kwargs: Response())
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", lambda *args, **kwargs: Response())
     agent = GPTAgent(
         api_key="test",
         name="Scout",
@@ -287,7 +287,7 @@ def test_long_history_counts_logarithmically_many_requests(monkeypatch):
 
 def test_spend_preflight_reserves_model_count_including_message_overhead(monkeypatch):
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: pytest.fail("unexpected HTTP request"),
     )
     cost = CostTracker()
@@ -310,9 +310,9 @@ def test_spend_preflight_reserves_model_count_including_message_overhead(monkeyp
 
 
 def test_reproducibility_manifest_includes_counter_identity():
-    from neva.environments import BasicEnvironment
-    from neva.schedulers import RoundRobinScheduler
-    from neva.utils.reproducibility import create_run_manifest
+    from hiyal.environments import BasicEnvironment
+    from hiyal.schedulers import RoundRobinScheduler
+    from hiyal.utils.reproducibility import create_run_manifest
 
     agent = GPTAgent(llm_backend=lambda prompt: "ok", context_budget=profile(), max_output_tokens=1)
     env = BasicEnvironment("test", "context budget", RoundRobinScheduler())

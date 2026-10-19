@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from neva.memory import FaissVectorStoreMemory, MemoryConfigurationError
+from hiyal.memory import FaissVectorStoreMemory, MemoryConfigurationError
 
 
 @pytest.fixture(scope="module")

@@ -4,9 +4,9 @@ import time
 
 import pytest
 
-from neva.agents.gpt import GPTAgent
-from neva.utils.exceptions import SpendBudgetExceededError
-from neva.utils.provider_resources import _clear_provider_resource_registry_for_tests
+from hiyal.agents.gpt import GPTAgent
+from hiyal.utils.exceptions import SpendBudgetExceededError
+from hiyal.utils.provider_resources import _clear_provider_resource_registry_for_tests
 
 
 class _FakeResponse:
@@ -71,7 +71,7 @@ def test_shared_concurrency_limit_serializes_same_account_calls(monkeypatch):
             usage={"prompt_tokens": 1, "completion_tokens": 1},
         )
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     first = GPTAgent(
         api_key="shared",
         provider="openai",
@@ -118,7 +118,7 @@ def test_shared_provider_spend_limit_reserves_before_second_call(monkeypatch):
             usage={"prompt_tokens": 1000, "completion_tokens": 1000},
         )
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     first = GPTAgent(
         api_key="shared-spend",
         provider="openai",
@@ -153,7 +153,7 @@ def test_billing_reconciler_updates_shared_spend_before_admission(monkeypatch):
         calls.append(url)
         return _FakeResponse(usage={"prompt_tokens": 1, "completion_tokens": 1})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(
         api_key="billing",
         provider="openai",
@@ -182,7 +182,7 @@ def test_async_cancellation_removes_waiting_provider_admission(monkeypatch):
             assert release_first.wait(timeout=3)
         return _FakeResponse(usage={"prompt_tokens": 1, "completion_tokens": 1})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     first = GPTAgent(
         api_key="cancel",
         provider="openai",
@@ -218,7 +218,7 @@ def test_async_cancellation_removes_waiting_provider_admission(monkeypatch):
 
 
 def test_legacy_explicit_rate_limiter_disables_shared_rate_but_keeps_concurrency():
-    from neva.utils.safety import RateLimiter
+    from hiyal.utils.safety import RateLimiter
 
     limiter = RateLimiter(rate=1, per=60)
     agent = GPTAgent(
@@ -247,7 +247,7 @@ def test_async_cancel_during_inflight_call_settles_once_and_caches(monkeypatch):
             usage={"prompt_tokens": 1000, "completion_tokens": 1000},
         )
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(
         api_key="cancel-inflight",
         provider="openai",

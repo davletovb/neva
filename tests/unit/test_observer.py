@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.agents.base import Tool, ToolCall
-from neva.utils.exceptions import MissingDependencyError
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.agents import TransformerAgent
+from hiyal.agents.base import Tool, ToolCall
+from hiyal.utils.exceptions import MissingDependencyError
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 def test_collects_metrics():

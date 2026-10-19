@@ -1,10 +1,10 @@
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.schedulers import RoundRobinScheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.state_management import SimulationSnapshot
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.state_management import SimulationSnapshot
 
 
 def fail(prompt):
@@ -177,7 +177,7 @@ def test_on_turn_complete_failure_respects_agent_override():
 
 
 def test_scheduler_selection_failure_uses_environment_policy_not_override():
-    from neva.schedulers import EventDrivenScheduler
+    from hiyal.schedulers import EventDrivenScheduler
 
     env = Environment(EventDrivenScheduler(), error_policy="raise")
     env.register_agent(

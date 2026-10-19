@@ -2,7 +2,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from neva.utils.observability.observer import SimulationObserver
+from hiyal.utils.observability.observer import SimulationObserver
 
 
 def test_collection_publishes_one_coherent_snapshot():
