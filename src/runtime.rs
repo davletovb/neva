@@ -798,6 +798,11 @@ impl Backend for OpenAiCompatible {
                 });
             }
             for attempt in 0..=self.reliability.retry_429 {
+                if !self.allowed().await {
+                    return Ok(EffectResult::UnsupportedCapability {
+                        capability:"HTTP circuit open; no provider request launched".into()
+                    });
+                }
                 let response = self
                     .client
                     .post(&self.url)
@@ -828,11 +833,13 @@ impl Backend for OpenAiCompatible {
                         status.as_u16()
                     ));
                 }
-                let value = if model.streaming {
+                let value: Result<EffectResult,String> = async {
+                    if model.streaming {
                     let mut stream = response;
                     let mut parser = SseAccumulator::new(self.reliability.max_response_bytes);
                     while let Some(chunk) = stream.chunk().await.map_err(|e| e.to_string())? {
                         parser.feed(&chunk)?;
+                        if parser.done {break;}
                     }
                     parser.finish(&model.model)
                 } else {
@@ -857,7 +864,8 @@ impl Backend for OpenAiCompatible {
                             .into(),
                         usage: parse_usage(&payload),
                     })
-                };
+                    }
+                }.await;
                 if value.is_ok() {
                     self.successful().await;
                 } else {
@@ -1069,6 +1077,71 @@ mod http_tests {
         assert!(truncated.finish("fallback").is_err());
         let mut oversized = SseAccumulator::new(3);
         assert!(oversized.feed(b"data: content\\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn retries_only_explicit_429_and_never_500() {
+        fn server(first_status:&'static str, requests:usize)->(String,std::thread::JoinHandle<usize>){
+            let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+            let url=format!("http://{}/completions",listener.local_addr().unwrap());
+            let thread=thread::spawn(move ||{
+                for i in 0..requests {
+                    let (mut socket,_)=listener.accept().unwrap();
+                    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut bytes=[0u8;4096];
+                    let _=socket.read(&mut bytes).unwrap();
+                    let ok=i>0;
+                    let status=if ok {"200 OK"}else{first_status};
+                    let body=if ok {
+                        r#"{"choices":[{"message":{"content":"fine"}}],"model":"stub"}"#
+                    } else {""};
+                    write!(socket,"HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                }
+                requests
+            });
+            (url,thread)
+        }
+        let (url,handle)=server("429 Too Many Requests",2);
+        let http=OpenAiCompatible::new(url,"secret".into()).unwrap()
+            .with_reliability(HttpReliability{
+                retry_429:1,retry_delay:Duration::from_millis(1),
+                circuit_threshold:3,..HttpReliability::default()
+            }).unwrap();
+        assert!(matches!(http.resolve(&sample_request("ping")).await.unwrap(),
+            EffectResult::Model{..}));
+        assert_eq!(handle.join().unwrap(),2);
+
+        let (url,handle)=server("500 Server Error",1);
+        let no_retry=OpenAiCompatible::new(url,"secret".into()).unwrap()
+            .with_reliability(HttpReliability{
+                retry_429:2,retry_delay:Duration::from_millis(1),
+                circuit_threshold:1,..HttpReliability::default()
+            }).unwrap();
+        assert!(no_retry.resolve(&sample_request("fail")).await.is_err());
+        assert!(matches!(no_retry.resolve(&sample_request("fail")).await.unwrap(),
+            EffectResult::UnsupportedCapability{capability} if capability.contains("circuit")));
+        assert_eq!(handle.join().unwrap(),1);
+    }
+
+    #[tokio::test]
+    async fn invalid_200_response_opens_circuit_without_retry() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let url=format!("http://{}/completions",listener.local_addr().unwrap());
+        let thread=thread::spawn(move ||{
+            let (mut stream,_)=listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut ignored=[0u8;4096];
+            let _=stream.read(&mut ignored).unwrap();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
+        });
+        let http=OpenAiCompatible::new(url,"secret".into()).unwrap()
+            .with_reliability(HttpReliability{
+                circuit_threshold:1,..HttpReliability::default()
+            }).unwrap();
+        assert!(http.resolve(&sample_request("bad")).await.is_err());
+        assert!(matches!(http.resolve(&sample_request("bad")).await.unwrap(),
+            EffectResult::UnsupportedCapability{..}));
+        thread.join().unwrap();
     }
 
     #[tokio::test]
