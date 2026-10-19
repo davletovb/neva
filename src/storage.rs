@@ -139,9 +139,12 @@ struct Projection<W> {
 pub struct ReadOnly<W> {
     pub genesis: Genesis<W>,
     pub world: W,
+    pub schedule: Schedule,
+    pub streams: Streams,
     pub sequence: u64,
     pub logical_step: u64,
     pub chain_head: String,
+    pub log_bytes: u64,
 }
 
 pub struct Store<W: World + Serialize + DeserializeOwned, A: Serialize + DeserializeOwned + Clone>
@@ -336,9 +339,12 @@ where
         Ok(ReadOnly {
             genesis,
             world: state.world,
+            schedule: state.schedule,
+            streams: state.streams,
             sequence: state.sequence,
             logical_step: state.logical_step,
             chain_head: state.chain_head,
+            log_bytes: offset,
         })
     }
 

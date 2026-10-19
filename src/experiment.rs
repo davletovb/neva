@@ -92,6 +92,24 @@ where
             diagnostics: vec![],
         })
     }
+    /// Create a trial from an independently verified research fork genesis.
+    /// The schedule/RNG state can begin at a parent's committed boundary.
+    pub fn create_from_genesis(
+        dir: impl AsRef<Path>,
+        genesis: Genesis<W>,
+        policy: P,
+        backend: Arc<dyn Backend>,
+    ) -> Result<Self, String> {
+        let store = Store::create(&dir, genesis)?;
+        let mut effects = EffectJournal::open(&dir)?;
+        effects.bind_trial(&store.genesis.trial_id)?;
+        Ok(Self {
+            store, effects, policy, backend, replay_only: false,
+            concurrency: 4, timeout: Duration::from_secs(15),
+            observers: vec![], diagnostics: vec![],
+        })
+    }
+
     pub fn resume(
         dir: impl AsRef<Path>,
         kind: &str,

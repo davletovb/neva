@@ -7,6 +7,8 @@ use hiyal::{
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
     storage::Store,
+    research::{Sweep, CounterMetrics, paired_forks, resume_fork, verify_fork},
+    metrics::CsvMetrics,
 };
 use serde::Deserialize;
 use std::{env, fs, path::Path, sync::Arc};
@@ -28,6 +30,8 @@ fn help() -> &'static str {
      hiyal resume <trial-dir> <attempts> [--live]\n\
      hiyal inspect <trial-dir>\n\
      hiyal validate <trial-dir>\n\
+     hiyal sweep <sweep.toml> <output-root>\n\
+     hiyal fork <parent-trial> <pair-root> <shock> <attempts>\n\
      Live mode requires --features live-http, OPENAI_COMPAT_URL and OPENAI_COMPAT_API_KEY.\n"
 }
 fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
@@ -134,6 +138,68 @@ async fn launch() -> Result<(), String> {
                 trial.store.world().total,
                 trial.store.chain_head()
             );
+        }
+        "sweep" => {
+            if args.len()!=3 {return Err(help().into());}
+            let cfg: Sweep=toml::from_str(
+                &fs::read_to_string(&args[1]).map_err(|e|e.to_string())?
+            ).map_err(|e|e.to_string())?;
+            let results=cfg.run_counter(&args[2]).await?;
+            println!("completed={} output={}",results.len(),
+                Path::new(&args[2]).join("results.csv").display());
+        }
+        "fork" => {
+            if args.len()!=5 {return Err(help().into());}
+            let parent=Path::new(&args[1]);
+            let root=Path::new(&args[2]);
+            let shock=args[3].parse::<u64>().map_err(|e|e.to_string())?;
+            let attempts=args[4].parse::<u64>().map_err(|e|e.to_string())?;
+            let source=Store::<Counter,u64>::inspect_read_only(parent)?;
+            let kind=source.genesis.world_kind.clone();
+            let probe=parse_kind(&kind)?;
+            if probe.model || probe.provider!="scripted" {
+                return Err("fork CLI supports only deterministic scripted counter worlds".into());
+            }
+            let control_dir=root.join("control");
+            let treatment_dir=root.join("treatment");
+            let (mut control,mut treatment)=if control_dir.exists() || treatment_dir.exists() {
+                if !control_dir.exists() || !treatment_dir.exists() {
+                    return Err("partial paired fork: both arms must exist".into());
+                }
+                let c=verify_fork::<Counter>(&control_dir)?;
+                let t=verify_fork::<Counter>(&treatment_dir)?;
+                if c.intervention!="counter-shock" || t.intervention!="counter-shock"
+                    || c.parent_head!=t.parent_head
+                    || t.parameters!=serde_json::json!({"added":shock}) {
+                    return Err("paired fork restart attribution mismatch".into());
+                }
+                (
+                    resume_fork(&control_dir,parse_kind(&kind)?,Arc::new(ScriptedBackend),false)?,
+                    resume_fork(&treatment_dir,parse_kind(&kind)?,Arc::new(ScriptedBackend),false)?,
+                )
+            } else {
+                paired_forks::<Counter,_,_>(
+                    parent,root,"counter-shock",serde_json::json!({"added":shock}),
+                    || parse_kind(&kind).expect("validated registered kind"),
+                    |world: &mut Counter| {
+                        world.total=world.total.checked_add(shock).ok_or("shock overflow")?;
+                        Ok(())
+                    }
+                )?
+            };
+            if control.store.sequence()>attempts || treatment.store.sequence()>attempts {
+                return Err("fork already passed requested attempt count".into());
+            }
+            control.observe_with(Arc::new(
+                CsvMetrics::recover(&control_dir,CounterMetrics)?));
+            treatment.observe_with(Arc::new(
+                CsvMetrics::recover(&treatment_dir,CounterMetrics)?));
+            control.run_attempts(attempts-control.store.sequence()).await?;
+            treatment.run_attempts(attempts-treatment.store.sequence()).await?;
+            control.checkpoint()?;treatment.checkpoint()?;
+            println!("control={} treatment={} control_hash={} treatment_hash={}",
+                control.store.world().total,treatment.store.world().total,
+                control.store.chain_head(),treatment.store.chain_head());
         }
         "inspect" | "validate" => {
             let dir = Path::new(args.get(1).ok_or(help())?);

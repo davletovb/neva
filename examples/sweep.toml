@@ -1,0 +1,8 @@
+name = "reference-sweep"
+base_seed = 42
+parameter_values = [1, 2, 3]
+replicates = 2
+actors = 4
+attempts = 12
+max_parallel = 2
+scheduler = "random"
