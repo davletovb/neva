@@ -415,8 +415,11 @@ impl EffectJournal {
         }
         // Replayed/previously recorded tool effects are inert and need no
         // live executor permission. Only validate pending executions.
-        if pending.iter().any(|(_,spec)|matches!(spec,EffectSpec::Tool{..}))
-            && !backend.permits_tools() {
+        if pending
+            .iter()
+            .any(|(_, spec)| matches!(spec, EffectSpec::Tool { .. }))
+            && !backend.permits_tools()
+        {
             return Err("tool backend lacks explicit permissions/approvals".into());
         }
         if self.poisoned && !pending.is_empty() {
@@ -547,13 +550,16 @@ impl OpenAiCompatible {
         // a localhost bearer request through an untrusted proxy, even though
         // the URL itself is parsed and validated. Force *direct* loopback.
         let is_loopback = parsed.host_str().is_some_and(|host| {
-            host == "localhost" || host.parse::<std::net::IpAddr>()
-                .is_ok_and(|address|address.is_loopback())
+            host == "localhost"
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
         });
-        let mut builder=reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none());
-        if is_loopback {builder=builder.no_proxy();}
-        let client=builder.build().map_err(|e|e.to_string())?;
+        let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        if is_loopback {
+            builder = builder.no_proxy();
+        }
+        let client = builder.build().map_err(|e| e.to_string())?;
         Ok(Self {
             client,
             url: parsed.to_string(),
