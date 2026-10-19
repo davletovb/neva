@@ -431,20 +431,30 @@ mod http_tests {
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut request = Vec::new();
             let mut chunk = [0u8; 4096];
             loop {
                 let n = stream.read(&mut chunk).unwrap();
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 request.extend_from_slice(&chunk[..n]);
                 if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
                     let header = String::from_utf8_lossy(&request[..end]);
-                    let content_len = header.lines()
-                        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:")
-                            .and_then(|value| value.trim().parse::<usize>().ok()))
+                    let content_len = header
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
                         .unwrap_or(0);
-                    if request.len() >= end + 4 + content_len { break; }
+                    if request.len() >= end + 4 + content_len {
+                        break;
+                    }
                 }
             }
             let body = r#"{"model":"stub-model-v2","choices":[{"message":{"role":"assistant","content":"ready"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
@@ -454,10 +464,15 @@ mod http_tests {
         let client = OpenAiCompatible::new(
             format!("http://127.0.0.1:{port}/v1/chat/completions"),
             "test-token".into(),
-        ).unwrap();
+        )
+        .unwrap();
         let result = client.resolve(&sample_request("hello")).await.unwrap();
         match result {
-            EffectResult::Model { content, effective_model, usage } => {
+            EffectResult::Model {
+                content,
+                effective_model,
+                usage,
+            } => {
                 assert_eq!(content, "ready");
                 assert_eq!(effective_model, "stub-model-v2");
                 assert_eq!(usage.unwrap().input_tokens, Some(3));

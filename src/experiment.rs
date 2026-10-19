@@ -524,10 +524,16 @@ mod tests {
         let fast = sample_request("fast");
         let slow_key = slow.key("trial", 0, AgentId(0), 0).unwrap();
         let fast_key = fast.key("trial", 0, AgentId(1), 0).unwrap();
-        let results = journal.resolve_all(
-            vec![(slow_key.clone(), slow), (fast_key.clone(), fast)],
-            Arc::new(Delayed), 2, Duration::from_secs(2), false,
-        ).await.unwrap();
+        let results = journal
+            .resolve_all(
+                vec![(slow_key.clone(), slow), (fast_key.clone(), fast)],
+                Arc::new(Delayed),
+                2,
+                Duration::from_secs(2),
+                false,
+            )
+            .await
+            .unwrap();
         assert_eq!(results[0].key, slow_key);
         assert_eq!(results[1].key, fast_key);
         let stored = std::fs::read_to_string(path.join("effects.jsonl")).unwrap();
@@ -548,18 +554,31 @@ mod tests {
         {
             let mut trial = new(&path, false, true);
             let request = sample_request("agent-0");
-            let key = request.key(&trial.store.genesis.trial_id, 0, AgentId(0), 0).unwrap();
-            trial.effects.resolve_all(
-                vec![(key, request)], Arc::new(ScriptedBackend),
-                1, Duration::from_secs(2), false,
-            ).await.unwrap();
+            let key = request
+                .key(&trial.store.genesis.trial_id, 0, AgentId(0), 0)
+                .unwrap();
+            trial
+                .effects
+                .resolve_all(
+                    vec![(key, request)],
+                    Arc::new(ScriptedBackend),
+                    1,
+                    Duration::from_secs(2),
+                    false,
+                )
+                .await
+                .unwrap();
             assert_eq!(trial.store.sequence, 0);
         }
         {
             let mut resumed = Trial::resume(
-                &path, "counter", Policy { effects: true },
-                Arc::new(NeverCallBackend), true,
-            ).unwrap();
+                &path,
+                "counter",
+                Policy { effects: true },
+                Arc::new(NeverCallBackend),
+                true,
+            )
+            .unwrap();
             assert!(matches!(resumed.step().await.unwrap(), Step::Accepted(_)));
             assert_eq!(resumed.store.sequence, 1);
             assert_eq!(resumed.effects.receipts.len(), 1);
