@@ -78,7 +78,8 @@ where
             world_kind: kind.into(),
         };
         let store = Store::create(&dir, genesis)?;
-        let effects = EffectJournal::open(&dir)?;
+        let mut effects = EffectJournal::open(&dir)?;
+        effects.bind_trial(&store.genesis.trial_id)?;
         Ok(Self {
             store,
             effects,
@@ -102,7 +103,8 @@ where
         if store.genesis.world_kind != kind {
             return Err("wrong registered world kind".into());
         }
-        let effects = EffectJournal::open_existing(dir)?;
+        let mut effects = EffectJournal::open_existing(dir)?;
+        effects.bind_trial(&store.genesis.trial_id)?;
         Ok(Self {
             store,
             effects,
@@ -149,25 +151,19 @@ where
                             )?;
                             keyed.push((key, spec));
                         }
-                        match self
+                        let receipts = self
                             .effects
-                            .resolve_all(
-                                keyed,
-                                self.backend.clone(),
-                                self.concurrency,
-                                self.timeout,
-                                self.replay_only,
-                            )
-                            .await
-                        {
-                            Ok(receipts) => {
-                                if receipts.iter().any(|r|matches!(&r.result,
-                                crate::effects::EffectResult::Failed{..}
-                                |crate::effects::EffectResult::UnsupportedCapability{..})) {
-                                Err("effect failed or capability unsupported".into())
-                            } else {self.policy.decide(actor,&obs,&receipts)}
-                            }
-                            Err(e) => Err(e),
+                            .resolve_all(keyed, self.backend.clone(), self.concurrency,
+                                self.timeout, self.replay_only)
+                            .await?; // Storage, replay-integrity and task failures are fatal.
+                        if receipts.iter().any(|r| matches!(
+                            &r.result,
+                            crate::effects::EffectResult::Failed { .. }
+                            | crate::effects::EffectResult::UnsupportedCapability { .. }
+                        )) {
+                            Err("effect failed or capability unsupported".into())
+                        } else {
+                            self.policy.decide(actor, &obs, &receipts)
                         }
                     }
                     Err(e) => Err(e),
@@ -651,6 +647,63 @@ mod tests {
         }
         std::fs::remove_dir_all(path).unwrap();
     }
+    #[tokio::test]
+    async fn missing_replay_receipt_is_infrastructure_error_not_world_rejection() {
+        let path = dir("strict-replay");
+        let mut trial = new(&path, false, true);
+        trial.replay_only = true;
+        assert!(trial.step().await.is_err());
+        assert_eq!(trial.store.sequence, 0);
+        assert_eq!(trial.store.logical_step, 0);
+        assert!(trial.store.read_events().unwrap().is_empty());
+        drop(trial);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn foreign_effect_receipt_is_rejected_on_resume() {
+        let one = dir("receipt-origin");
+        let two = dir("receipt-destination");
+        {
+            let mut trial = new(&one, false, true);
+            trial.run_attempts(1).await.unwrap();
+        }
+        {
+            let _trial = Trial::create(
+                &two, "other-name", 57, "counter", Counter { value: 0, reject: false },
+                Policy { effects: true }, Arc::new(ScriptedBackend),
+                vec![AgentId(0), AgentId(1), AgentId(2)], Scheduling::RoundRobin,
+            ).unwrap();
+        }
+        std::fs::copy(one.join("effects.jsonl"), two.join("effects.jsonl")).unwrap();
+        assert!(Trial::resume(
+            &two, "counter", Policy { effects: true },
+            Arc::new(ScriptedBackend), true
+        ).is_err());
+        assert!(!two.join(".writer.lock").exists());
+        std::fs::remove_dir_all(one).unwrap();
+        std::fs::remove_dir_all(two).unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_only_inspection_does_not_lock_or_modify_an_active_trial() {
+        let path = dir("read-only");
+        let mut trial = new(&path, false, false);
+        trial.run_attempts(3).await.unwrap();
+        let original = std::fs::read(path.join("events.jsonl")).unwrap();
+        let view = Store::<Counter, u64>::inspect_read_only(&path).unwrap();
+        assert_eq!(view.world.value, 3);
+        assert_eq!(view.sequence, 3);
+        assert_eq!(EffectJournal::inspect_read_only(
+            &path, &trial.store.genesis.trial_id
+        ).unwrap(), 0);
+        assert_eq!(std::fs::read(path.join("events.jsonl")).unwrap(), original);
+        assert!(path.join(".writer.lock").exists());
+        drop(trial);
+        assert!(!path.join(".writer.lock").exists());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     struct Slow;
     impl Backend for Slow {
         fn resolve<'a>(&'a self, _: &'a EffectSpec) -> crate::runtime::BoxResult<'a> {

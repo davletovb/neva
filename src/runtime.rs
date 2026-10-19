@@ -44,13 +44,21 @@ impl EffectSpec {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingDisposition {
+    NotCharged,
+    Charged,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Receipt {
     pub key: EffectCallKey,
     pub spec: EffectSpec,
     pub result: EffectResult,
-    /// Failure of world validation cannot reverse a provider charge.
-    pub charged: bool,
+    /// An HTTP error or timeout can occur after the provider charges.
+    pub billing: BillingDisposition,
     pub effective_provider: String,
     pub effective_model: Option<String>,
     /// Detects tampered model output/usage/identity during strict replay.
@@ -62,7 +70,7 @@ impl Receipt {
             &self.key,
             &self.spec,
             &self.result,
-            self.charged,
+            &self.billing,
             &self.effective_provider,
             &self.effective_model,
         ))
@@ -71,6 +79,8 @@ impl Receipt {
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
+    /// Useful for distinguishing scripted from network-backed billing semantics.
+    fn backend_id(&self) -> &'static str { "custom" }
     fn resolve<'a>(&'a self, request: &'a EffectSpec) -> BoxResult<'a>;
 }
 
@@ -78,6 +88,7 @@ pub trait Backend: Send + Sync {
 #[derive(Default)]
 pub struct ScriptedBackend;
 impl Backend for ScriptedBackend {
+    fn backend_id(&self) -> &'static str { "scripted" }
     fn resolve<'a>(&'a self, spec: &'a EffectSpec) -> BoxResult<'a> {
         Box::pin(async move {
             match spec {
@@ -144,6 +155,7 @@ pub struct EffectJournal {
     pub path: PathBuf,
     pub(crate) receipts: BTreeMap<EffectCallKey, Receipt>,
     poisoned: bool,
+    owning_trial: Option<String>,
 }
 
 impl EffectJournal {
@@ -199,7 +211,37 @@ impl EffectJournal {
             path,
             receipts,
             poisoned: false,
+            owning_trial: None,
         })
+    }
+
+    /// Bind both existing and future receipts to the committed trial genesis.
+    pub fn bind_trial(&mut self, trial: &str) -> Result<(), String> {
+        if self.receipts.keys().any(|key| key.trial_id != trial) {
+            return Err("foreign effect receipt found for this trial".into());
+        }
+        self.owning_trial = Some(trial.to_owned());
+        Ok(())
+    }
+
+    /// Read-only ledger validation: no writer lock, creation or truncation.
+    pub fn inspect_read_only(dir: impl AsRef<Path>, trial: &str) -> Result<usize, String> {
+        let raw = fs::read(dir.as_ref().join("effects.jsonl")).map_err(|e| e.to_string())?;
+        if !raw.is_empty() && !raw.ends_with(b"\n") {
+            return Err("effect log has uncommitted/truncated final record".into());
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for line in raw.split(|b| *b == b'\n').filter(|row| !row.is_empty()) {
+            let receipt: Receipt = serde_json::from_slice(line).map_err(|e| e.to_string())?;
+            let key = &receipt.key;
+            if key.trial_id != trial
+                || receipt.content_hash != receipt.compute_hash()?
+                || receipt.spec.key(trial, key.logical_step, key.agent_id, key.call_index)? != *key
+                || !keys.insert(key.clone()) {
+                return Err("effect ledger failed read-only trial/integrity check".into());
+            }
+        }
+        Ok(keys.len())
     }
 
     pub fn open_existing(dir: impl AsRef<Path>) -> Result<Self, String> {
@@ -222,6 +264,9 @@ impl EffectJournal {
         }
         if self.receipts.contains_key(&receipt.key) {
             return Err("effect already recorded".into());
+        }
+        if self.owning_trial.as_ref().is_some_and(|trial| trial != &receipt.key.trial_id) {
+            return Err("attempt to write effect receipt for another trial".into());
         }
         receipt.content_hash = receipt.compute_hash()?;
         let mut bytes = stable_bytes(&receipt)?;
@@ -251,75 +296,85 @@ impl EffectJournal {
         if concurrency == 0 {
             return Err("concurrency limit must be positive".into());
         }
+        // Complete validation comes BEFORE launching any billable request.
         let mut seen = std::collections::BTreeSet::new();
-        let sem = Arc::new(Semaphore::new(concurrency));
-        let mut jobs = JoinSet::new();
+        let mut pending = Vec::new();
         let mut finished = Vec::new();
         for (key, spec) in specs {
             if !seen.insert(key.clone()) {
                 return Err("duplicate effect call key".into());
             }
-            if key
-                != spec.key(
-                    &key.trial_id,
-                    key.logical_step,
-                    key.agent_id,
-                    key.call_index,
-                )?
-            {
-                return Err("effect call hash mismatch".into());
+            if self.owning_trial.as_ref().is_some_and(|trial| trial != &key.trial_id)
+                || key != spec.key(&key.trial_id, key.logical_step, key.agent_id, key.call_index)? {
+                return Err("effect trial/request key mismatch".into());
             }
             if let Some(existing) = self.receipts.get(&key) {
-                if existing.spec != spec {
-                    return Err("recorded request content mismatch".into());
+                if existing.spec != spec || existing.content_hash != existing.compute_hash()? {
+                    return Err("recorded request content/hash mismatch".into());
                 }
                 finished.push(existing.clone());
+            } else if replay_only {
+                return Err(format!("missing recorded effect: {}", key.canonical_request_hash));
             } else {
-                if replay_only {
-                    return Err(format!(
-                        "missing recorded effect: {}",
-                        key.canonical_request_hash
-                    ));
-                }
-                let sem = sem.clone();
-                let backend = backend.clone();
-                jobs.spawn(async move {
-                    let permit = sem.acquire_owned().await.map_err(|e| e.to_string())?;
-                    let result = timeout(deadline, backend.resolve(&spec)).await;
-                    drop(permit);
-                    let response = match result {
-                        Ok(Ok(result)) => result,
-                        Ok(Err(error)) => EffectResult::Failed {
-                            category: "backend".into(),
-                            message: error,
-                        },
-                        Err(_) => EffectResult::Failed {
-                            category: "timeout".into(),
-                            message: "effect deadline exceeded".into(),
-                        },
-                    };
-                    let (provider, model) = match &spec {
-                        EffectSpec::Model(m) => (m.provider.clone(), Some(m.model.clone())),
-                        EffectSpec::Tool { name, .. } => (format!("tool:{name}"), None),
-                    };
-                    let charged =
-                        matches!(response, EffectResult::Model { .. }) && provider != "scripted";
-                    Ok::<_, String>(Receipt {
-                        key,
-                        spec,
-                        result: response,
-                        charged,
-                        effective_provider: provider,
-                        effective_model: model,
-                        content_hash: String::new(),
-                    })
-                });
+                pending.push((key, spec));
             }
         }
+        if self.poisoned && !pending.is_empty() {
+            return Err("effect ledger poisoned; reopen/recover before generating".into());
+        }
+        let sem = Arc::new(Semaphore::new(concurrency));
+        let mut jobs = JoinSet::new();
+        for (key, spec) in pending {
+            let sem = sem.clone();
+            let backend = backend.clone();
+            jobs.spawn(async move {
+                let _permit = sem.acquire_owned().await.map_err(|e| e.to_string())?;
+                let result = timeout(deadline, backend.resolve(&spec)).await;
+                let response = match result {
+                    Ok(Ok(value)) => value,
+                    Ok(Err(error)) => EffectResult::Failed {
+                        category: "backend".into(), message: error
+                    },
+                    Err(_) => EffectResult::Failed {
+                        category: "timeout".into(), message: "effect deadline exceeded".into()
+                    },
+                };
+                let backend_kind = backend.backend_id();
+                let model = match &response {
+                    EffectResult::Model { effective_model, .. } => Some(effective_model.clone()),
+                    _ => None,
+                };
+                let billing = if backend_kind == "scripted"
+                    || matches!(&response, EffectResult::UnsupportedCapability { .. }) {
+                    BillingDisposition::NotCharged
+                } else if matches!(&response, EffectResult::Model { .. }) {
+                    BillingDisposition::Charged
+                } else {
+                    BillingDisposition::Unknown
+                };
+                Ok::<_, String>(Receipt {
+                    key, spec, result: response, billing,
+                    effective_provider: backend_kind.into(),
+                    effective_model: model,
+                    content_hash: String::new(),
+                })
+            });
+        }
+        // Always join all requests, even if one receipt append fails.
+        // No early return can cancel another already-sent provider call.
+        let mut failures = Vec::new();
         while let Some(result) = jobs.join_next().await {
-            let receipt = result.map_err(|e| format!("effect task failure: {e}"))??;
-            let stored = self.append(receipt)?;
-            finished.push(stored);
+            match result {
+                Ok(Ok(receipt)) => match self.append(receipt) {
+                    Ok(recorded) => finished.push(recorded),
+                    Err(error) => failures.push(error),
+                },
+                Ok(Err(error)) => failures.push(format!("effect task failed: {error}")),
+                Err(error) => failures.push(format!("effect task panicked/cancelled: {error}")),
+            }
+        }
+        if !failures.is_empty() {
+            return Err(format!("effect batch incomplete; reconcile provider charges before retry: {}", failures.join("; ")));
         }
         finished.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(finished)
@@ -338,21 +393,29 @@ pub struct OpenAiCompatible {
 #[cfg(feature = "live-http")]
 impl OpenAiCompatible {
     pub fn new(url: String, api_key: String) -> Result<Self, String> {
-        if !(url.starts_with("https://")
-            || url.starts_with("http://127.0.0.1:")
-            || url.starts_with("http://localhost:"))
-        {
-            return Err("live URL must use HTTPS or loopback HTTP".into());
+        let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err("userinfo in live URL is forbidden".into());
         }
-        Ok(Self {
-            client: reqwest::Client::new(),
-            url,
-            api_key,
-        })
+        let allowed = match parsed.scheme() {
+            "https" => true,
+            "http" => parsed.host_str().is_some_and(|host| {
+                host == "localhost" || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+            }),
+            _ => false,
+        };
+        if !allowed { return Err("live model URL must be HTTPS or parsed loopback HTTP".into()); }
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build().map_err(|e|e.to_string())?;
+        Ok(Self { client, url: parsed.to_string(), api_key })
     }
 }
 #[cfg(feature = "live-http")]
 impl Backend for OpenAiCompatible {
+    fn backend_id(&self) -> &'static str { "openai-compatible" }
     fn resolve<'a>(&'a self, spec: &'a EffectSpec) -> BoxResult<'a> {
         Box::pin(async move {
             let model = match spec {
@@ -379,9 +442,16 @@ impl Backend for OpenAiCompatible {
                         crate::effects::Role::Assistant => "assistant",
                         crate::effects::Role::Tool => "tool",
                     };
-                    serde_json::json!({"role":role,"content":m.content})
+                    let mut message = serde_json::json!({"role":role,"content":m.content});
+                    if matches!(m.role, crate::effects::Role::Tool) {
+                        let call_id = m.tool_call_id.as_ref().ok_or(
+                            "tool role message requires tool_call_id"
+                        )?;
+                        message["tool_call_id"] = serde_json::json!(call_id);
+                    }
+                    Ok::<_, String>(message)
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
             let mut body = serde_json::json!({"model":model.model,"messages":roles,"stream":false});
             if let Some(t) = model.sampling.temperature {
                 body["temperature"] = serde_json::json!(t);
@@ -493,6 +563,65 @@ mod effect_integrity_tests {
     }
 }
 
+#[cfg(test)]
+mod batch_regression_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    struct Tracking {
+        launches: Arc<AtomicUsize>,
+    }
+    impl Backend for Tracking {
+        fn resolve<'a>(&'a self, _: &'a EffectSpec) -> BoxResult<'a> {
+            self.launches.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Err("provider connection interrupted after sending".into())
+            })
+        }
+    }
+    #[tokio::test]
+    async fn duplicate_batch_is_rejected_before_any_provider_launch() {
+        let path = std::env::temp_dir().join(format!("hiyal-dupes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let mut journal = EffectJournal::open(&path).unwrap();
+        journal.bind_trial("trial").unwrap();
+        let spec = sample_request("one");
+        let key = spec.key("trial", 0, AgentId(0), 0).unwrap();
+        let launches = Arc::new(AtomicUsize::new(0));
+        let result = journal.resolve_all(
+            vec![(key.clone(), spec.clone()), (key, spec)],
+            Arc::new(Tracking { launches: launches.clone() }),
+            2, Duration::from_secs(1), false,
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(launches.load(Ordering::SeqCst), 0);
+        assert_eq!(journal.receipt_count(), 0);
+        drop(journal);
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[tokio::test]
+    async fn backend_transport_failure_is_logged_with_unknown_billing() {
+        let path = std::env::temp_dir().join(format!("hiyal-billing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let mut journal = EffectJournal::open(&path).unwrap();
+        journal.bind_trial("trial").unwrap();
+        let spec = sample_request("perhaps billed");
+        let key = spec.key("trial", 0, AgentId(0), 0).unwrap();
+        let result = journal.resolve_all(
+            vec![(key, spec)], Arc::new(Tracking { launches: Arc::new(AtomicUsize::new(0)) }),
+            1, Duration::from_secs(1), false
+        ).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].billing, BillingDisposition::Unknown);
+        drop(journal);
+        assert_eq!(EffectJournal::inspect_read_only(&path, "trial").unwrap(), 1);
+        assert!(EffectJournal::inspect_read_only(&path, "other").is_err());
+        fs::remove_dir_all(path).unwrap();
+    }
+}
+
 #[cfg(all(test, feature = "live-http"))]
 mod http_tests {
     use super::*;
@@ -500,6 +629,21 @@ mod http_tests {
     use std::net::TcpListener;
     use std::thread;
 
+    #[test]
+    fn parse_live_host_safely_before_sending_bearer_token() {
+        assert!(OpenAiCompatible::new(
+            "http://localhost:8080@attacker.invalid/chat".into(), "token".into()
+        ).is_err());
+        assert!(OpenAiCompatible::new(
+            "http://127.0.0.1.attacker.invalid/chat".into(), "token".into()
+        ).is_err());
+        assert!(OpenAiCompatible::new(
+            "http://192.168.1.10/chat".into(), "token".into()
+        ).is_err());
+        assert!(OpenAiCompatible::new(
+            "http://127.0.0.1:3333/chat".into(), "token".into()
+        ).is_ok());
+    }
     #[tokio::test]
     async fn opt_in_http_chat_adapter_parses_model_and_usage_from_loopback() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

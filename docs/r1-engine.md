@@ -65,7 +65,7 @@ results in stable logical call order, not network completion order.
 Backends:
 - `ScriptedBackend`: deterministic offline model-shaped responses. Tools are
   explicitly unsupported without a registered implementation.
-- `ReplayBackend`: order-independent strict keyed lookups.
+- `ReplayBackend`: **offline receipt lookup utility**, not an executable `Backend`; use `Trial::resume(..., replay_only = true)` for strict replay with the journal.
 - `OpenAiCompatible` (`--features live-http`): opt-in minimal JSON chat
   request/response adapter. Supports ordered role messages, selected sampling
   settings and provider-reported model/usage. It refuses unimplemented
@@ -119,3 +119,10 @@ clean CI smoke result as independent external security/provider validation.
 - Failed restores remove their writer locks. On open, abandoned
   `snapshot.tmp` files are discarded under the exclusive lock. Write,
   flush, and rename failures also clean up their temporary file.
+
+## Review hardening: effect failures and inspection
+
+- Live timeouts and transport/backend errors record `billing = unknown`, not `charged = false`; known scripted responses use `not_charged`, while successful live model results use `charged` as a disposition, not verified financial settlement. An effect's receipt binds to the committed trial ID. Until an external provider supplies idempotency or billing reconciliation, indeterminate charges remain an R3 limitation.
+- Invalid/duplicated requests and missing replay receipts fail **before** any provider task is spawned; ledger write errors propagate without advancing the world or appending a rejected simulation step. Once calls have launched, the runner drains the entire result batch even when one journal append fails. A crashed network call before receipt durability may still require manual billing reconciliation.
+- `inspect` and `validate` now verify both logs read-only, without locking, creating files or repairing torn tails; a concurrent incomplete write can produce a retryable inspection error. Mutating recovery remains exclusive to `resume`.
+- Logged actions apply the reducer once in the active simulation; full reducer replay still verifies committed history on restore. Full-log replay remains deliberate until a fast snapshot-based verification profile can preserve audit guarantees.

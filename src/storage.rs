@@ -17,50 +17,14 @@ pub const SCHEMA: u32 = 1;
 /// Stable UTF-8 JSON with lexically sorted keys, including nested maps. This is
 /// a documented interim profile, NOT a claim of full RFC 8785 compliance.
 pub fn stable_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
-    fn encode(value: &serde_json::Value, out: &mut Vec<u8>) -> serde_json::Result<()> {
-        match value {
-            serde_json::Value::Object(map) => {
-                out.push(b'{');
-                let mut keys: Vec<_> = map.keys().collect();
-                keys.sort();
-                for (index, key) in keys.iter().enumerate() {
-                    if index != 0 {
-                        out.push(b',');
-                    }
-                    serde_json::to_writer(&mut *out, key)?;
-                    out.push(b':');
-                    encode(&map[key.as_str()], out)?;
-                }
-                out.push(b'}');
-            }
-            serde_json::Value::Array(values) => {
-                out.push(b'[');
-                for (index, value) in values.iter().enumerate() {
-                    if index != 0 {
-                        out.push(b',');
-                    }
-                    encode(value, out)?;
-                }
-                out.push(b']');
-            }
-            scalar => serde_json::to_writer(out, scalar)?,
-        }
-        Ok(())
-    }
     let value = serde_json::to_value(value).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    encode(&value, &mut out).map_err(|e| e.to_string())?;
+    crate::core::stable_json_bytes(&value, &mut out).map_err(|e| e.to_string())?;
     Ok(out)
 }
-
 pub fn digest<T: Serialize>(value: &T) -> Result<String, String> {
-    use std::fmt::Write as _;
     let hash = Sha256::digest(stable_bytes(value)?);
-    let mut out = String::new();
-    for byte in hash {
-        write!(out, "{byte:02x}").map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    Ok(crate::core::hex_digest(&hash))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -459,44 +423,49 @@ where
 
     /// Write + fsync first, then publish the projected world/schedule in memory.
     /// On failure, the writer is poisoned to prevent appending after a torn tail.
-    pub fn append(
+    /// Internal staged append: replay independently re-applies actions during restore.
+    pub(crate) fn append(
         &mut self,
         actor: AgentId,
         outcome: Outcome<W, A>,
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, String> {
-        if self.poisoned {
-            return Err("writer poisoned; reopen/recover".into());
+        if self.poisoned { return Err("writer poisoned; reopen/recover".into()); }
+        self.schedule.validate()?;
+        let mut expected_schedule = self.schedule.clone();
+        let mut expected_streams = self.streams.clone();
+        if let Outcome::Control { paused } = &outcome {
+            if *paused { expected_schedule.pause(actor)?; }
+            else { expected_schedule.resume(actor)?; }
+        } else if expected_schedule.select(&mut expected_streams)? != Some(actor) {
+            return Err("unexpected selected actor".into());
         }
-        let mut proposed = Projection {
-            world: self.world.clone(),
-            schedule: self.schedule.clone(),
-            streams: self.streams.clone(),
-            sequence: self.sequence,
-            logical_step: self.logical_step,
-            chain_head: self.chain_head.clone(),
+        if schedule != expected_schedule || streams != expected_streams {
+            return Err("scheduler or random stream divergence".into());
+        }
+        let accepted = matches!(&outcome, Outcome::Accepted { .. });
+        let next_step = self.logical_step
+            .checked_add(u64::from(accepted)).ok_or("logical-step overflow")?;
+        let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
+        let new_world = match &outcome {
+            Outcome::Accepted { world, state_hash, .. } => {
+                if digest(world)? != *state_hash { return Err("staged state hash mismatch".into()); }
+                world.clone()
+            }
+            Outcome::Rejected { .. } | Outcome::Control { .. } => self.world.clone(),
         };
         let mut event = Entry {
-            schema: SCHEMA,
-            trial_id: self.genesis.trial_id.clone(),
-            sequence: self.sequence,
-            logical_step: self.logical_step,
-            actor,
-            outcome,
-            after_schedule: schedule,
-            after_streams: streams,
-            previous_hash: self.chain_head.clone(),
-            hash: String::new(),
+            schema: SCHEMA, trial_id: self.genesis.trial_id.clone(),
+            sequence: self.sequence, logical_step: self.logical_step,
+            actor, outcome, after_schedule: schedule, after_streams: streams,
+            previous_hash: self.chain_head.clone(), hash: String::new(),
         };
         event.hash = event.compute_hash()?;
-        Self::validate_entry(&self.genesis, &mut proposed, &event)?;
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
         let write_result = (|| -> std::io::Result<()> {
-            let mut file = OpenOptions::new()
-                .append(true)
-                .open(self.dir.join("events.jsonl"))?;
+            let mut file = OpenOptions::new().append(true).open(self.dir.join("events.jsonl"))?;
             file.write_all(&encoded)?;
             file.sync_all()
         })();
@@ -505,12 +474,12 @@ where
             return Err(format!("event append/fsync failed: {error}"));
         }
         self.log_bytes += encoded.len() as u64;
-        self.sequence = proposed.sequence;
-        self.logical_step = proposed.logical_step;
-        self.chain_head = proposed.chain_head;
-        self.world = proposed.world;
-        self.schedule = proposed.schedule;
-        self.streams = proposed.streams;
+        self.sequence = next_sequence;
+        self.logical_step = next_step;
+        self.chain_head = event.hash.clone();
+        self.world = new_world;
+        self.schedule = event.after_schedule.clone();
+        self.streams = event.after_streams.clone();
         Ok(event)
     }
 

@@ -87,7 +87,7 @@ pub fn derive_id(domain: &str, parts: &[&str]) -> String {
     hex_digest(&hasher.finalize())
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         write!(&mut hex, "{byte:02x}").expect("writing into String cannot fail");
@@ -98,7 +98,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 /// Explicitly sort object keys *recursively*, independently of the global
 /// serde_json `preserve_order` Cargo feature (which downstream crates can
 /// enable through feature unification). This is NOT RFC 8785/JCS.
-fn stable_json_bytes(value: &serde_json::Value, out: &mut Vec<u8>) -> serde_json::Result<()> {
+pub(crate) fn stable_json_bytes(value: &serde_json::Value, out: &mut Vec<u8>) -> serde_json::Result<()> {
     match value {
         serde_json::Value::Object(object) => {
             out.push(b'{');
