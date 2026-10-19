@@ -639,7 +639,9 @@ def shared_provider_resources(
     )
     resolved_path = state_path
     if resolved_path is None:
-        configured = os.getenv("HIYAL_PROVIDER_COORDINATION_DB") or os.getenv(\n            "NEVA_PROVIDER_COORDINATION_DB"\n        )
+        configured = os.getenv("HIYAL_PROVIDER_COORDINATION_DB") or os.getenv(
+            "NEVA_PROVIDER_COORDINATION_DB"
+        )
         resolved_path = configured or None
     path_key = str(Path(resolved_path).expanduser().resolve()) if resolved_path else None
     expected_config = (
