@@ -60,7 +60,9 @@ fn canonical_future_path(path: &Path) -> Result<PathBuf, String> {
     let mut ancestor = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir().map_err(|e| e.to_string())?.join(path)
+        std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(path)
     };
     let mut missing = Vec::new();
     while !ancestor.exists() {
@@ -123,10 +125,8 @@ impl Sweep {
         let mut jobs = Vec::new();
         for parameter in &self.parameter_values {
             for replicate in 0..self.replicates {
-                let seed_hex = crate::core::derive_id(
-                    "r2-replicate",
-                    &[&identity, &replicate.to_string()],
-                );
+                let seed_hex =
+                    crate::core::derive_id("r2-replicate", &[&identity, &replicate.to_string()]);
                 let seed = u64::from_str_radix(&seed_hex[..16], 16).map_err(|e| e.to_string())?;
                 let id = crate::core::derive_id(
                     "r2-job",
@@ -140,7 +140,10 @@ impl Sweep {
                 jobs.push(Job {
                     trial_name: format!(
                         "{}-p{}-r{}-{}",
-                        self.name, parameter, replicate, &identity[..16]
+                        self.name,
+                        parameter,
+                        replicate,
+                        &identity[..16]
                     ),
                     id,
                     seed,
@@ -917,22 +920,35 @@ mod tests {
         };
         {
             let trial = Trial::create(
-                &parent, "relative-parent", 11, &kind, Counter { total: 0 },
-                policy(), Arc::new(ScriptedBackend), vec![AgentId(0)],
+                &parent,
+                "relative-parent",
+                11,
+                &kind,
+                Counter { total: 0 },
+                policy(),
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
                 Scheduling::RoundRobin,
-            ).unwrap();
+            )
+            .unwrap();
             drop(trial);
         }
-        let relative_child = PathBuf::from(format!(
-            "hiyal-relative-fork-{}", std::process::id()
-        ));
+        let relative_child = PathBuf::from(format!("hiyal-relative-fork-{}", std::process::id()));
         let _ = fs::remove_dir_all(&relative_child);
         let fork = fork_at_head(
-            &parent, &relative_child, "test", "treatment",
+            &parent,
+            &relative_child,
+            "test",
+            "treatment",
             serde_json::json!({"delta": 2}),
-            |world: &mut Counter| {world.total = 2; Ok(())},
-            policy(), Arc::new(ScriptedBackend),
-        ).unwrap();
+            |world: &mut Counter| {
+                world.total = 2;
+                Ok(())
+            },
+            policy(),
+            Arc::new(ScriptedBackend),
+        )
+        .unwrap();
         assert!(verify_fork::<Counter>(&relative_child).is_ok());
         drop(fork);
         fs::remove_dir_all(relative_child).unwrap();

@@ -328,15 +328,16 @@ where
         let mut line = Vec::new();
         loop {
             line.clear();
-            let count = reader.read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+            let count = reader
+                .read_until(b'\n', &mut line)
+                .map_err(|e| e.to_string())?;
             if count == 0 {
                 break;
             }
             if !line.ends_with(b"\n") {
                 return Err("uncommitted final event record; retry inspection".into());
             }
-            let event: Entry<W, A> =
-                serde_json::from_slice(&line).map_err(|e| e.to_string())?;
+            let event: Entry<W, A> = serde_json::from_slice(&line).map_err(|e| e.to_string())?;
             Self::validate_entry(&genesis, &mut state, &event)?;
             offset = offset.checked_add(count as u64).ok_or("offset overflow")?;
             if snapshot.as_ref().is_some_and(|s| s.log_bytes == offset) {
