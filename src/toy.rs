@@ -35,7 +35,11 @@ impl World for Society {
         let id = usize::try_from(actor.0).map_err(|e| e.to_string())?;
         match action {
             ToyAction::Transfer { from, to, amount } => {
-                if id != from || from >= self.balances.len() || to >= self.balances.len() || from == to {
+                if id != from
+                    || from >= self.balances.len()
+                    || to >= self.balances.len()
+                    || from == to
+                {
                     return Err("invalid transfer actor/target".into());
                 }
                 let next_from = self.balances[from]
@@ -48,7 +52,11 @@ impl World for Society {
                 self.balances[to] = next_to;
             }
             ToyAction::Attach { from, to } => {
-                if id != from || from >= self.degrees.len() || to >= self.degrees.len() || to == from {
+                if id != from
+                    || from >= self.degrees.len()
+                    || to >= self.degrees.len()
+                    || to == from
+                {
                     return Err("invalid attachment".into());
                 }
                 self.degrees[to] = self.degrees[to].checked_add(1).ok_or("degree overflow")?;
@@ -166,14 +174,30 @@ mod tests {
 
     #[test]
     fn invalid_actor_indices_reject_without_reducer_panics() {
-        let original=Society{balances:vec![3,3,3],degrees:vec![0;3]};
-        let mut world=original.clone();
-        assert!(world.apply(AgentId(3),ToyAction::Transfer{
-            from:3,to:0,amount:0
-        }).is_err());
-        assert_eq!(world,original);
-        assert!(world.apply(AgentId(3),ToyAction::Attach{from:3,to:0}).is_err());
-        assert_eq!(world,original);
+        let original = Society {
+            balances: vec![3, 3, 3],
+            degrees: vec![0; 3],
+        };
+        let mut world = original.clone();
+        assert!(
+            world
+                .apply(
+                    AgentId(3),
+                    ToyAction::Transfer {
+                        from: 3,
+                        to: 0,
+                        amount: 0
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(world, original);
+        assert!(
+            world
+                .apply(AgentId(3), ToyAction::Attach { from: 3, to: 0 })
+                .is_err()
+        );
+        assert_eq!(world, original);
     }
 
     #[test]

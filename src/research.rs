@@ -54,13 +54,24 @@ pub struct JobResult {
 /// append any not-yet-created path components. This checks containment
 /// without first materializing an unsafe child under the source.
 fn canonical_future_path(path: &Path) -> Result<PathBuf, String> {
-    let mut ancestor = path.to_path_buf();
+    // Anchor relative paths at the actual working directory so a
+    // one-component destination such as "branch" can walk to an existing
+    // parent instead of reaching Path::parent() == "".
+    let mut ancestor = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(|e| e.to_string())?.join(path)
+    };
     let mut missing = Vec::new();
     while !ancestor.exists() {
-        let name = ancestor.file_name()
+        let name = ancestor
+            .file_name()
             .ok_or("destination contains unresolved or invalid path components")?;
         missing.push(name.to_os_string());
-        ancestor = ancestor.parent().ok_or("destination has no existing ancestor")?.to_path_buf();
+        ancestor = ancestor
+            .parent()
+            .ok_or("destination has no existing ancestor")?
+            .to_path_buf();
     }
     let mut resolved = fs::canonicalize(&ancestor).map_err(|e| e.to_string())?;
     for name in missing.iter().rev() {
@@ -185,9 +196,11 @@ impl Sweep {
         // Generic Sweep::execute accepts arbitrary scientific parameters;
         // only this fixed counter reference needs multiplication checked.
         let _ = self.jobs()?;
-        if self.parameter_values.iter().any(|amount|
-            amount.checked_mul(self.attempts).is_none()
-        ) {
+        if self
+            .parameter_values
+            .iter()
+            .any(|amount| amount.checked_mul(self.attempts).is_none())
+        {
             return Err("counter amount multiplied by attempts overflows u64".into());
         }
         let plan_path = root.join("sweep-plan.json");
@@ -298,11 +311,14 @@ impl Sweep {
 /// Observers do not roll back authoritative committed events, but a research
 /// runner must not publish a successful derived dataset after observer errors.
 pub fn ensure_observer_health(diagnostics: &[String]) -> Result<(), String> {
-    if diagnostics.is_empty() { Ok(()) }
-    else { Err(format!(
-        "derived metrics failed; restart will rebuild the CSV: {}",
-        diagnostics.join("; ")
-    )) }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "derived metrics failed; restart will rebuild the CSV: {}",
+            diagnostics.join("; ")
+        ))
+    }
 }
 
 pub struct CounterMetrics;
@@ -480,18 +496,23 @@ where
     // path appears only after ancestry, attribution and both ledgers verify.
     // A process kill leaves an ignorable orphan staging directory, not a
     // partially published branch that blocks restart.
-    static STAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(0);
-    let parent_folder = child_dir.parent().ok_or("fork destination lacks a parent")?;
+    static STAGE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let parent_folder = child_dir
+        .parent()
+        .ok_or("fork destination lacks a parent")?;
     fs::create_dir_all(parent_folder).map_err(|e| e.to_string())?;
-    let basename = child_dir.file_name().and_then(|value| value.to_str())
+    let basename = child_dir
+        .file_name()
+        .and_then(|value| value.to_str())
         .ok_or("invalid fork destination name")?;
     let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
         .as_nanos();
     let sequence = STAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stage = parent_folder.join(format!(
-        ".{basename}.pending-{}-{nonce}-{sequence}", std::process::id()
+        ".{basename}.pending-{}-{nonce}-{sequence}",
+        std::process::id()
     ));
     let kind = genesis.world_kind.clone();
     let mut stage_owned = false;
@@ -508,7 +529,8 @@ where
         // exact log length check here rejects a changed parent prefix without
         // pointlessly replaying the captured log an extra time.
         let captured_length = fs::metadata(bundle.join("events.jsonl"))
-            .map_err(|e| e.to_string())?.len();
+            .map_err(|e| e.to_string())?
+            .len();
         if captured_length != parent.log_bytes {
             return Err("parent advanced during branch evidence capture".into());
         }
@@ -531,13 +553,17 @@ where
         meta.attribution_hash = meta.fingerprint()?;
         crate::storage::save_atomic(&stage.join("fork.json"), &stable_bytes(&meta)?)?;
         verify_fork::<W>(&stage)?;
-        if child_dir.exists() { return Err("fork destination appeared during creation".into()); }
+        if child_dir.exists() {
+            return Err("fork destination appeared during creation".into());
+        }
         fs::rename(&stage, child_dir).map_err(|e| e.to_string())?;
         crate::storage::sync_trial_directory(parent_folder)?;
         Ok(())
     })();
     if let Err(error) = create {
-        if stage_owned { let _ = fs::remove_dir_all(&stage); }
+        if stage_owned {
+            let _ = fs::remove_dir_all(&stage);
+        }
         return Err(error);
     }
     Trial::resume(child_dir, &kind, policy, backend, false)
@@ -565,13 +591,24 @@ where
     let control_dir = root.join("control");
     let treatment_dir = root.join("treatment");
     let control = fork_at_head(
-        parent.as_ref(), &control_dir, intervention, "control",
-        serde_json::json!({}), |_world: &mut W| Ok(()),
-        make_policy(), backend.clone(),
+        parent.as_ref(),
+        &control_dir,
+        intervention,
+        "control",
+        serde_json::json!({}),
+        |_world: &mut W| Ok(()),
+        make_policy(),
+        backend.clone(),
     )?;
     let treatment = match fork_at_head(
-        parent.as_ref(), &treatment_dir, intervention, "treatment",
-        parameters, treatment, make_policy(), backend,
+        parent.as_ref(),
+        &treatment_dir,
+        intervention,
+        "treatment",
+        parameters,
+        treatment,
+        make_policy(),
+        backend,
     ) {
         Ok(value) => value,
         Err(error) => {
@@ -585,26 +622,31 @@ where
     // the complete copied prefix a third time for each new arm.
     let paired_check = (|| -> Result<(), String> {
         let left: ForkMetadata = serde_json::from_slice(
-            &fs::read(control_dir.join("fork.json")).map_err(|e| e.to_string())?
-        ).map_err(|e| e.to_string())?;
+            &fs::read(control_dir.join("fork.json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
         let right: ForkMetadata = serde_json::from_slice(
-            &fs::read(treatment_dir.join("fork.json")).map_err(|e| e.to_string())?
-        ).map_err(|e| e.to_string())?;
+            &fs::read(treatment_dir.join("fork.json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
         if left.parent_id != right.parent_id
             || left.parent_head != right.parent_head
             || left.parent_sequence != right.parent_sequence
             || left.parent_logical_step != right.parent_logical_step
-            || left.arm != "control" || right.arm != "treatment"
+            || left.arm != "control"
+            || right.arm != "treatment"
             || control.store.genesis().initial_streams.seed_domain
                 != treatment.store.genesis().initial_streams.seed_domain
             || control.store.genesis().initial_schedule
-                != treatment.store.genesis().initial_schedule {
+                != treatment.store.genesis().initial_schedule
+        {
             return Err("paired branches differ in ancestry, RNG or schedule".into());
         }
         Ok(())
     })();
     if let Err(error) = paired_check {
-        drop(control); drop(treatment);
+        drop(control);
+        drop(treatment);
         let _ = fs::remove_dir_all(&control_dir);
         let _ = fs::remove_dir_all(&treatment_dir);
         return Err(error);
@@ -721,17 +763,20 @@ mod tests {
     #[test]
     #[tokio::test]
     async fn oversized_counter_parameters_are_rejected_only_by_counter_runner() {
-        let mut plan=sweep(1);
-        plan.parameter_values=vec![u64::MAX];
-        plan.attempts=2;
+        let mut plan = sweep(1);
+        plan.parameter_values = vec![u64::MAX];
+        plan.attempts = 2;
         assert!(plan.jobs().is_ok());
-        let custom=plan.execute(|job| async move { Ok(job.parameter) }).await.unwrap();
-        assert_eq!(custom.len(),3);
-        let path=directory("counter-overflow");
+        let custom = plan
+            .execute(|job| async move { Ok(job.parameter) })
+            .await
+            .unwrap();
+        assert_eq!(custom.len(), 3);
+        let path = directory("counter-overflow");
         assert!(plan.run_counter(&path).await.is_err());
         assert!(!path.join("sweep-plan.json").exists());
         fs::remove_dir_all(path).unwrap();
-        plan.attempts=1;
+        plan.attempts = 1;
         assert!(plan.jobs().is_ok());
     }
 
@@ -744,39 +789,70 @@ mod tests {
     #[tokio::test]
     async fn failed_second_arm_rolls_back_published_first_arm() {
         use std::sync::atomic::AtomicUsize;
-        let root=directory("second-arm-failure");
-        let parent=root.join("parent");
-        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
+        let root = directory("second-arm-failure");
+        let parent = root.join("parent");
+        let kind = kind(1, false, "fixed-v1", "scripted").unwrap();
         {
-            let trial=Trial::create(
-                &parent,"parent-for-rollback",5,&kind,Counter{total:0},
-                Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()},
-                Arc::new(ScriptedBackend), vec![AgentId(0)],Scheduling::RoundRobin
-            ).unwrap();
+            let trial = Trial::create(
+                &parent,
+                "parent-for-rollback",
+                5,
+                &kind,
+                Counter { total: 0 },
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             drop(trial);
         }
-        let changed=Arc::new(AtomicUsize::new(0));
-        let parent_clone=parent.clone();
-        let kind_clone=kind.clone();
-        let result=paired_forks::<Counter,_,_>(
-            &parent,root.join("pair"),"test",serde_json::json!({"delta":1}),
+        let changed = Arc::new(AtomicUsize::new(0));
+        let parent_clone = parent.clone();
+        let kind_clone = kind.clone();
+        let result = paired_forks::<Counter, _, _>(
+            &parent,
+            root.join("pair"),
+            "test",
+            serde_json::json!({"delta":1}),
             {
-                let changed=changed.clone();
+                let changed = changed.clone();
                 move || {
-                    if changed.fetch_add(1,Ordering::SeqCst)==1 {
-                        let mut source=Trial::resume(
-                            &parent_clone, &kind_clone,
-                            Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()},
-                            Arc::new(ScriptedBackend),false
-                        ).unwrap();
+                    if changed.fetch_add(1, Ordering::SeqCst) == 1 {
+                        let mut source = Trial::resume(
+                            &parent_clone,
+                            &kind_clone,
+                            Increment {
+                                amount: 1,
+                                model: false,
+                                model_id: "fixed-v1".into(),
+                                provider: "scripted".into(),
+                            },
+                            Arc::new(ScriptedBackend),
+                            false,
+                        )
+                        .unwrap();
                         source.pause_actor(AgentId(0)).unwrap();
                         source.checkpoint().unwrap();
                     }
-                    Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()}
+                    Increment {
+                        amount: 1,
+                        model: false,
+                        model_id: "fixed-v1".into(),
+                        provider: "scripted".into(),
+                    }
                 }
             },
-            |world:&mut Counter| {world.total+=1;Ok(())},
-            Arc::new(ScriptedBackend)
+            |world: &mut Counter| {
+                world.total += 1;
+                Ok(())
+            },
+            Arc::new(ScriptedBackend),
         );
         assert!(result.is_err());
         assert!(!root.join("pair/control").exists());
@@ -784,34 +860,72 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn new_single_component_relative_fork_destination_is_supported() {
+        let name = format!("hiyal-r2-relative-{}", std::process::id());
+        let path = canonical_future_path(Path::new(&name)).unwrap();
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(path, cwd.join(&name));
+    }
+
     #[tokio::test]
     async fn reject_aliases_and_symlinks_into_parent_directory() {
-        let root=directory("fork-containment");
-        let parent=root.join("parent");
-        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
-        let policy=|| Increment{
-            amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()
+        let root = directory("fork-containment");
+        let parent = root.join("parent");
+        let kind = kind(1, false, "fixed-v1", "scripted").unwrap();
+        let policy = || Increment {
+            amount: 1,
+            model: false,
+            model_id: "fixed-v1".into(),
+            provider: "scripted".into(),
         };
         {
-            let trial=Trial::create(
-                &parent,"containment",9,&kind,Counter{total:0},policy(),
-                Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin
-            ).unwrap();
+            let trial = Trial::create(
+                &parent,
+                "containment",
+                9,
+                &kind,
+                Counter { total: 0 },
+                policy(),
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             drop(trial);
         }
-        let aliased=root.join(".").join("parent").join("nested");
-        assert!(fork_at_head(
-            &parent,&aliased,"shock","treatment",serde_json::json!({}),
-            |_world:&mut Counter|Ok(()),policy(),Arc::new(ScriptedBackend)
-        ).is_err());
+        let aliased = root.join(".").join("parent").join("nested");
+        assert!(
+            fork_at_head(
+                &parent,
+                &aliased,
+                "shock",
+                "treatment",
+                serde_json::json!({}),
+                |_world: &mut Counter| Ok(()),
+                policy(),
+                Arc::new(ScriptedBackend)
+            )
+            .is_err()
+        );
         assert!(!parent.join("nested").exists());
-        #[cfg(unix)] {
-            let link=root.join("source-link");
-            std::os::unix::fs::symlink(&parent,&link).unwrap();
-            assert!(fork_at_head(
-                &parent,link.join("nested"),"shock","treatment",serde_json::json!({}),
-                |_world:&mut Counter|Ok(()),policy(),Arc::new(ScriptedBackend)
-            ).is_err());
+        #[cfg(unix)]
+        {
+            let link = root.join("source-link");
+            std::os::unix::fs::symlink(&parent, &link).unwrap();
+            assert!(
+                fork_at_head(
+                    &parent,
+                    link.join("nested"),
+                    "shock",
+                    "treatment",
+                    serde_json::json!({}),
+                    |_world: &mut Counter| Ok(()),
+                    policy(),
+                    Arc::new(ScriptedBackend)
+                )
+                .is_err()
+            );
             assert!(!parent.join("nested").exists());
         }
         fs::remove_dir_all(root).unwrap();
@@ -819,38 +933,83 @@ mod tests {
 
     #[tokio::test]
     async fn fork_ids_change_with_parameters_and_committed_parent_boundary() {
-        let root=directory("unique-fork-identity");
-        let parent=root.join("parent");
-        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
-        let policy=|| Increment {
-            amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()
+        let root = directory("unique-fork-identity");
+        let parent = root.join("parent");
+        let kind = kind(1, false, "fixed-v1", "scripted").unwrap();
+        let policy = || Increment {
+            amount: 1,
+            model: false,
+            model_id: "fixed-v1".into(),
+            provider: "scripted".into(),
         };
         {
-            let trial=Trial::create(&parent,"identity-source",7,&kind,Counter{total:0},
-                policy(),Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin).unwrap();
+            let trial = Trial::create(
+                &parent,
+                "identity-source",
+                7,
+                &kind,
+                Counter { total: 0 },
+                policy(),
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             drop(trial);
         }
-        let a=fork_at_head(&parent,root.join("a"),"shock","treatment",
-            serde_json::json!({"change":1}),|world:&mut Counter|{
-                world.total+=1;Ok(())
-            },policy(),Arc::new(ScriptedBackend)).unwrap();
-        let b=fork_at_head(&parent,root.join("b"),"shock","treatment",
-            serde_json::json!({"change":2}),|world:&mut Counter|{
-                world.total+=2;Ok(())
-            },policy(),Arc::new(ScriptedBackend)).unwrap();
-        assert_ne!(a.store.genesis().trial_id,b.store.genesis().trial_id);
-        let first=a.store.genesis().trial_id.clone();
-        drop(a);drop(b);
+        let a = fork_at_head(
+            &parent,
+            root.join("a"),
+            "shock",
+            "treatment",
+            serde_json::json!({"change":1}),
+            |world: &mut Counter| {
+                world.total += 1;
+                Ok(())
+            },
+            policy(),
+            Arc::new(ScriptedBackend),
+        )
+        .unwrap();
+        let b = fork_at_head(
+            &parent,
+            root.join("b"),
+            "shock",
+            "treatment",
+            serde_json::json!({"change":2}),
+            |world: &mut Counter| {
+                world.total += 2;
+                Ok(())
+            },
+            policy(),
+            Arc::new(ScriptedBackend),
+        )
+        .unwrap();
+        assert_ne!(a.store.genesis().trial_id, b.store.genesis().trial_id);
+        let first = a.store.genesis().trial_id.clone();
+        drop(a);
+        drop(b);
         {
-            let mut source=Trial::resume(&parent,&kind,policy(),Arc::new(ScriptedBackend),false).unwrap();
+            let mut source =
+                Trial::resume(&parent, &kind, policy(), Arc::new(ScriptedBackend), false).unwrap();
             source.run_attempts(1).await.unwrap();
             source.checkpoint().unwrap();
         }
-        let c=fork_at_head(&parent,root.join("c"),"shock","treatment",
-            serde_json::json!({"change":1}),|world:&mut Counter|{
-                world.total+=1;Ok(())
-            },policy(),Arc::new(ScriptedBackend)).unwrap();
-        assert_ne!(first,c.store.genesis().trial_id);
+        let c = fork_at_head(
+            &parent,
+            root.join("c"),
+            "shock",
+            "treatment",
+            serde_json::json!({"change":1}),
+            |world: &mut Counter| {
+                world.total += 1;
+                Ok(())
+            },
+            policy(),
+            Arc::new(ScriptedBackend),
+        )
+        .unwrap();
+        assert_ne!(first, c.store.genesis().trial_id);
         drop(c);
         assert!(verify_fork::<Counter>(root.join("a")).is_ok());
         assert!(verify_fork::<Counter>(root.join("c")).is_ok());
@@ -859,23 +1018,48 @@ mod tests {
 
     #[tokio::test]
     async fn orphan_staging_directory_does_not_block_complete_fork_publication() {
-        let root=directory("orphan-staging");
-        let parent=root.join("parent");
-        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
-        let policy=|| Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()};
+        let root = directory("orphan-staging");
+        let parent = root.join("parent");
+        let kind = kind(1, false, "fixed-v1", "scripted").unwrap();
+        let policy = || Increment {
+            amount: 1,
+            model: false,
+            model_id: "fixed-v1".into(),
+            provider: "scripted".into(),
+        };
         {
-            let trial=Trial::create(
-                &parent,"orphan",7,&kind,Counter{total:0},policy(),
-                Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin
-            ).unwrap();
+            let trial = Trial::create(
+                &parent,
+                "orphan",
+                7,
+                &kind,
+                Counter { total: 0 },
+                policy(),
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             drop(trial);
         }
-        let published=root.join("branch");
-        let orphan=root.join(format!(".branch.pending-{}-old",std::process::id()));
+        let published = root.join("branch");
+        let orphan = root.join(format!(".branch.pending-{}-old", std::process::id()));
         fs::create_dir_all(&orphan).unwrap();
-        fs::write(orphan.join("manifest.json"),b"half-written").unwrap();
-        let result=fork_at_head(&parent,&published,"change","treatment",serde_json::json!({"delta":2}),
-            |world:&mut Counter|{world.total=2;Ok(())},policy(),Arc::new(ScriptedBackend)).unwrap();
+        fs::write(orphan.join("manifest.json"), b"half-written").unwrap();
+        let result = fork_at_head(
+            &parent,
+            &published,
+            "change",
+            "treatment",
+            serde_json::json!({"delta":2}),
+            |world: &mut Counter| {
+                world.total = 2;
+                Ok(())
+            },
+            policy(),
+            Arc::new(ScriptedBackend),
+        )
+        .unwrap();
         assert!(verify_fork::<Counter>(&published).is_ok());
         assert!(orphan.exists());
         drop(result);

@@ -181,8 +181,7 @@ pub(crate) fn atomic_write_with(
         .create_new(true)
         .open(&temporary)
         .map_err(|e| format!("write {}: {e}", temporary.display()))?;
-    if let Err(error) = populate(&mut file)
-        .and_then(|_| file.sync_all().map_err(|e| e.to_string()))
+    if let Err(error) = populate(&mut file).and_then(|_| file.sync_all().map_err(|e| e.to_string()))
     {
         drop(file);
         let _ = fs::remove_file(&temporary);
@@ -207,7 +206,9 @@ pub(crate) fn atomic_write_with(
 }
 
 pub(crate) fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    atomic_write_with(path, |file| file.write_all(bytes).map_err(|e| e.to_string()))
+    atomic_write_with(path, |file| {
+        file.write_all(bytes).map_err(|e| e.to_string())
+    })
 }
 
 /// RAII lock: even a malformed manifest/snapshot never strands a lock.

@@ -176,7 +176,11 @@ async fn launch() -> Result<(), String> {
                 let (existing, expected_arm, expected_parameters) = if control_dir.exists() {
                     (&control_dir, "control", serde_json::json!({}))
                 } else {
-                    (&treatment_dir, "treatment", serde_json::json!({"added":shock}))
+                    (
+                        &treatment_dir,
+                        "treatment",
+                        serde_json::json!({"added":shock}),
+                    )
                 };
                 let meta = verify_fork::<Counter>(existing)?;
                 let prior = Store::<Counter, u64>::inspect_read_only(existing)?;
@@ -188,7 +192,8 @@ async fn launch() -> Result<(), String> {
                     || meta.parameters != expected_parameters
                     || prior.sequence != 0
                     || existing.join(".writer.lock").exists()
-                    || existing.join(".effects-writer.lock").exists() {
+                    || existing.join(".effects-writer.lock").exists()
+                {
                     return Err("partial fork cannot be safely recreated".into());
                 }
                 fs::remove_dir_all(existing).map_err(|e| e.to_string())?;
