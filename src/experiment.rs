@@ -497,6 +497,75 @@ mod tests {
         drop(journal);
         std::fs::remove_dir_all(path).unwrap();
     }
+    struct Delayed;
+    impl Backend for Delayed {
+        fn resolve<'a>(&'a self, spec: &'a EffectSpec) -> crate::runtime::BoxResult<'a> {
+            Box::pin(async move {
+                let message = match spec {
+                    EffectSpec::Model(model) => model.messages[0].content.as_str(),
+                    _ => return Err("not a model".into()),
+                };
+                let delay = if message == "slow" { 70 } else { 1 };
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                Ok(EffectResult::Model {
+                    content: message.into(),
+                    effective_model: "delayed".into(),
+                    usage: None,
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn out_of_order_effect_completions_have_stable_result_order() {
+        let path = dir("out-of-order");
+        std::fs::create_dir_all(&path).unwrap();
+        let mut journal = EffectJournal::open(&path).unwrap();
+        let slow = sample_request("slow");
+        let fast = sample_request("fast");
+        let slow_key = slow.key("trial", 0, AgentId(0), 0).unwrap();
+        let fast_key = fast.key("trial", 0, AgentId(1), 0).unwrap();
+        let results = journal.resolve_all(
+            vec![(slow_key.clone(), slow), (fast_key.clone(), fast)],
+            Arc::new(Delayed), 2, Duration::from_secs(2), false,
+        ).await.unwrap();
+        assert_eq!(results[0].key, slow_key);
+        assert_eq!(results[1].key, fast_key);
+        let stored = std::fs::read_to_string(path.join("effects.jsonl")).unwrap();
+        let first: Receipt = serde_json::from_str(stored.lines().next().unwrap()).unwrap();
+        assert_eq!(first.key, fast_key);
+        drop(journal);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    struct NeverCallBackend;
+    impl Backend for NeverCallBackend {
+        fn resolve<'a>(&'a self, _: &'a EffectSpec) -> crate::runtime::BoxResult<'a> {
+            Box::pin(async { panic!("recorded replay must not contact backend") })
+        }
+    }
+    #[tokio::test]
+    async fn receipt_saved_before_commit_replays_on_resumed_attempt() {
+        let path = dir("interrupted");
+        {
+            let mut trial = new(&path, false, true);
+            let request = sample_request("agent-0");
+            let key = request.key(&trial.store.genesis.trial_id, 0, AgentId(0), 0).unwrap();
+            trial.effects.resolve_all(
+                vec![(key, request)], Arc::new(ScriptedBackend),
+                1, Duration::from_secs(2), false,
+            ).await.unwrap();
+            assert_eq!(trial.store.sequence, 0);
+        }
+        {
+            let mut resumed = Trial::resume(
+                &path, "counter", Policy { effects: true },
+                Arc::new(NeverCallBackend), true,
+            ).unwrap();
+            assert!(matches!(resumed.step().await.unwrap(), Step::Accepted(_)));
+            assert_eq!(resumed.store.sequence, 1);
+            assert_eq!(resumed.effects.receipts.len(), 1);
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
     struct Slow;
     impl Backend for Slow {
         fn resolve<'a>(&'a self, _: &'a EffectSpec) -> crate::runtime::BoxResult<'a> {

@@ -68,8 +68,8 @@ jobs:
       - name: Deterministic map-order regression (feature unification)
         run: cargo test -p hiyal --features serde_json/preserve_order
 
-      - name: Opt-in HTTP adapter compile
-        run: cargo check -p hiyal --features live-http
+      - name: Opt-in HTTP adapter loopback test
+        run: cargo test -p hiyal --features live-http
 
       - name: Native CLI run and resume smoke
         run: |
@@ -87,6 +87,13 @@ jobs:
         run: |
           cargo run --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
           test "$(wc -l </tmp/hiyal-events.jsonl)" -eq 6
+
+      # One-time R1 bootstrapping evidence: commit Cargo.lock after this run.
+      - name: R1 generated lockfile capture
+        run: |
+          echo BEGIN_HIYAL_CARGO_LOCK
+          cat Cargo.lock
+          echo END_HIYAL_CARGO_LOCK
 
       - name: Additional release/manual lint
         if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.extended) }}

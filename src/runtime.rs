@@ -417,3 +417,56 @@ pub fn sample_request(message: &str) -> EffectSpec {
         response_format: None,
     })
 }
+
+#[cfg(all(test, feature = "live-http"))]
+mod http_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    #[tokio::test]
+    async fn opt_in_http_chat_adapter_parses_model_and_usage_from_loopback() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut chunk).unwrap();
+                if n == 0 { break; }
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&request[..end]);
+                    let content_len = header.lines()
+                        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:")
+                            .and_then(|value| value.trim().parse::<usize>().ok()))
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + content_len { break; }
+                }
+            }
+            let body = r#"{"model":"stub-model-v2","choices":[{"message":{"role":"assistant","content":"ready"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let client = OpenAiCompatible::new(
+            format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            "test-token".into(),
+        ).unwrap();
+        let result = client.resolve(&sample_request("hello")).await.unwrap();
+        match result {
+            EffectResult::Model { content, effective_model, usage } => {
+                assert_eq!(content, "ready");
+                assert_eq!(effective_model, "stub-model-v2");
+                assert_eq!(usage.unwrap().input_tokens, Some(3));
+            }
+            other => panic!("unexpected result {other:?}"),
+        }
+        let wire = handle.join().unwrap();
+        assert!(wire.contains("POST /v1/chat/completions"));
+        assert!(wire.contains("\"content\":\"hello\""));
+        assert!(wire.contains("\"model\":\"fixed-v1\""));
+    }
+}
