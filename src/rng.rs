@@ -15,6 +15,9 @@ pub struct Streams {
     pub root_seed: u64,
     /// Full ChaCha20 word offset, decimal text because it is u128.
     pub positions: BTreeMap<String, String>,
+    /// Shared RNG origin for paired branches; branch identity remains distinct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_domain: Option<String>,
 }
 
 impl Streams {
@@ -24,17 +27,35 @@ impl Streams {
             trial,
             root_seed: seed,
             positions: BTreeMap::new(),
+            seed_domain: None,
         }
     }
 
     fn stream_seed(&self, name: &str) -> [u8; 32] {
         let mut sha = Sha256::new();
         sha.update(b"hiyal:rng:v1");
-        for field in [self.trial.as_str(), &self.root_seed.to_string(), name] {
+        for field in [
+            self.seed_domain.as_deref().unwrap_or(&self.trial),
+            &self.root_seed.to_string(),
+            name,
+        ] {
             sha.update((field.len() as u64).to_be_bytes());
             sha.update(field.as_bytes());
         }
         sha.finalize().into()
+    }
+
+    /// Branch with a different identity but the same source random streams
+    /// and exact word positions (common random numbers).
+    pub fn paired_branch(&self, branch_trial_id: String) -> Self {
+        let mut next = self.clone();
+        next.seed_domain = Some(
+            self.seed_domain
+                .clone()
+                .unwrap_or_else(|| self.trial.clone()),
+        );
+        next.trial = branch_trial_id;
+        next
     }
 
     pub fn draw_u64(&mut self, name: &str) -> Result<u64, String> {
@@ -92,6 +113,22 @@ mod tests {
             first
         );
     }
+    #[test]
+    fn paired_branches_share_random_numbers_but_not_identity() {
+        let mut parent = Streams::new("parent".into(), 123);
+        let _ = parent.draw_u64("scheduler").unwrap();
+        let mut a = parent.paired_branch("control".into());
+        let mut b = parent.paired_branch("treatment".into());
+        assert_ne!(a.trial, b.trial);
+        for _ in 0..10 {
+            assert_eq!(
+                a.draw_u64("scheduler").unwrap(),
+                b.draw_u64("scheduler").unwrap()
+            );
+        }
+        assert_eq!(a.seed_domain.as_deref(), Some("parent"));
+    }
+
     #[test]
     fn bounded_sampling_is_valid() {
         let mut streams = Streams::new("t".into(), 9);

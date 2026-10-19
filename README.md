@@ -10,6 +10,22 @@ models; JSONL and later open-data exports let Python, R, Julia, Rust and DuckDB
 analyze the results independently. No Python runtime or bindings are required
 by the Rust engine.
 
+## Research workflows (R2)
+
+R2 adds reproducible parameter sweeps, bounded Rust-native trial concurrency,
+independent paired counterfactual forks, restart recovery, portable CSV metric
+series and reference toy societies. See [research runner and guarantees](docs/r2-engine.md).
+
+```sh
+cargo run --locked -p hiyal -- sweep examples/sweep.toml /tmp/hiyal-study
+cargo run --locked -p hiyal -- run examples/counter.toml /tmp/hiyal-parent
+cargo run --locked -p hiyal -- fork /tmp/hiyal-parent /tmp/hiyal-paired 3 12
+```
+
+The native run produces per-job `events.jsonl`, `metrics.csv`, verified
+`manifest.json` and `snapshot.json`, and a stable `results.csv` summary. Forks
+bundle a copy of the validated parent history for portable ancestry checks.
+
 ## Native engine (R1)
 
 Hiyal ships a typed Rust world/policy API, deterministic random and

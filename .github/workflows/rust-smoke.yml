@@ -79,6 +79,59 @@ jobs:
           cargo run --locked --quiet -p hiyal-custom-world-example -- inspect "$work/custom"
           rm -rf "$work"
 
+      - name: R2 research smoke (Rust only; no Python benchmarks)
+        run: |
+          work="$(mktemp -d)"
+          cargo run --locked --quiet -p hiyal -- sweep examples/sweep.toml "$work/sweep"
+          test -s "$work/sweep/results.csv"
+          cp "$work/sweep/results.csv" "$work/first.csv"
+          cargo run --locked --quiet -p hiyal -- sweep examples/sweep.toml "$work/sweep"
+          cmp "$work/first.csv" "$work/sweep/results.csv"
+          cargo run --locked --quiet -p hiyal -- run examples/counter.toml "$work/parent"
+          cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/paired" 3 8
+          test -s "$work/paired/control/ancestry/events.jsonl"
+          test -s "$work/paired/treatment/fork.json"
+          cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/paired" 3 8
+          cargo run --locked --quiet -p hiyal -- validate "$work/paired/control"
+          cp "$work/paired/control/fork.json" "$work/fork.backup"
+          printf 'broken attribution' > "$work/paired/control/fork.json"
+          if cargo run --locked --quiet -p hiyal -- validate "$work/paired/control"; then
+            echo "incorrectly validated a corrupt fork" >&2
+            exit 1
+          fi
+          mv "$work/fork.backup" "$work/paired/control/fork.json"
+          mv "$work/paired/control/fork.json" "$work/fork.backup"
+          mv "$work/paired/control/ancestry" "$work/ancestry.backup"
+          if cargo run --locked --quiet -p hiyal -- validate "$work/paired/control"; then
+            echo "incorrectly validated a fork with no ancestry artifacts" >&2
+            exit 1
+          fi
+          mv "$work/fork.backup" "$work/paired/control/fork.json"
+          mv "$work/ancestry.backup" "$work/paired/control/ancestry"
+
+          # Restart must reject a different source parent.
+          sed 's/name = "counter-demo"/name = "another-parent"/' examples/counter.toml > "$work/other.toml"
+          cargo run --locked --quiet -p hiyal -- run "$work/other.toml" "$work/other"
+          if cargo run --locked --quiet -p hiyal -- fork "$work/other" "$work/paired" 3 8; then
+            echo "incorrectly accepted different parent" >&2
+            exit 1
+          fi
+
+          # Simulate death between two published (fully verified) fork arms.
+          cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/half" 3 0
+          rm -rf "$work/half/treatment"
+          cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/half" 3 0
+
+          # Never silently accept swapped control/treatment directories.
+          mv "$work/half/control" "$work/half/temp"
+          mv "$work/half/treatment" "$work/half/control"
+          mv "$work/half/temp" "$work/half/treatment"
+          if cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/half" 3 0; then
+            echo "incorrectly accepted swapped arms" >&2
+            exit 1
+          fi
+          rm -rf "$work"
+
       - name: Standalone external-world smoke
         run: |
           cargo run --locked --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
