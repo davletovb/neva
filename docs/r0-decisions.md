@@ -39,13 +39,18 @@ supervision. No implicit MCP sandbox or WASM guarantee.
 
 Target decision sequence:
 
-1. Scheduler selects an eligible actor; no actor ends a step without an event.
+1. Scheduler selects an eligible actor; every selected attempt ends with an
+   accepted world event or an explicitly audited rejection. Both advance
+   attempt ordering, but only accepted world events advance the logical
+   committed-step counter.
 2. World produces an immutable observation.
 3. Policy may request typed model/tool effects; runner performs asynchronous
    bounded I/O *outside* the deterministic world reducer.
 4. Effect results are resolved into a proposed typed action and validated.
-5. Stage the transition; commit all world changes plus one event in defined
-   logical order, or commit **nothing** on rejection.
+5. Stage a transition; on success commit world changes plus a committed
+   world event. On rejection, world and committed sequence stay unchanged,
+   but scheduler eligibility advances and a separate rejection attempt
+   is audited; this must also be reproduced during R1 resume.
 6. Observer consumes the committed event. Its failure cannot roll back or
    mutate the world; it may produce an independently recorded diagnostic.
 7. Charged/irreversible effects have a separate ledger even when a proposal
@@ -54,7 +59,8 @@ Target decision sequence:
 
 **Implemented in this initial slice:** a pure synchronous scripted policy,
 typed world, round-robin selection, deterministic trial/event IDs, staged
-world/scheduler commits and in-memory committed records. JSONL export is
+world commits, rejection audit records and in-memory committed events.
+JSONL export is
 prototype-only. **Not yet implemented:** effect runner, durable event log,
 restart, snapshots, replay, remote models, random scheduling, named RNG,
 transactional file append, canonical JCS hashes, observer projections or CLI.
@@ -65,8 +71,14 @@ transactional file append, canonical JCS hashes, observer projections or CLI.
   as u64 big-endian bytes**. Trial IDs derive from user-supplied trial
   label and seed; event IDs derive from trial, logical step and actor ID.
   Agent IDs are stable u64 values supplied by the application in this slice.
+  Event IDs use a versioned `event-v2` domain and also incorporate a
+  provisional JSON action hash plus previous committed event ID. This
+  detects divergent actions and preserves history-chain identity. Full JCS
+  transition/state hashing remains R1 work.
   No UUID4 or wall-clock value is inside deterministic identities.
-- Clock: 0-based committed action index; rejected actions never advance it.
+- Clock: separate monotonically increasing committed-action and selected-attempt
+  indices. Rejections advance the attempt index and schedule cursor (avoiding
+  starvation), but never advance the world committed-action index.
   Later effect calls use 0-based call indices per actor per logical step.
   Events commit sequentially; later concurrent effects are *applied* in stable
   logical actor/call order, never network-completion order.
@@ -95,6 +107,10 @@ transactional file append, canonical JCS hashes, observer projections or CLI.
   sort JSON properties under JCS UTF-16 rules. Use versioned hash domains.
   Tests must include 1 vs 1.0, -0.0, exponent notation, multilingual key order,
   nonfinite rejection and the large-integer guard.
+  JSONL exports encode `u64` actor IDs, committed/attempted steps, and model
+  seed/usage totals as *decimal strings* to preserve their full range across
+  language readers. Finite floating-point sampling checks reject NaN/Inf
+  before serialization (rather than serializing them as null).
   **serde_json output here is not claimed canonical.**
   For D1, integer and fixed-point transitions are supported initially;
   floating-point transcendental algorithms, parallel nonassociative reductions
@@ -131,12 +147,16 @@ explicit unsupported capability, not a reproducibility promise.
 | Failed restore partially changes state | Validate whole snapshot and atomically replace (R1) |
 | Unseeded/global RNG and different resumed run | Named trial streams; resume at k matches uninterrupted run (R1) |
 | Agent input duplicated on retries | Retry call identity and conversation history are idempotent (R1) |
-| Failed completion hook leaves partial state | Transition staged before commit; observers read events only (staging unit tested) |
+| Failed completion hook leaves partial state | World transition staged before commit; rejected attempts auditable; observers read events only (partial staging unit tested) |
 | Mismatched vector dimensions silently truncate | Reject dimensions (if native vector search is later needed) |
-| Random IDs/wall-clock in hashes | Stable logical identifiers (**unit tested**) |
+| Random IDs/wall-clock in hashes | Stable logical identifiers, action content hash and predecessor link (**unit tested**) |
 | Omitted sampling/provider settings | Explicit requested/effective values and unsupported-capability errors (R1) |
 | Replay shared completion cursor | Keyed replay by logical call ID, out-of-order completions stable (R1) |
 | Unbounded observer full snapshots | Incremental metrics and bounded retention (R2) |
+| Rejected actor starves other actors | Attempt cursor advances, rejection recorded without world commit (unit tested) |
+| Public event vector enables ID reuse | Private step counter and read-only world, monotonic IDs across drained events (unit tested) |
+| Large integer wire values lose precision | Actor IDs, logical steps, seeds and token usage serialized as decimal strings (unit tested) |
+| Non-finite sampling silently becomes null | Checked serialization rejects NaN/Inf (unit tested) |
 
 Minimal scripted golden acceptance fixture:
 `fixtures/golden/scripted-two-agent-v1.json`. This encodes the *target* behavior

@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..6 {
         simulation.step()?;
     }
-    assert_eq!(simulation.world.total_actions, 6);
+    assert_eq!(simulation.world().total_actions, 6);
     simulation.write_jsonl(std::io::stdout())?;
     Ok(())
 }

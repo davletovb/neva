@@ -58,10 +58,12 @@ secret integration for live providers.
    results. Deadline, cancellation and unsupported-capability results are
    explicit. Accepted external charges are ledger entries independent of
    whether a later action is accepted.
-5. Validate typed proposals, stage world/memory/schedule/queue/RNG changes, and
-   check world invariants. Validation or commit-preparation failure leaves
-   committed world/log offsets unchanged; the actor may receive a separately
-   identified and logged rejection.
+5. Validate typed proposals and stage world/memory changes. **Every selected
+   attempt consumes the next scheduler eligibility slot**, even when observe,
+   policy or transition rejects. Failures leave world state and committed event
+   sequence unchanged but append an *attempt/rejection* audit record, so that
+   the selection cursor can be reconstructed on resume. The actor may receive
+   separately identified rejection feedback.
 6. Commit a world transition with a single monotonically increasing event
    sequence. A world event contains a replayable delta or equivalent
    reconstruction operation; a proposed action alone may not suffice.
@@ -69,9 +71,17 @@ secret integration for live providers.
    diagnostics and never change the committed world. Events are streamed;
    retained metric history is explicitly bounded.
 
-The existing `src/core.rs` provides only in-memory staged sequential commits.
-Its `write_jsonl` is export of in-memory records, not crash-consistent
-append-to-log. Prototype `CommittedEvent` contains an action but no world delta
+The existing `src/core.rs` provides in-memory staged world commits,
+an audit record for failed actor attempts, a persistent-in-memory monotonic
+committed-step counter independent of the drained export event vector, and
+a prototype action-plus-parent hash chain. `RoundRobin` has O(log N)
+membership checks and is **not cloned** on each attempted step; the
+world itself is still cloned for staging, which must be optimized only after
+measurement.
+Its `write_jsonl` exports only accepted world records and
+`write_audit_jsonl` exports accepted and rejected attempts in order.
+Neither is a crash-consistent append-to-log, and in-memory pause/resume
+commands are not yet persisted. Therefore full replay/resume is unimplemented. Prototype `CommittedEvent` contains an action but no world delta
 and is **not yet sufficient** for generic event-sourced reconstruction.
 
 ## Durable log/checkpoint decisions for R1
@@ -131,3 +141,25 @@ canonical bytes use bounded numbers or decimal-string identifiers. For early
 D1 claims, use unsigned/checked integer or explicit fixed-point model state;
 floating-point reproducibility needs a named target/toolchain/numerical
 profile. A numerical result containing NaN or infinity is invalid.
+
+
+## Review remediation specifics (2026-10-19)
+
+The provisional event envelope has `schema_version = 2`: event identity is
+`SHA-256(hiyal:id:v1, "event-v2", trial, committed_step, actor,
+SHA-256(JSON-normalized-action), previous_event_id)`, using length-prefixed
+identity components. The action digest sorts JSON object keys via
+`serde_json::Value`; **this is not the final RFC 8785 canonical scheme** and
+does not yet hash a reconstructible resulting-state delta. For scientific
+replay, R1 must replace the prototype with a validated canonical
+transition/state hash and idempotent audited attempt stream. Do not infer
+D1 from identical action hashes alone.
+
+Rejected attempts are audit records, **not** committed world transitions.
+The audit must be persisted with ordering and scheduler cursor evolution to
+support exact interrupted resume. Internal world, events and scheduler are
+private; callers can read committed records and deliberately drain exported
+ones without rewinding the committed-step counter. Values that may exceed
+the IEEE-754 safe integer range are serialized as decimal strings. Model
+sampling floats must be finite or serialization fails, rather than
+silently substituting a provider default.

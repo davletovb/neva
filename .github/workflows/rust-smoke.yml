@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-smoke-${{ github.head_ref || github.ref }}
+  group: rust-smoke-${{ github.head_ref || github.ref_name }}
   # A stale PR/manual run should not consume more minutes. Never cancel a tag release.
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 

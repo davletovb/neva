@@ -41,3 +41,12 @@ verified/complete until these measurements and build checks are recorded**.
 The new [low-cost Rust CI policy](ci-budget.md) provides a narrow Rust build/test
 check on selected pull-request lifecycle events and version tags. It does not
 run Python benchmarks or replace the measured R0 evidence requirement.
+
+
+An October 19 review reports independently executing the original branch's
+`cargo test --workspace` (4 tests), consumer binary, fixture checker and
+a short Python benchmark. It also reported formatting and Clippy failures.
+These reviewer-reported runs apply to commit `047b4b9`, **not** to the
+corrected review branch; updated Rust tests are not yet verified with
+`cargo`/`rustfmt` in the agent environment. CI remains deliberately
+low-frequency; re-run on the latest head before merge.

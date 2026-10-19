@@ -22,6 +22,40 @@ ROOT = Path(__file__).resolve().parents[1]
 LEGACY = ROOT / "hiyal-python"
 
 
+def _git_revision() -> str:
+    """Fail closed on missing source provenance for independent R0 runs."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=5,
+        )
+        if result.stdout.strip():
+            return result.stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
+    fallback = os.environ.get("GITHUB_SHA")
+    if fallback:
+        return fallback
+    raise RuntimeError("Cannot determine git revision; run from a Git checkout")
+
+
+def _git_dirty() -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=5,
+        )
+        return bool(result.stdout.strip())
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
 def _rss_bytes() -> int | None:
     """Current RSS on Linux; other platforms report peak RSS separately."""
     try:
@@ -142,7 +176,8 @@ def _main() -> int:
         "machine": platform.machine(),
         "processor": platform.processor(),
         "cpu_count": os.cpu_count(),
-        "git_revision": os.environ.get("GITHUB_SHA"),
+        "git_revision": _git_revision(),
+        "worktree_dirty": _git_dirty(),
         "notes": [
             "One fresh subprocess per sample; no provider calls; observer toggled before registration",
             "Latency samples include Python per-step timing overhead in both modes",

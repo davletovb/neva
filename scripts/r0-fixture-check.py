@@ -24,9 +24,16 @@ def derive(domain: str, parts: list[str]) -> str:
 trial = derive("trial", [fixture["trial_name"], str(fixture["seed"])])
 assert trial == fixture["expected_trial_id"]
 assert len(fixture["expected_event_ids"]) == fixture["committed_steps"]
+action_bytes = json.dumps(fixture["action"], separators=(",", ":"), ensure_ascii=False).encode()
+action_hash = hashlib.sha256(action_bytes).hexdigest()
+assert action_hash == fixture["expected_action_hash"]
+parent_id = ""
 for step, (actor, expected) in enumerate(
     zip(fixture["expected_actor_order"], fixture["expected_event_ids"], strict=True)
 ):
-    assert derive("event", [trial, str(step), str(actor)]) == expected
+    event_id = derive("event-v2", [trial, str(step), str(actor), action_hash, parent_id])
+    assert event_id == expected
+    parent_id = event_id
+assert derive("event-v2", [trial, "0", "0", hashlib.sha256(b"5").hexdigest(), ""]) != fixture["expected_event_ids"][0]
 assert derive("x", ["ab", "c"]) != derive("x", ["a", "bc"])
 print("R0 identity reference fixture: PASS")

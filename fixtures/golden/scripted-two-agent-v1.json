@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "scripted_counter_acceptance",
   "trial_name": "golden-two-agent",
   "seed": 7,
@@ -19,15 +19,17 @@
   },
   "properties": [
     "same trial name and seed produces stable event identities",
-    "rejecting an action does not advance scheduler, mutate world or append event",
+    "rejecting an action advances the scheduler and appends a rejection audit record, never a world commit",
     "duplicate registration is an error",
     "all-paused scheduler returns no eligible actor"
   ],
   "expected_trial_id": "39f44d21e7ad630e7be69b9acbadb76d5a9aa3d08089a8d65379636a496b27af",
   "expected_event_ids": [
-    "ae883ee1ec215af30a79e91ff87d44e5a639cd303897f73f2544a75f406ed01b",
-    "9c82b114fc1c4096190cc16efeb5ecb16cbb469593be3d01306dfa22264cbba1",
-    "c9121b9a549c432b3ad008fe9bd734732dbfac6130e93a8288823142b904a259",
-    "47c9f5a87d943a941507c04716829148688e192e7eac260cd6c43209cdfecc2f"
-  ]
+    "422ba36062740d2ce0a59d9eaf217d1bc61612f8ad1fc193b71a35867db7c9f1",
+    "597a1158a9057a70712af1990412e8547ea39d288d93d05062f81a942c3770a9",
+    "36a9fbe70b56e595253722794de79e60242a7332a2305bd9dd604e605284781e",
+    "4b2161455222d17cdfb6736cd740679953a7ed5119bb209b55550cca504f4259"
+  ],
+  "action": 1,
+  "expected_action_hash": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
 }

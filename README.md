@@ -14,7 +14,7 @@ by the Rust engine.
 
 An early Rust vertical slice is available: typed `World` and `Policy`
 traits, guarded round-robin scheduling, deterministic logical identities,
-staged sequential commits and in-memory event export. **This is not yet a
+staged world commits, explicit rejection audits and in-memory event export. **This is not yet a
 persistent, replayable research engine.** Async effects, durable event
 storage, restart/fork, seeded random scheduling and the native CLI follow
 as part of [issue #103](https://github.com/davletovb/hiyal/issues/103).
