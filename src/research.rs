@@ -799,7 +799,6 @@ mod tests {
         assert!(count.load(Ordering::SeqCst) < 6);
     }
 
-    #[test]
     #[tokio::test]
     async fn oversized_counter_parameters_are_rejected_only_by_counter_runner() {
         let mut plan = sweep(1);

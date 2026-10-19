@@ -220,12 +220,14 @@ async fn launch() -> Result<(), String> {
                 (
                     Trial::resume(
                         &control_dir,
+                        &kind,
                         parse_kind(&kind)?,
                         Arc::new(ScriptedBackend),
                         false,
                     )?,
                     Trial::resume(
                         &treatment_dir,
+                        &kind,
                         parse_kind(&kind)?,
                         Arc::new(ScriptedBackend),
                         false,
