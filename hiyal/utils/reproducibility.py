@@ -8,7 +8,7 @@ without a local code change. This module separates two guarantees:
 * offline replay reproduces the exact recorded model boundary, validating prompt
   order/content before returning recorded responses.
 
-Unified seeding covers Python's process RNG, optional NumPy/PyTorch RNGs, Neva
+Unified seeding covers Python's process RNG, optional NumPy/PyTorch RNGs, Hiyal
 scheduler RNGs (including nested Composite schedulers), and custom agent or
 scheduler set_seed hooks. It cannot retroactively change Python hash
 randomization in the current process, so PYTHONHASHSEED is set for child
@@ -33,20 +33,20 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
-from neva.utils.exceptions import RecordedReplayError, ReplayMismatchError, ReproducibilityError
+from hiyal.utils.exceptions import RecordedReplayError, ReplayMismatchError, ReproducibilityError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from neva.agents.base import AIAgent
-    from neva.environments.base import Environment
-    from neva.schedulers.base import Scheduler
+    from hiyal.agents.base import AIAgent
+    from hiyal.environments.base import Environment
+    from hiyal.schedulers.base import Scheduler
 
 _MANIFEST_VERSION = 1
 _REPLAY_VERSION = 1
 _RECORDING_STACK: ContextVar[tuple[int, ...]] = ContextVar(
-    "neva_replay_recording_stack", default=()
+    "hiyal_replay_recording_stack", default=()
 )
 _DEFAULT_DEPENDENCIES = (
-    "neva",
+    "hiyal",
     "requests",
     "openai",
     "anthropic",
@@ -98,11 +98,11 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, (datetime, date, time)):
         return {"type": _type_name(value), "isoformat": value.isoformat()}
     if isinstance(value, bytes):
-        return {"__neva_bytes_hex__": value.hex()}
+        return {"__hiyal_bytes_hex__": value.hex()}
     if isinstance(value, bytearray):
-        return {"__neva_bytearray_hex__": bytes(value).hex()}
+        return {"__hiyal_bytearray_hex__": bytes(value).hex()}
     if isinstance(value, Path):
-        return {"__neva_path__": str(value)}
+        return {"__hiyal_path__": str(value)}
     if isinstance(value, Mapping):
         if all(isinstance(key, str) for key in value):
             return {key: _json_native(item, depth=depth + 1) for key, item in sorted(value.items())}
@@ -121,7 +121,7 @@ def _json_native(value: Any, *, depth: int = 0) -> Any:
                 ensure_ascii=False,
             )
         )
-        return {"__neva_mapping_entries__": entries}
+        return {"__hiyal_mapping_entries__": entries}
     if isinstance(value, (list, tuple)):
         return [_json_native(item, depth=depth + 1) for item in value]
     if isinstance(value, set):
@@ -216,7 +216,7 @@ def seed_everything(
     optional_libraries: bool = True,
     set_child_hash_seed: bool = False,
 ) -> SeedReport:
-    """Seed Python, optional numerical runtimes, and Neva-owned RNG hooks."""
+    """Seed Python, optional numerical runtimes, and Hiyal-owned RNG hooks."""
 
     seed = _validate_seed(seed)
     if not isinstance(set_child_hash_seed, bool):
@@ -465,7 +465,7 @@ def _merge_memory_reproducibility_hooks(
 
 
 def _capture_manifest_memory(memory: Any) -> Any:
-    from neva.memory import (
+    from hiyal.memory import (
         AdaptiveConversationMemory,
         CompositeMemory,
         FaissVectorStoreMemory,
@@ -917,7 +917,7 @@ def create_run_manifest(
     if live_providers:
         notes.append(
             "live provider responses are not guaranteed reproducible: provider model revisions, "
-            "routing, sampling/runtime implementations, and service state are outside Neva control"
+            "routing, sampling/runtime implementations, and service state are outside Hiyal control"
         )
 
     dependency_names = tuple(_DEFAULT_DEPENDENCIES if dependencies is None else dependencies)

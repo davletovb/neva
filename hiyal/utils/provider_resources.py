@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
-from neva.utils.exceptions import (
+from hiyal.utils.exceptions import (
     ConfigurationError,
     RateLimiterCancelledError,
     SpendBudgetExceededError,
@@ -626,7 +626,7 @@ def shared_provider_resources(
 ) -> ProviderResourceCoordinator:
     """Return the process-shared coordinator for a provider/account scope.
 
-    If state_path is omitted, NEVA_PROVIDER_COORDINATION_DB is honoured.
+    If state_path is omitted, HIYAL_PROVIDER_COORDINATION_DB is honoured.
     Supplying the same SQLite path in separate processes extends the same scope
     across those processes.
     """
@@ -639,7 +639,7 @@ def shared_provider_resources(
     )
     resolved_path = state_path
     if resolved_path is None:
-        configured = os.getenv("NEVA_PROVIDER_COORDINATION_DB")
+        configured = os.getenv("HIYAL_PROVIDER_COORDINATION_DB")
         resolved_path = configured or None
     path_key = str(Path(resolved_path).expanduser().resolve()) if resolved_path else None
     expected_config = (

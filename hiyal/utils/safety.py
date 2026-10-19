@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Optional
 
-from neva.utils.exceptions import (
+from hiyal.utils.exceptions import (
     CircuitBreakerConfigurationError,
     CircuitOpenError,
     PromptValidationError,

@@ -13,7 +13,7 @@ def _kind(scheduler: Any) -> str:
 
 
 def capture_scheduler(scheduler: Any) -> Any:
-    from neva.schedulers import (
+    from hiyal.schedulers import (
         EventDrivenScheduler,
         LeastRecentlyUsedScheduler,
         PriorityScheduler,
