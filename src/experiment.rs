@@ -102,7 +102,7 @@ where
         if store.genesis.world_kind != kind {
             return Err("wrong registered world kind".into());
         }
-        let effects = EffectJournal::open(dir)?;
+        let effects = EffectJournal::open_existing(dir)?;
         Ok(Self {
             store,
             effects,
@@ -117,6 +117,13 @@ where
     }
     pub fn observe_with(&mut self, obs: Arc<dyn Observer<W>>) {
         self.observers.push(obs);
+    }
+    /// Scheduler control is an audited event, never a raw in-memory mutation.
+    pub fn pause_actor(&mut self, actor: AgentId) -> Result<(), String> {
+        self.store.set_paused(actor, true)
+    }
+    pub fn resume_actor(&mut self, actor: AgentId) -> Result<(), String> {
+        self.store.set_paused(actor, false)
     }
     pub async fn step(&mut self) -> Result<Step<W>, String> {
         let mut sched = self.store.schedule.clone();
@@ -495,6 +502,53 @@ mod tests {
             .unwrap();
         assert_eq!(recorded, received);
         drop(journal);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[tokio::test]
+    async fn persisted_pause_and_resume_survive_restart_without_divergence() {
+        let path = dir("pause");
+        {
+            let mut trial = new(&path, false, false);
+            trial.pause_actor(AgentId(0)).unwrap();
+            let entry = trial.step().await.unwrap();
+            assert!(matches!(entry, Step::Accepted(ref e) if e.actor == AgentId(1)));
+            trial.checkpoint().unwrap();
+        }
+        {
+            let mut trial = Trial::resume(
+                &path, "counter", Policy { effects: false },
+                Arc::new(ScriptedBackend), false,
+            ).unwrap();
+            let entry = trial.step().await.unwrap();
+            assert!(matches!(entry, Step::Accepted(ref e) if e.actor == AgentId(2)));
+            trial.resume_actor(AgentId(0)).unwrap();
+            trial.checkpoint().unwrap();
+        }
+        let verified = Trial::resume(
+            &path, "counter", Policy { effects: false },
+            Arc::new(ScriptedBackend), false,
+        ).unwrap();
+        assert_eq!(verified.store.logical_step, 2);
+        drop(verified);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[tokio::test]
+    async fn abandoned_snapshot_temp_is_cleaned_during_restore() {
+        let path = dir("temporary");
+        {
+            let mut trial = new(&path, false, false);
+            trial.run_attempts(2).await.unwrap();
+            trial.checkpoint().unwrap();
+        }
+        std::fs::write(path.join("snapshot.tmp"), b"abandoned partial snapshot").unwrap();
+        {
+            let trial = Trial::resume(
+                &path, "counter", Policy { effects: false },
+                Arc::new(ScriptedBackend), false,
+            ).unwrap();
+            assert!(!path.join("snapshot.tmp").exists());
+            trial.checkpoint().unwrap();
+        }
         std::fs::remove_dir_all(path).unwrap();
     }
     struct Delayed;

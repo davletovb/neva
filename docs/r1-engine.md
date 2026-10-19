@@ -98,3 +98,24 @@ considered solved. Automatic fork/sweep workflows, native CSV/Parquet,
 advanced provider streaming, persistent observer projections and a language
 neutral external-policy protocol belong to later slices. Do not treat a
 clean CI smoke result as independent external security/provider validation.
+
+## R1 review hardening
+
+- Scheduler pause and resume are **explicit control entries** in the same
+  hash-linked events log. They consume an attempt sequence but not a world
+  step, and are replayed before actor selection. The consumer's Store exposes
+  immutable world/progress views, not direct mutation.
+- `effects.jsonl` receipts include content hashes over request identity,
+  response, usage and effective model/provider. Corrupt or mismatched
+  receipts fail strict resume/replay. The CLI `validate` command checks
+  both the world log and effect ledger.
+- The active receipt records the *backend actually used* (scripted vs live),
+  while the effective model comes from the provider-reported response.
+  Scripted responses are explicitly noncharged; live charges remain
+  independently auditable even if the world rejects an action.
+- Live URLs are parsed before use: HTTPS is allowed, cleartext HTTP only for
+  a parsed loopback host, userinfo is forbidden, and redirects are disabled.
+  The HTTP tests use a local in-process stub, not an external provider.
+- Failed restores remove their writer locks. On open, abandoned
+  `snapshot.tmp` files are discarded under the exclusive lock. Write,
+  flush, and rename failures also clean up their temporary file.

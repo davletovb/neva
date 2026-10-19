@@ -89,6 +89,10 @@ pub enum Outcome<W, A> {
     Rejected {
         reason: String,
     },
+    /// Persisted scheduler change; does not consume an actor turn.
+    Control {
+        paused: bool,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,9 +104,9 @@ pub struct Entry<W, A> {
     pub schema: u32,
     pub trial_id: String,
     #[serde(with = "decimal_u64")]
-    pub sequence: u64,
+    pub(crate) sequence: u64,
     #[serde(with = "decimal_u64")]
-    pub logical_step: u64,
+    pub(crate) logical_step: u64,
     pub actor: AgentId,
     pub outcome: Outcome<W, A>,
     pub after_schedule: Schedule,
@@ -172,14 +176,14 @@ where
     W: World<Action = A>,
 {
     pub dir: PathBuf,
-    pub genesis: Genesis<W>,
-    pub world: W,
-    pub schedule: Schedule,
-    pub streams: Streams,
-    pub sequence: u64,
-    pub logical_step: u64,
-    pub chain_head: String,
-    pub log_bytes: u64,
+    pub(crate) genesis: Genesis<W>,
+    pub(crate) world: W,
+    pub(crate) schedule: Schedule,
+    pub(crate) streams: Streams,
+    pub(crate) sequence: u64,
+    pub(crate) logical_step: u64,
+    pub(crate) chain_head: String,
+    pub(crate) log_bytes: u64,
     poisoned: bool,
     /// Exclusive single-writer lock, removed on clean close.
     _lock: WriterLock,
@@ -193,10 +197,16 @@ fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .create_new(true)
         .open(&temporary)
         .map_err(|e| format!("write {}: {e}", temporary.display()))?;
-    file.write_all(bytes).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
     drop(file);
-    fs::rename(&temporary, path).map_err(|e| e.to_string())?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
     if let Some(parent) = path.parent() {
         #[cfg(unix)]
         File::open(parent)
@@ -271,6 +281,12 @@ where
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let dir = dir.as_ref();
         let lock = lock_dir(dir)?;
+        // A crashed atomic snapshot writer may leave this uncommitted file.
+        // The existing writer lock guarantees there is no concurrent writer.
+        let uncommitted = dir.join("snapshot.tmp");
+        if uncommitted.exists() {
+            fs::remove_file(&uncommitted).map_err(|e| e.to_string())?;
+        }
         let raw = fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?;
         let genesis: Genesis<W> = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
@@ -375,6 +391,17 @@ where
         }
         let mut sched = state.schedule.clone();
         let mut rng = state.streams.clone();
+        if let Outcome::Control { paused } = &event.outcome {
+            if *paused { sched.pause(event.actor)?; }
+            else { sched.resume(event.actor)?; }
+            if sched != event.after_schedule || rng != event.after_streams {
+                return Err("logged control change differs from scheduler state".into());
+            }
+            state.sequence = state.sequence.checked_add(1).ok_or("sequence overflow")?;
+            state.chain_head = event.hash.clone();
+            state.schedule = sched;
+            return Ok(());
+        }
         let selected = sched.select(&mut rng)?;
         if selected != Some(event.actor)
             || sched != event.after_schedule
@@ -398,6 +425,7 @@ where
                 state.logical_step = state.logical_step.checked_add(1).ok_or("step overflow")?;
             }
             Outcome::Rejected { .. } => {}
+            Outcome::Control { .. } => unreachable!("handled before actor selection"),
         }
         state.sequence = state.sequence.checked_add(1).ok_or("sequence overflow")?;
         state.chain_head = event.hash.clone();
@@ -461,6 +489,22 @@ where
         self.schedule = proposed.schedule;
         self.streams = proposed.streams;
         Ok(event)
+    }
+
+    /// Read-only views: consumers cannot corrupt authoritative state or IDs.
+    pub fn genesis(&self) -> &Genesis<W> { &self.genesis }
+    pub fn world(&self) -> &W { &self.world }
+    pub fn sequence(&self) -> u64 { self.sequence }
+    pub fn logical_step(&self) -> u64 { self.logical_step }
+    pub fn chain_head(&self) -> &str { &self.chain_head }
+    pub fn log_bytes(&self) -> u64 { self.log_bytes }
+
+    pub fn set_paused(&mut self, actor: AgentId, paused: bool) -> Result<(), String> {
+        let mut scheduled = self.schedule.clone();
+        if paused { scheduled.pause(actor)?; }
+        else { scheduled.resume(actor)?; }
+        self.append(actor, Outcome::Control { paused }, scheduled, self.streams.clone())?;
+        Ok(())
     }
 
     pub fn snapshot(&self) -> Result<(), String> {

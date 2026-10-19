@@ -53,6 +53,20 @@ pub struct Receipt {
     pub charged: bool,
     pub effective_provider: String,
     pub effective_model: Option<String>,
+    /// Detects tampered model output/usage/identity during strict replay.
+    pub content_hash: String,
+}
+impl Receipt {
+    fn compute_hash(&self) -> Result<String, String> {
+        digest(&(
+            &self.key,
+            &self.spec,
+            &self.result,
+            self.charged,
+            &self.effective_provider,
+            &self.effective_model,
+        ))
+    }
 }
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
@@ -111,7 +125,7 @@ impl ReplayBackend {
             .captured
             .get(key)
             .ok_or("missing keyed replay effect")?;
-        if &existing.spec != spec
+        if existing.content_hash != existing.compute_hash()? || &existing.spec != spec
             || spec.key(
                 &key.trial_id,
                 key.logical_step,
@@ -127,7 +141,7 @@ impl ReplayBackend {
 
 pub struct EffectJournal {
     pub path: PathBuf,
-    pub receipts: BTreeMap<EffectCallKey, Receipt>,
+    pub(crate) receipts: BTreeMap<EffectCallKey, Receipt>,
     poisoned: bool,
 }
 
@@ -155,6 +169,9 @@ impl EffectJournal {
         {
             let receipt: Receipt =
                 serde_json::from_slice(line).map_err(|e| format!("invalid effect ledger: {e}"))?;
+            if receipt.content_hash != receipt.compute_hash()? {
+                return Err("effect ledger receipt hash mismatch".into());
+            }
             let key = &receipt.key;
             if receipt.spec.key(
                 &key.trial_id,
@@ -183,13 +200,24 @@ impl EffectJournal {
         })
     }
 
-    fn append(&mut self, receipt: Receipt) -> Result<(), String> {
+    pub fn open_existing(dir: impl AsRef<Path>) -> Result<Self, String> {
+        if !dir.as_ref().join("effects.jsonl").exists() {
+            return Err("missing effect ledger".into());
+        }
+        Self::open(dir)
+    }
+
+    pub fn receipt_count(&self) -> usize { self.receipts.len() }
+    pub fn receipts(&self) -> &BTreeMap<EffectCallKey, Receipt> { &self.receipts }
+
+    fn append(&mut self, mut receipt: Receipt) -> Result<Receipt, String> {
         if self.poisoned {
             return Err("effect ledger poisoned, reopen to recover".into());
         }
         if self.receipts.contains_key(&receipt.key) {
             return Err("effect already recorded".into());
         }
+        receipt.content_hash = receipt.compute_hash()?;
         let mut bytes = stable_bytes(&receipt)?;
         bytes.push(b'\n');
         if let Err(e) = (|| -> std::io::Result<()> {
@@ -200,8 +228,8 @@ impl EffectJournal {
             self.poisoned = true;
             return Err(format!("effect receipt fsync failure: {e}"));
         }
-        self.receipts.insert(receipt.key.clone(), receipt);
-        Ok(())
+        self.receipts.insert(receipt.key.clone(), receipt.clone());
+        Ok(receipt)
     }
 
     /// Concurrent model/tool requests; receipts are durable before returning to
@@ -268,7 +296,8 @@ impl EffectJournal {
                         EffectSpec::Model(m) => (m.provider.clone(), Some(m.model.clone())),
                         EffectSpec::Tool { name, .. } => (format!("tool:{name}"), None),
                     };
-                    let charged = matches!(response, EffectResult::Model { .. });
+                    let charged = matches!(response, EffectResult::Model { .. })
+                        && provider != "scripted";
                     Ok::<_, String>(Receipt {
                         key,
                         spec,
@@ -276,14 +305,15 @@ impl EffectJournal {
                         charged,
                         effective_provider: provider,
                         effective_model: model,
+                        content_hash: String::new(),
                     })
                 });
             }
         }
         while let Some(result) = jobs.join_next().await {
             let receipt = result.map_err(|e| format!("effect task failure: {e}"))??;
-            self.append(receipt.clone())?;
-            finished.push(receipt);
+            let stored = self.append(receipt)?;
+            finished.push(stored);
         }
         finished.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(finished)
@@ -416,6 +446,36 @@ pub fn sample_request(message: &str) -> EffectSpec {
         streaming: false,
         response_format: None,
     })
+}
+
+#[cfg(test)]
+mod effect_integrity_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn tampered_model_receipt_fails_strict_replay() {
+        let path = std::env::temp_dir().join(format!(
+            "hiyal-effect-integrity-{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let mut journal = EffectJournal::open(&path).unwrap();
+        let request = sample_request("hello");
+        let key = request.key("trial", 0, AgentId(0), 0).unwrap();
+        journal.resolve_all(
+            vec![(key, request)], Arc::new(ScriptedBackend),
+            1, Duration::from_secs(2), false,
+        ).await.unwrap();
+        drop(journal);
+        let file = path.join("effects.jsonl");
+        let original = std::fs::read_to_string(&file).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(original.trim()).unwrap();
+        value["result"]["payload"]["content"] = "forged".into();
+        std::fs::write(&file, format!("{}\n", serde_json::to_string(&value).unwrap())).unwrap();
+        assert!(EffectJournal::open_existing(&path).is_err());
+        std::fs::remove_dir_all(&path).unwrap();
+    }
 }
 
 #[cfg(all(test, feature = "live-http"))]

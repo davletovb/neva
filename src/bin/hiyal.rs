@@ -92,7 +92,7 @@ async fn launch() -> Result<(), String> {
             trial.checkpoint()?;
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
-                trial.store.sequence, trial.store.world.total, trial.store.chain_head
+                trial.store.sequence(), trial.store.world().total, trial.store.chain_head()
             );
         }
         "resume" => {
@@ -113,7 +113,7 @@ async fn launch() -> Result<(), String> {
             trial.checkpoint()?;
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
-                trial.store.sequence, trial.store.world.total, trial.store.chain_head
+                trial.store.sequence(), trial.store.world().total, trial.store.chain_head()
             );
         }
         "inspect" | "validate" => {
@@ -122,18 +122,22 @@ async fn launch() -> Result<(), String> {
                 return Err(help().into());
             }
             let store: Store<Counter, u64> = Store::open(dir)?;
+            let ledger = hiyal::runtime::EffectJournal::open_existing(dir)?;
             if cmd == "inspect" {
                 println!(
                     "kind={} trial={} events={} committed={} total={} hash={}",
-                    store.genesis.world_kind,
-                    store.genesis.trial_id,
-                    store.sequence,
-                    store.logical_step,
-                    store.world.total,
-                    store.chain_head
+                    store.genesis().world_kind,
+                    store.genesis().trial_id,
+                    store.sequence(),
+                    store.logical_step(),
+                    store.world().total,
+                    store.chain_head()
                 );
             } else {
-                println!("valid {} events; hash={}", store.sequence, store.chain_head);
+                println!(
+                    "valid {} events and {} effects; hash={}",
+                    store.sequence(), ledger.receipt_count(), store.chain_head()
+                );
             }
         }
         _ => return Err(help().into()),
