@@ -1,9 +1,9 @@
 import pytest
 
-from neva.agents import AIAgent, ToolCall, TransformerAgent
-from neva.environments import Environment as BaseEnvironment
-from neva.tools import Tool
-from neva.utils.exceptions import ToolExecutionError, ToolNotFoundError
+from hiyal.agents import AIAgent, ToolCall, TransformerAgent
+from hiyal.environments import Environment as BaseEnvironment
+from hiyal.tools import Tool
+from hiyal.utils.exceptions import ToolExecutionError, ToolNotFoundError
 
 
 class DummyTool(Tool):

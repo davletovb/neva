@@ -1,6 +1,6 @@
 """Compatibility shims for the observability modules.
 
-The implementations moved into ``neva.utils.observability``; the old module
+The implementations moved into ``hiyal.utils.observability``; the old module
 paths must stay usable, including module-level attribute mutation
 (``monkeypatch.setattr`` in downstream suites), so they alias the implementation
 modules rather than copying names out of them.
@@ -8,11 +8,11 @@ modules rather than copying names out of them.
 
 from __future__ import annotations
 
-import neva.utils.observability as observability
-import neva.utils.observer as observer_shim
-import neva.utils.telemetry as telemetry_shim
-from neva.utils.exceptions import MissingDependencyError
-from neva.utils.observability import observer as observer_impl, telemetry as telemetry_impl
+import hiyal.utils.observability as observability
+import hiyal.utils.observer as observer_shim
+import hiyal.utils.telemetry as telemetry_shim
+from hiyal.utils.exceptions import MissingDependencyError
+from hiyal.utils.observability import observer as observer_impl, telemetry as telemetry_impl
 
 
 def test_legacy_paths_alias_the_implementation_modules():
@@ -35,7 +35,7 @@ def test_legacy_path_attribute_mutation_reaches_the_implementation(monkeypatch):
         raise MissingDependencyError("opentelemetry unavailable")
 
     monkeypatch.setattr(telemetry_shim, "_require_opentelemetry", missing)
-    telemetry = telemetry_impl.TelemetryManager(service_name="neva-legacy-patch")
+    telemetry = telemetry_impl.TelemetryManager(service_name="hiyal-legacy-patch")
 
     assert telemetry._trace_api is None and telemetry._tracer_provider is None
     telemetry.shutdown()

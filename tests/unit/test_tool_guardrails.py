@@ -8,11 +8,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-import neva.tools.guard as guard_module
-from neva.agents import TransformerAgent
-from neva.agents.base import Tool, ToolCall
-from neva.tools import ToolGuard, ToolLimits
-from neva.utils.exceptions import (
+import hiyal.tools.guard as guard_module
+from hiyal.agents import TransformerAgent
+from hiyal.agents.base import Tool, ToolCall
+from hiyal.tools import ToolGuard, ToolLimits
+from hiyal.utils.exceptions import (
     ToolExecutionError,
     ToolGuardConfigurationError,
     ToolResourceLimitError,
@@ -140,7 +140,7 @@ def test_approval_errors_deny_without_leaking_details(caplog):
         raise RuntimeError("auth service down")
 
     guard = ToolGuard(approve=broken)
-    with caplog.at_level(logging.DEBUG, logger="neva.tools.guard"):
+    with caplog.at_level(logging.DEBUG, logger="hiyal.tools.guard"):
         reason = guard.evaluate(ToolCall(name="echo", arguments={"input": "hi"}))
     assert reason is not None
     assert "failed" in reason
@@ -184,7 +184,7 @@ def test_timed_out_worker_thread_is_daemon():
     guard = ToolGuard(limits=ToolLimits(timeout=0.05))
     with pytest.raises(ToolTimeoutError):
         guard.invoke(tool, "slow")
-    workers = [t for t in threading.enumerate() if t.name == "neva-tool-hanger"]
+    workers = [t for t in threading.enumerate() if t.name == "hiyal-tool-hanger"]
     assert workers
     assert all(t.daemon for t in workers)
 
@@ -344,7 +344,7 @@ def test_isolated_process_timeout_is_hard():
         guard.invoke(tool, "slow")
     assert time.monotonic() - started < 0.8
     assert not any(
-        process.name == "neva-tool-process-isolated"
+        process.name == "hiyal-tool-process-isolated"
         for process in __import__("multiprocessing").active_children()
     )
 

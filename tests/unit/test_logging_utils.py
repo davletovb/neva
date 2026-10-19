@@ -6,7 +6,7 @@ import io
 import json
 import logging
 
-from neva.utils.logging_utils import JsonLogFormatter, configure_logging
+from hiyal.utils.logging_utils import JsonLogFormatter, configure_logging
 
 
 def test_json_log_formatter_includes_default_fields():
@@ -49,7 +49,7 @@ def test_configure_logging_sets_json_formatter_and_level():
     handler = CaptureHandler()
     configure_logging(level=logging.DEBUG, handlers=[handler], include_timestamp=False)
 
-    logger = logging.getLogger("neva.logging.test")
+    logger = logging.getLogger("hiyal.logging.test")
     logger.debug("structured message", extra={"context": "value"})
 
     assert handler.formatted, "Handler should capture at least one record"

@@ -12,9 +12,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from examples.showcase_common import TranscriptEnvironment, make_persona_backend, run_simulation
-from neva.agents import AgentManager
-from neva.schedulers import RoundRobinScheduler
-from neva.tools import MathTool
+from hiyal.agents import AgentManager
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.tools import MathTool
 
 
 class ProductivityEnvironment(TranscriptEnvironment):

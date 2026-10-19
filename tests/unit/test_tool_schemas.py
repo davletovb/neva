@@ -1,9 +1,9 @@
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.agents.base import Tool, ToolCall
-from neva.tools import ArgumentSchema, ArgumentSpec
-from neva.utils.exceptions import ToolExecutionError, ToolSchemaConfigurationError
+from hiyal.agents import TransformerAgent
+from hiyal.agents.base import Tool, ToolCall
+from hiyal.tools import ArgumentSchema, ArgumentSpec
+from hiyal.utils.exceptions import ToolExecutionError, ToolSchemaConfigurationError
 
 
 class SchemaTool(Tool):
@@ -441,7 +441,7 @@ def test_guard_denial_takes_precedence_over_schema():
 
 
 def make_guard():
-    from neva.tools import ToolGuard
+    from hiyal.tools import ToolGuard
 
     return ToolGuard(allowed_tools={"other"})
 

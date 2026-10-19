@@ -1,15 +1,15 @@
 import pytest
 import requests
 
-from neva.agents.gpt import (
+from hiyal.agents.gpt import (
     GPTAgent,
     _chat_completions_url,
     _extract_chat_content,
     _provider_usage_from_gemini,
 )
-from neva.utils.exceptions import BackendError, CircuitOpenError, ConfigurationError
-from neva.utils.metrics import TokenUsageTracker
-from neva.utils.safety import CircuitBreaker
+from hiyal.utils.exceptions import BackendError, CircuitOpenError, ConfigurationError
+from hiyal.utils.metrics import TokenUsageTracker
+from hiyal.utils.safety import CircuitBreaker
 
 
 class _FakeResponse:
@@ -51,7 +51,7 @@ def test_grok_uses_chat_completions_endpoint(monkeypatch):
         calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
         return _FakeResponse({"choices": [{"message": {"content": "Grok here."}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
     assert agent.respond("ping").endswith("Grok here.")
     assert calls[0]["url"] == "https://api.x.ai/v1/chat/completions"
@@ -64,7 +64,7 @@ def test_openai_uses_chat_completions_endpoint(monkeypatch):
         assert url == "https://api.openai.com/v1/chat/completions"
         return _FakeResponse({"choices": [{"message": {"content": "hi"}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(api_key="sk-test", provider="openai", name="Scout", max_retries=0)
     assert "hi" in agent.respond("ping")
 
@@ -94,7 +94,7 @@ def test_extract_chat_content_handles_list_blocks():
 
 def test_empty_provider_response_raises(monkeypatch):
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: _FakeResponse({"choices": [{"message": {"content": ""}}]}),
     )
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
@@ -115,7 +115,7 @@ def test_backend_uses_internal_cache(monkeypatch):
         calls.append(url)
         return _FakeResponse({"choices": [{"message": {"content": "cached"}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
     backend = agent._default_backend()
     assert backend("hello") == "cached"
@@ -132,8 +132,8 @@ def test_retries_then_succeeds(monkeypatch):
             raise requests.ConnectionError("boom")
         return _FakeResponse({"choices": [{"message": {"content": "recovered"}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _seconds: None)
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=1)
     assert "recovered" in agent.respond("ping")
     assert len(calls) == 2
@@ -149,10 +149,10 @@ def test_extract_chat_content_fallbacks():
 
 def test_retry_exhausted_raises(monkeypatch):
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: (_ for _ in ()).throw(requests.ConnectionError("down")),
     )
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _seconds: None)
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
     with pytest.raises(BackendError):
         agent.respond("ping")
@@ -164,7 +164,7 @@ def test_extra_headers_are_sent(monkeypatch):
         assert url == "https://api.x.ai/v1/chat/completions"
         return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(
         api_key="xai-test",
         provider="grok",
@@ -180,7 +180,7 @@ def test_anthropic_requires_package(monkeypatch):
     def _missing(name: str):
         raise ImportError(name)
 
-    monkeypatch.setattr("neva.agents.gpt._import_module", _missing)
+    monkeypatch.setattr("hiyal.agents.gpt._import_module", _missing)
     agent = GPTAgent(api_key="k", provider="anthropic", name="Scout", max_retries=0)
     with pytest.raises(ConfigurationError):
         agent._invoke_anthropic("hello")
@@ -190,7 +190,7 @@ def test_gemini_requires_package(monkeypatch):
     def _missing(name: str):
         raise ImportError(name)
 
-    monkeypatch.setattr("neva.agents.gpt._import_module", _missing)
+    monkeypatch.setattr("hiyal.agents.gpt._import_module", _missing)
     agent = GPTAgent(api_key="k", provider="gemini", name="Scout", max_retries=0)
     with pytest.raises(ConfigurationError):
         agent._invoke_gemini("hello")
@@ -224,7 +224,7 @@ def test_anthropic_success_and_empty(monkeypatch):
             Anthropic = _Bound
 
         monkeypatch.setattr(
-            "neva.agents.gpt._import_module",
+            "hiyal.agents.gpt._import_module",
             lambda name: _Mod if name == "anthropic" else (_ for _ in ()).throw(ImportError(name)),
         )
 
@@ -271,7 +271,7 @@ def test_anthropic_passes_request_timeout(monkeypatch):
         Anthropic = _Client
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: _Mod if name == "anthropic" else (_ for _ in ()).throw(ImportError(name)),
     )
     agent = GPTAgent(api_key="k", provider="anthropic", max_retries=0, request_timeout=12.5)
@@ -300,7 +300,7 @@ def test_gemini_passes_request_timeout(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: (
             _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
         ),
@@ -330,7 +330,7 @@ def test_gemini_success_and_candidates(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: (
             _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
         ),
@@ -360,7 +360,7 @@ def test_gemini_success_and_candidates(monkeypatch):
         GenerativeModel = _EmptyTextModel
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: (
             _CandidateGenAI
             if name == "google.generativeai"
@@ -372,10 +372,10 @@ def test_gemini_success_and_candidates(monkeypatch):
 
 def test_http_error_is_retried_then_fails(monkeypatch):
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: _FakeResponse({}, status_code=500),
     )
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _seconds: None)
     agent = GPTAgent(api_key="xai-test", provider="xai", name="Scout", max_retries=0)
     with pytest.raises(BackendError):
         agent.respond("ping")
@@ -389,8 +389,8 @@ def test_permanent_http_errors_are_not_retried(monkeypatch, status):
         calls.append(1)
         return _FakeResponse({}, status_code=status)
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", post)
-    monkeypatch.setattr("neva.agents.gpt.sleep", sleeps.append)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", post)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", sleeps.append)
     agent = GPTAgent(api_key="test", max_retries=3)
     with pytest.raises(BackendError) as caught:
         agent.respond("hello")
@@ -407,8 +407,8 @@ def test_transient_http_errors_respect_retry_budget(monkeypatch, status):
         calls.append(1)
         return _FakeResponse({}, status_code=status)
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", post)
-    monkeypatch.setattr("neva.agents.gpt.sleep", sleeps.append)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", post)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", sleeps.append)
     with pytest.raises(BackendError):
         GPTAgent(api_key="test", max_retries=2).respond("hello")
     assert len(calls) == 3
@@ -425,7 +425,7 @@ def test_local_errors_are_not_retried(monkeypatch, error):
 
     agent = GPTAgent(api_key="test")
     monkeypatch.setattr(agent, "_invoke_provider", invoke)
-    monkeypatch.setattr("neva.agents.gpt.sleep", sleeps.append)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", sleeps.append)
     expected = ConfigurationError if isinstance(error, ConfigurationError) else BackendError
     with pytest.raises(expected):
         agent.respond("hello")
@@ -452,7 +452,7 @@ def test_sdk_errors_are_classified_without_importing_sdk(monkeypatch, status, at
 
     agent = GPTAgent(api_key="test", max_retries=2)
     monkeypatch.setattr(agent, "_invoke_provider", invoke)
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _: None)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _: None)
     with pytest.raises(BackendError):
         agent.respond("hello")
     assert len(calls) == attempts
@@ -515,7 +515,7 @@ def test_provider_payload_includes_conversation_history(monkeypatch):
         calls.append(json)
         return _FakeResponse({"choices": [{"message": {"content": f"r{len(calls)}"}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
     agent.receive("hello", sender="user")
     assert len(calls[0]["messages"]) == 1
@@ -576,7 +576,7 @@ def test_provider_payload_omits_turns_outside_the_window(monkeypatch):
         calls.append(json)
         return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(
         api_key="xai-test",
         provider="grok",
@@ -652,7 +652,7 @@ def test_gemini_invoke_sends_budgeted_text(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: (
             _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
         ),
@@ -704,7 +704,7 @@ def test_gemini_token_tracker_counts_flattened_history(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: (
             _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
         ),
@@ -744,7 +744,7 @@ def test_gemini_uses_provider_usage_metadata(monkeypatch):
         GenerativeModel = _Model
 
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: (
             _GenAI if name == "google.generativeai" else (_ for _ in ()).throw(ImportError(name))
         ),
@@ -777,7 +777,7 @@ def test_grok_usage_is_priced(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(api_key="xai-test", provider="grok", name="Scout", max_retries=0)
     assert "ok" in agent.respond("ping")
     assert agent._cost_tracker.total_cost() == pytest.approx(0.008)
@@ -791,9 +791,9 @@ def test_circuit_opens_after_retryable_failures(monkeypatch):
         calls.append(1)
         return _FakeResponse({}, status_code=503)
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
-    monkeypatch.setattr("neva.utils.safety.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("hiyal.utils.safety.time.monotonic", lambda: now[0])
     breaker = CircuitBreaker(failure_threshold=2, cooldown=30.0)
     agent = GPTAgent(
         api_key="xai-test",
@@ -823,7 +823,7 @@ def test_permanent_errors_do_not_open_the_circuit(monkeypatch):
         calls.append(1)
         return _FakeResponse({}, status_code=401)
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     breaker = CircuitBreaker(failure_threshold=1, cooldown=30.0)
     agent = GPTAgent(
         api_key="xai-test",
@@ -846,8 +846,8 @@ def test_circuit_counts_each_retryable_attempt(monkeypatch):
         calls.append(1)
         return _FakeResponse({}, status_code=503)
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _seconds: None)
     breaker = CircuitBreaker(failure_threshold=2, cooldown=30.0)
     agent = GPTAgent(
         api_key="xai-test",
@@ -870,9 +870,9 @@ def test_half_open_probe_401_does_not_stick(monkeypatch):
         calls.append(1)
         return _FakeResponse({}, status_code=statuses[len(calls) - 1])
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
-    monkeypatch.setattr("neva.agents.gpt.sleep", lambda _seconds: None)
-    monkeypatch.setattr("neva.utils.safety.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.sleep", lambda _seconds: None)
+    monkeypatch.setattr("hiyal.utils.safety.time.monotonic", lambda: now[0])
     breaker = CircuitBreaker(failure_threshold=2, cooldown=30.0)
     agent = GPTAgent(
         api_key="xai-test",

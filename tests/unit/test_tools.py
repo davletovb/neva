@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from neva.tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
-from neva.utils.exceptions import MissingDependencyError, ToolExecutionError
+from hiyal.tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
+from hiyal.utils.exceptions import MissingDependencyError, ToolExecutionError
 
 
 def test_math_tool_evaluates_expression():
@@ -42,7 +42,7 @@ def test_summarizer_tool_uses_injected_backend():
 
 
 def test_wikipedia_tool_missing_dependency_raises(monkeypatch):
-    import neva.tools.wikipedia as wiki_mod
+    import hiyal.tools.wikipedia as wiki_mod
 
     monkeypatch.setattr(wiki_mod, "wikipedia", None)
     tool = WikipediaTool(summary_sentences=1)

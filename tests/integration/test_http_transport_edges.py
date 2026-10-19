@@ -12,8 +12,8 @@ import pytest
 import requests
 import urllib3
 
-from neva.agents import GPTAgent
-from neva.utils.exceptions import BackendError
+from hiyal.agents import GPTAgent
+from hiyal.utils.exceptions import BackendError
 
 
 def _agent(base: str, *, timeout: float = 0.1, max_context_chars: int = 24_000) -> GPTAgent:
@@ -191,6 +191,6 @@ def test_real_request_body_write_timeout_is_wrapped(write_stall_server, monkeypa
 
     assert accepted.wait(timeout=1)
     # requests/urllib3 surfaces a socket send timeout as a ConnectionError
-    # (rather than ReadTimeout); Neva classifies it as retryable transport I/O.
+    # (rather than ReadTimeout); Hiyal classifies it as retryable transport I/O.
     assert isinstance(caught.value.__cause__, requests.exceptions.ConnectionError)
     assert "timed out" in str(caught.value.__cause__).lower()

@@ -19,12 +19,12 @@ pytest.importorskip("faiss")
 pytest.importorskip("numpy")
 pytest.importorskip("anthropic")
 
-from neva.agents import GPTAgent, TransformerAgent
-from neva.environments import BasicEnvironment
-from neva.memory import FaissVectorStoreMemory
-from neva.schedulers import RandomScheduler
-from neva.utils.exceptions import BackendError
-from neva.utils.reproducibility import create_run_manifest
+from hiyal.agents import GPTAgent, TransformerAgent
+from hiyal.environments import BasicEnvironment
+from hiyal.memory import FaissVectorStoreMemory
+from hiyal.schedulers import RandomScheduler
+from hiyal.utils.exceptions import BackendError
+from hiyal.utils.reproducibility import create_run_manifest
 
 
 class _TinyTokenizer:

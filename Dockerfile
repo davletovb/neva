@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 WORKDIR /workspace
 
 COPY pyproject.toml poetry.lock README.md ./
-COPY neva ./neva
+COPY hiyal ./hiyal
 COPY examples ./examples
 COPY tests ./tests
 COPY requirements*.txt ./

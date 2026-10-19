@@ -3,13 +3,13 @@ import threading
 
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.environments.basic import BasicEnvironment
-from neva.schedulers import RoundRobinScheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.failures import FailureLog, FailureRecord
-from neva.utils.state_management import SimulationSnapshot
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.environments.basic import BasicEnvironment
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.failures import FailureLog, FailureRecord
+from hiyal.utils.state_management import SimulationSnapshot
 
 
 def fail(prompt):

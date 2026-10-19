@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-import neva.utils.state_management as state_management
-from neva.utils.state_management import create_snapshot, load_snapshot, save_snapshot
+import hiyal.utils.state_management as state_management
+from hiyal.utils.state_management import create_snapshot, load_snapshot, save_snapshot
 
 
 def test_exact_byte_limit_roundtrip_and_one_byte_overflow(tmp_path):

@@ -36,13 +36,13 @@ jobs:
         run: flake8
 
       - name: MyPy
-        run: mypy neva benchmarks
+        run: mypy hiyal benchmarks
 
       - name: Bandit
-        run: bandit -r neva benchmarks
+        run: bandit -r hiyal benchmarks
 
       - name: Docstring coverage
-        run: interrogate neva
+        run: interrogate hiyal
 
       - name: Pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
@@ -129,12 +129,12 @@ jobs:
 
       - name: Measure FAISS implementation coverage
         run: |
-          pytest -q -o addopts=""             --cov=neva.memory.faiss_vector_store             --cov-report=term-missing             --cov-fail-under=80             tests/unit/test_memory_faiss.py
+          pytest -q -o addopts=""             --cov=hiyal.memory.faiss_vector_store             --cov-report=term-missing             --cov-fail-under=80             tests/unit/test_memory_faiss.py
 
       - name: Measure telemetry implementation coverage
         run: |
           pytest -q -o addopts="" \
-            --cov=neva.utils.observability.telemetry \
+            --cov=hiyal.utils.observability.telemetry \
             --cov-report=term-missing \
             --cov-fail-under=80 \
             tests/unit/test_telemetry.py \

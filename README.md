@@ -1,31 +1,31 @@
-# Neva: Multi-Agent Simulations with Large Language Models
+# Hiyal: Multi-Agent Simulations with Large Language Models
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen.svg)](#development)
-[![Issues](https://img.shields.io/github/issues/davletovb/neva)](https://github.com/davletovb/neva/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/davletovb/neva)](https://github.com/davletovb/neva/commits/main)
-[![Contributors](https://img.shields.io/github/contributors/davletovb/neva)](https://github.com/davletovb/neva/graphs/contributors)
-[![Forks](https://img.shields.io/github/forks/davletovb/neva?style=social)](https://github.com/davletovb/neva/fork)
-[![Stars](https://img.shields.io/github/stars/davletovb/neva?style=social)](https://github.com/davletovb/neva/stargazers)
+[![Issues](https://img.shields.io/github/issues/davletovb/hiyal)](https://github.com/davletovb/hiyal/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/davletovb/hiyal)](https://github.com/davletovb/hiyal/commits/main)
+[![Contributors](https://img.shields.io/github/contributors/davletovb/hiyal)](https://github.com/davletovb/hiyal/graphs/contributors)
+[![Forks](https://img.shields.io/github/forks/davletovb/hiyal?style=social)](https://github.com/davletovb/hiyal/fork)
+[![Stars](https://img.shields.io/github/stars/davletovb/hiyal?style=social)](https://github.com/davletovb/hiyal/stargazers)
 
 <p align="center">
-  <img src="https://github.com/davletovb/neva/assets/43503037/e9a2627b-e328-4986-a669-9ac13ad438b4" alt="Neva logo">
+  <img src="https://github.com/davletovb/hiyal/assets/43503037/e9a2627b-e328-4986-a669-9ac13ad438b4" alt="Hiyal logo">
 </p>
 
-Neva is an open-source Python library for building simulations in which
+Hiyal is an open-source Python library for building simulations in which
 configurable AI agents interact with one another and with shared environments.
 It is designed for agent-based modeling, multi-agent experiments, tool-using
 workflows, education, games, and research into emergent human/AI and AI/AI
 behavior.
 
-Neva keeps the main simulation model simple—agents, environments, schedulers,
+Hiyal keeps the main simulation model simple—agents, environments, schedulers,
 tools, memory, and observers—while providing optional provider integrations,
 streaming, persistence, recovery, reproducibility, observability, and execution
 controls when a project needs them.
 
 ## Contents
 
-- [Why Neva?](#why-neva)
+- [Why Hiyal?](#why-hiyal)
 - [Quickstart](#quickstart)
 - [Installation](#installation)
 - [Basic usage](#basic-usage)
@@ -36,7 +36,7 @@ controls when a project needs them.
 - [Get involved](#get-involved)
 - [License](#license)
 
-## Why Neva?
+## Why Hiyal?
 
 - **Agent-based by design** — model interactions among multiple specialized
   agents rather than wrapping a single chat call.
@@ -69,13 +69,13 @@ safe to explore without provider credentials or API charges.
 
 ## Installation
 
-Neva requires Python 3.11 or newer.
+Hiyal requires Python 3.11 or newer.
 
 With Poetry:
 
 ```bash
-git clone https://github.com/davletovb/neva.git
-cd neva
+git clone https://github.com/davletovb/hiyal.git
+cd hiyal
 poetry install
 ```
 
@@ -110,9 +110,9 @@ poetry install --with dev
 ## Basic usage
 
 ```python
-from neva.agents import AgentManager
-from neva.environments import BasicEnvironment
-from neva.schedulers import RoundRobinScheduler
+from hiyal.agents import AgentManager
+from hiyal.environments import BasicEnvironment
+from hiyal.schedulers import RoundRobinScheduler
 
 
 class ClassroomEnvironment(BasicEnvironment):
@@ -155,12 +155,12 @@ for _ in range(4):
 ```
 
 Each `environment.step()` asks the scheduler for the next agent, builds the
-environment context, invokes the agent, and records the turn through Neva's
+environment context, invokes the agent, and records the turn through Hiyal's
 observer lifecycle.
 
 ## Features
 
-Neva currently includes:
+Hiyal currently includes:
 
 - **Multiple agent types and backends** with a common simulation model.
 - **Pluggable scheduling** including round robin, random, priority,
@@ -233,8 +233,8 @@ pytest
 black --check .
 isort --check-only .
 flake8
-mypy neva benchmarks
-bandit -r neva benchmarks
+mypy hiyal benchmarks
+bandit -r hiyal benchmarks
 pre-commit run --all-files
 ```
 
@@ -256,4 +256,4 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-Neva is released under the MIT License. See [LICENSE](LICENSE).
+Hiyal is released under the MIT License. See [LICENSE](LICENSE).

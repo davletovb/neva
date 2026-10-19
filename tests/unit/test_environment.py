@@ -1,6 +1,6 @@
-from neva.agents import AIAgent
-from neva.environments import Environment
-from neva.schedulers import RoundRobinScheduler
+from hiyal.agents import AIAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import RoundRobinScheduler
 
 
 class StubAgent(AIAgent):

@@ -3,12 +3,12 @@ import threading
 import pytest
 import requests
 
-from neva.utils.exceptions import (
+from hiyal.utils.exceptions import (
     ConfigurationError,
     SpendBudgetConfigurationError,
     SpendBudgetExceededError,
 )
-from neva.utils.metrics import CostTracker, SpendBudget
+from hiyal.utils.metrics import CostTracker, SpendBudget
 
 
 def test_consume_then_check_enforces_limit():
@@ -146,11 +146,11 @@ def _patch_provider(monkeypatch, *, usage=None, calls=None):
             payload["usage"] = usage
         return _FakeResponse(payload)
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
 
 
 def test_gpt_agent_consumes_estimated_cost(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     _patch_provider(monkeypatch, usage={"prompt_tokens": 1000, "completion_tokens": 1000})
     budget = SpendBudget(max_cost=1.0)
@@ -161,7 +161,7 @@ def test_gpt_agent_consumes_estimated_cost(monkeypatch):
 
 
 def test_gpt_agent_refuses_call_when_budget_exhausted(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     calls = []
     _patch_provider(monkeypatch, usage={"prompt_tokens": 10, "completion_tokens": 10}, calls=calls)
@@ -174,7 +174,7 @@ def test_gpt_agent_refuses_call_when_budget_exhausted(monkeypatch):
 
 
 def test_gpt_agent_budget_overflow_marks_exhausted(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     _patch_provider(monkeypatch, usage={"prompt_tokens": 1000, "completion_tokens": 1000})
     # Reservation fits the coarse prompt estimate, but provider-reported input
@@ -189,7 +189,7 @@ def test_gpt_agent_budget_overflow_marks_exhausted(monkeypatch):
 
 
 def test_gpt_agent_unpriced_model_refused_before_provider_call(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     calls = []
     _patch_provider(monkeypatch, usage={"prompt_tokens": 5, "completion_tokens": 5}, calls=calls)
@@ -208,7 +208,7 @@ def test_gpt_agent_unpriced_model_refused_before_provider_call(monkeypatch):
 
 
 def test_gpt_agent_without_budget_is_unaffected_for_unpriced_models(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     _patch_provider(monkeypatch, usage={"prompt_tokens": 5, "completion_tokens": 5})
     agent = GPTAgent(
@@ -221,7 +221,7 @@ def test_gpt_agent_without_budget_is_unaffected_for_unpriced_models(monkeypatch)
 
 
 def test_gpt_agent_nan_pricing_raises_configuration_error(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     calls = []
     _patch_provider(
@@ -245,7 +245,7 @@ def test_gpt_agent_nan_pricing_raises_configuration_error(monkeypatch):
 
 
 def test_shared_budget_enforces_common_ceiling_across_agents(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     calls = []
     _patch_provider(
@@ -269,7 +269,7 @@ def test_shared_budget_enforces_common_ceiling_across_agents(monkeypatch):
 
 
 def test_spend_budget_rejects_injected_backend_and_bad_types():
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     with pytest.raises(ConfigurationError, match="built-in provider backend"):
         GPTAgent(
@@ -287,7 +287,7 @@ def test_spend_budget_rejects_injected_backend_and_bad_types():
 
 
 def _half_open_breaker():
-    from neva.utils.safety import CircuitBreaker
+    from hiyal.utils.safety import CircuitBreaker
 
     breaker = CircuitBreaker(failure_threshold=1, cooldown=0.0)
     breaker.record_failure()  # opens the circuit; next allow() admits a probe
@@ -295,7 +295,7 @@ def _half_open_breaker():
 
 
 def test_budget_refusal_releases_half_open_probe(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     breaker = _half_open_breaker()
     budget = SpendBudget(max_cost=1.0)
@@ -319,7 +319,7 @@ def test_budget_refusal_releases_half_open_probe(monkeypatch):
 
 
 def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     _patch_provider(monkeypatch, usage={"prompt_tokens": 1000, "completion_tokens": 1000})
     breaker = _half_open_breaker()
@@ -344,8 +344,8 @@ def test_budget_overflow_after_success_completes_half_open_probe(monkeypatch):
 
 
 def test_shared_provider_budget_refusal_releases_half_open_probe(monkeypatch):
-    from neva.agents.gpt import GPTAgent
-    from neva.utils.provider_resources import _clear_provider_resource_registry_for_tests
+    from hiyal.agents.gpt import GPTAgent
+    from hiyal.utils.provider_resources import _clear_provider_resource_registry_for_tests
 
     _clear_provider_resource_registry_for_tests()
     calls = []
@@ -374,7 +374,7 @@ def test_shared_provider_budget_refusal_releases_half_open_probe(monkeypatch):
 
 
 def test_local_reservation_refusal_releases_half_open_probe(monkeypatch):
-    from neva.agents.gpt import GPTAgent
+    from hiyal.agents.gpt import GPTAgent
 
     calls = []
     _patch_provider(

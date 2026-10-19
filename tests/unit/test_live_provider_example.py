@@ -12,7 +12,7 @@ def test_default_is_scripted_and_never_calls_provider(monkeypatch, capsys):
     def no_network(*args, **kwargs):
         raise AssertionError("offline example attempted a provider call")
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", no_network)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", no_network)
     assert example.main([]) == 0
     output = capsys.readouterr().out
     assert "[SCRIPTED]" in output
@@ -33,7 +33,7 @@ def test_default_is_scripted_and_never_calls_provider(monkeypatch, capsys):
 def test_invalid_live_configuration_never_calls_provider(monkeypatch, capsys, args, message):
     monkeypatch.setenv("OPENAI_API_KEY", "unused")
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: pytest.fail("unexpected provider call"),
     )
     with pytest.raises(SystemExit) as exc:
@@ -45,7 +45,7 @@ def test_invalid_live_configuration_never_calls_provider(monkeypatch, capsys, ar
 def test_live_requires_credentials_before_provider_call(monkeypatch, capsys):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: pytest.fail("unexpected provider call"),
     )
     with pytest.raises(SystemExit) as exc:
@@ -72,7 +72,7 @@ def test_live_uses_bounded_builtin_provider_and_reports_estimate(monkeypatch, ca
         calls.append((url, headers, json, timeout))
         return Response()
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     assert example.main(["--live", "--max-spend-usd", "0.01"]) == 0
     assert len(calls) == 1
     url, headers, payload, timeout = calls[0]
@@ -91,7 +91,7 @@ def test_live_uses_bounded_builtin_provider_and_reports_estimate(monkeypatch, ca
 def test_insufficient_estimated_budget_prevents_request(monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "example-test-secret")
     monkeypatch.setattr(
-        "neva.agents.gpt.requests.post",
+        "hiyal.agents.gpt.requests.post",
         lambda *args, **kwargs: pytest.fail("unexpected provider call"),
     )
     with pytest.raises(SystemExit) as exc:
@@ -114,7 +114,7 @@ def test_live_provider_failure_reports_hint_and_recorded_spend(monkeypatch, caps
         response.url = "https://api.openai.com/v1/chat/completions"
         return response
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     assert example.main(["--live", "--max-spend-usd", "0.01"]) == 1
     assert len(calls) == 1
     output = capsys.readouterr()

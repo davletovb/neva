@@ -2,7 +2,7 @@
 
 Run ``python examples/live_provider_smoke.py`` without credentials or network.
 For a generated response, set OPENAI_API_KEY and pass --live --max-spend-usd.
-The spend ceiling uses Neva's estimated token costs, not provider billing.
+The spend ceiling uses Hiyal's estimated token costs, not provider billing.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from neva.agents import GPTAgent
-from neva.utils.exceptions import BackendError, ConfigurationError, SpendBudgetExceededError
-from neva.utils.metrics import CostTracker, SpendBudget, TokenUsageTracker
+from hiyal.agents import GPTAgent
+from hiyal.utils.exceptions import BackendError, ConfigurationError, SpendBudgetExceededError
+from hiyal.utils.metrics import CostTracker, SpendBudget, TokenUsageTracker
 
 MODEL = "gpt-4o-mini"
 PROMPT = "Suggest one practical way two agents could collaborate on a research task."
@@ -47,7 +47,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--max-spend-usd",
         type=positive_usd,
-        help="required with --live; ceiling on Neva's estimated spend (USD)",
+        help="required with --live; ceiling on Hiyal's estimated spend (USD)",
     )
     args = parser.parse_args(argv)
 
@@ -90,7 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{REQUEST_TIMEOUT_SECONDS:g}s timeout, no retries."
     )
     print(
-        f"Neva's static estimate: ${prices['input']:.6f}/1k input tokens, "
+        f"Hiyal's static estimate: ${prices['input']:.6f}/1k input tokens, "
         f"${prices['output']:.6f}/1k output tokens; "
         f"estimated spend ceiling ${args.max_spend_usd:.6f}."
     )

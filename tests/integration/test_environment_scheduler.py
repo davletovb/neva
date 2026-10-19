@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from neva.agents.base import AIAgent
-from neva.environments import BasicEnvironment
-from neva.schedulers import RoundRobinScheduler
+from hiyal.agents.base import AIAgent
+from hiyal.environments import BasicEnvironment
+from hiyal.schedulers import RoundRobinScheduler
 
 
 class EchoAgent(AIAgent):

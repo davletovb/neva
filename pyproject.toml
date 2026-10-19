@@ -3,15 +3,15 @@ requires = ["poetry-core>=1.6.1"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-name = "neva"
+name = "hiyal"
 version = "0.1.0"
-description = "Neva provides agent, environment, and scheduler abstractions for LLM-based simulations."
-authors = ["Neva Contributors"]
+description = "Hiyal provides agent, environment, and scheduler abstractions for LLM-based simulations."
+authors = ["Hiyal Contributors"]
 readme = "README.md"
 license = "MIT"
-homepage = "https://github.com/davletovb/neva"
-repository = "https://github.com/davletovb/neva"
-documentation = "https://github.com/davletovb/neva#readme"
+homepage = "https://github.com/davletovb/hiyal"
+repository = "https://github.com/davletovb/hiyal"
+documentation = "https://github.com/davletovb/hiyal#readme"
 keywords = [
     "llm",
     "agents",
@@ -35,11 +35,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-packages = [{ include = "neva" }]
+packages = [{ include = "hiyal" }]
 
 [tool.poetry.urls]
-"Bug Tracker" = "https://github.com/davletovb/neva/issues"
-"Changelog" = "https://github.com/davletovb/neva/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/davletovb/hiyal/issues"
+"Changelog" = "https://github.com/davletovb/hiyal/blob/main/CHANGELOG.md"
 
 [tool.poetry.dependencies]
 python = ">=3.11,<4.0"
@@ -105,7 +105,7 @@ line-length = 100
 target-version = ["py311"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --cov=neva --cov-report=term-missing --cov-report=xml --cov-report=html --cov-fail-under=80"
+addopts = "-ra --cov=hiyal --cov-report=term-missing --cov-report=xml --cov-report=html --cov-fail-under=80"
 testpaths = ["tests"]
 # Bound every test so a hang fails the job instead of burning the CI limit.
 timeout = 120
@@ -115,7 +115,7 @@ timeout_method = "thread"
 profile = "black"
 line_length = 100
 combine_as_imports = true
-known_first_party = ["neva"]
+known_first_party = ["hiyal"]
 
 [tool.flake8]
 max-line-length = 100
@@ -132,13 +132,13 @@ strict = false
 follow_imports = "silent"
 show_error_codes = true
 plugins = []
-files = ["neva"]
+files = ["hiyal"]
 
 # Ratchet: modules that already pass under stricter flags. Widen the module
 # list as remaining modules are cleaned up rather than flipping these flags on
 # globally.
 [[tool.mypy.overrides]]
-module = ["neva.tools.*", "neva.utils.reproducibility"]
+module = ["hiyal.tools.*", "hiyal.utils.reproducibility"]
 disallow_untyped_defs = true
 warn_unused_ignores = true
 

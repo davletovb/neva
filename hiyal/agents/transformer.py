@@ -1,0 +1,117 @@
+"""Transformer-based agent implementation."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+
+from hiyal.agents.base import AIAgent, LLMBackend
+from hiyal.memory import MemoryModule
+from hiyal.utils.caching import LLMCache
+from hiyal.utils.exceptions import BackendUnavailableError
+from hiyal.utils.safety import PromptValidator
+
+if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
+    from hiyal.tools.guard import ToolGuard
+
+try:  # pragma: no cover - optional dependency
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
+except Exception:  # pragma: no cover - handled at runtime
+    AutoModelForSeq2SeqLM = cast(Any, None)
+    AutoTokenizer = cast(Any, None)
+
+
+class TransformerAgent(AIAgent):
+    """Agent powered by a Hugging Face transformer model."""
+
+    def __init__(
+        self,
+        model_name: str = "t5-small",
+        *,
+        name: Optional[str] = None,
+        llm_backend: Optional[LLMBackend] = None,
+        memory: Optional[MemoryModule] = None,
+        cache: Optional[LLMCache] = None,
+        model_loader: Optional[Callable[[str], object]] = None,
+        tokenizer_loader: Optional[Callable[[str], object]] = None,
+        prompt_validator: Optional[PromptValidator] = None,
+        tool_guard: Optional["ToolGuard"] = None,
+    ) -> None:
+        super().__init__(
+            name=name,
+            llm_backend=llm_backend,
+            memory=memory,
+            cache=cache,
+            prompt_validator=prompt_validator,
+            tool_guard=tool_guard,
+        )
+        self.model_name = model_name
+        self._model_loader = model_loader
+        self._tokenizer_loader = tokenizer_loader
+        self._model: Optional[Any] = None
+        self._tokenizer: Optional[Any] = None
+
+    def _load_transformer(self) -> None:
+        if self.llm_backend is not None:
+            return
+        if self._model is not None and self._tokenizer is not None:
+            return
+
+        loader = self._model_loader
+        tokenizer_loader = self._tokenizer_loader
+
+        if loader is None or tokenizer_loader is None:
+            if AutoModelForSeq2SeqLM is None or AutoTokenizer is None:
+                raise BackendUnavailableError(
+                    "Transformers library is not available. Provide an ``llm_backend`` "
+                    "or install `transformers` to use TransformerAgent."
+                )
+
+            loader = cast(Callable[[str], Any], AutoModelForSeq2SeqLM.from_pretrained)
+            tokenizer_loader = cast(Callable[[str], Any], AutoTokenizer.from_pretrained)
+
+        actual_loader = cast(Callable[[str], Any], loader)
+        actual_tokenizer_loader = cast(Callable[[str], Any], tokenizer_loader)
+
+        self._model = actual_loader(self.model_name)
+        self._tokenizer = actual_tokenizer_loader(self.model_name)
+
+    def replayable_backend(self, *, cancel_event=None):
+        """Return an explicit backend for either custom or local Transformer generation."""
+
+        del cancel_event
+        if self.llm_backend is not None:
+            return self._wrap_model_backend(self.llm_backend)
+
+        self._load_transformer()
+        if self._model is None or self._tokenizer is None:
+            raise BackendUnavailableError(
+                "Transformer model components failed to load; provide an llm_backend "
+                "or ensure the transformers dependencies are available."
+            )
+
+        model = self._model
+        tokenizer = self._tokenizer
+
+        def _generate(prompt: str) -> str:
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True)
+            output_tokens = model.generate(**inputs, max_length=200)
+            return tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+
+        return self._wrap_model_backend(_generate)
+
+    def generate_model_output(self, prompt: str) -> str:
+        """Generate from an already composed prompt without adding agent context."""
+
+        validated_prompt = self.prompt_validator.validate(prompt)
+        cached = self._cache_lookup(validated_prompt)
+        if cached is not None:
+            return cached
+        response = self.replayable_backend()(validated_prompt)
+        self._cache_store(validated_prompt, response)
+        return response
+
+    def respond(self, message: str) -> str:
+        return self.generate_model_output(self.prepare_prompt(message))
+
+
+__all__ = ["TransformerAgent"]

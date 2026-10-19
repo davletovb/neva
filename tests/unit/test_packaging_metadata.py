@@ -16,7 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 REQUIREMENTS_OPTIONAL = REPO_ROOT / "requirements-optional.txt"
-PACKAGE_ROOT = REPO_ROOT / "neva"
+PACKAGE_ROOT = REPO_ROOT / "hiyal"
 
 # Distribution name -> the module that must appear in an import statement or an
 # `importlib.import_module(...)` call. A new optional dependency must be added
@@ -38,7 +38,7 @@ IMPORT_NAME = {
 }
 
 # Optional dependencies that are deliberately pinned without a direct import in
-# `neva/`, with the reason they are declared. Everything else must be imported.
+# `hiyal/`, with the reason they are declared. Everything else must be imported.
 PINNED_WITHOUT_DIRECT_IMPORT = {
     "torch": "runtime backend required by the declared transformers extra",
     "httpx": "compatibility pin for the declared Anthropic SDK client",

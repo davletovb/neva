@@ -1,4 +1,4 @@
-"""Sphinx configuration for the Neva documentation."""
+"""Sphinx configuration for the Hiyal documentation."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-project = "Neva"
-author = "Neva Contributors"
+project = "Hiyal"
+author = "Hiyal Contributors"
 current_year = datetime.datetime.now().year
 copyright = f"{current_year}, {author}"
 
 try:
-    release = metadata.version("neva")
+    release = metadata.version("hiyal")
 except (
     metadata.PackageNotFoundError
 ):  # pragma: no cover - metadata unavailable when building locally

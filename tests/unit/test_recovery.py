@@ -5,13 +5,13 @@ import threading
 
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.schedulers import RoundRobinScheduler
-from neva.utils.exceptions import CircuitOpenError, RateLimiterCancelledError, SchedulingError
-from neva.utils.failures import FailureLog, FailureRecord
-from neva.utils.recovery import RecoveryPolicy
-from neva.utils.safety import CircuitBreaker
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.utils.exceptions import CircuitOpenError, RateLimiterCancelledError, SchedulingError
+from hiyal.utils.failures import FailureLog, FailureRecord
+from hiyal.utils.recovery import RecoveryPolicy
+from hiyal.utils.safety import CircuitBreaker
 
 
 class FlakyScheduler(RoundRobinScheduler):
@@ -174,7 +174,7 @@ def test_recovery_backoff_is_exponential(monkeypatch):
             raise RuntimeError("temporary")
         return "ok"
 
-    monkeypatch.setattr("neva.environments.base.sleep", delays.append)
+    monkeypatch.setattr("hiyal.environments.base.sleep", delays.append)
     env = Environment(
         RoundRobinScheduler(),
         recovery_policy=RecoveryPolicy(

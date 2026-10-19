@@ -16,9 +16,9 @@ from examples.showcase_common import (
     make_persona_backend,
     run_simulation,
 )
-from neva.agents import AgentManager
-from neva.schedulers import RoundRobinScheduler
-from neva.tools import WikipediaTool
+from hiyal.agents import AgentManager
+from hiyal.schedulers import RoundRobinScheduler
+from hiyal.tools import WikipediaTool
 
 
 class ResearchLabEnvironment(TranscriptEnvironment):

@@ -8,9 +8,9 @@ Sphinx's autodoc extension.
    :toctree: reference/generated
    :recursive:
 
-   neva.agents
-   neva.environments
-   neva.schedulers
-   neva.memory
-   neva.tools
-   neva.utils
+   hiyal.agents
+   hiyal.environments
+   hiyal.schedulers
+   hiyal.memory
+   hiyal.tools
+   hiyal.utils

@@ -8,10 +8,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import requests
 
-from neva.agents import GPTAgent
-from neva.environments.base import Environment
-from neva.schedulers.round_robin import RoundRobinScheduler
-from neva.utils.exceptions import BackendError
+from hiyal.agents import GPTAgent
+from hiyal.environments.base import Environment
+from hiyal.schedulers.round_robin import RoundRobinScheduler
+from hiyal.utils.exceptions import BackendError
 
 
 @pytest.fixture

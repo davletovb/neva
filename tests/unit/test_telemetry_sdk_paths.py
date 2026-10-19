@@ -14,8 +14,8 @@ import logging
 
 import pytest
 
-from neva.utils.exceptions import MissingDependencyError
-from neva.utils.observability.telemetry import (
+from hiyal.utils.exceptions import MissingDependencyError
+from hiyal.utils.observability.telemetry import (
     TelemetryManager,
     _estimate_tokens,
     _extract_reasoning_steps,
@@ -25,7 +25,7 @@ from neva.utils.observability.telemetry import (
     get_telemetry,
     reset_telemetry,
 )
-from neva.utils.state_management import ConversationState, ConversationTurn
+from hiyal.utils.state_management import ConversationState, ConversationTurn
 
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
@@ -66,7 +66,7 @@ def test_declared_observability_versions_load_the_real_sdk():
 
 def test_owned_providers_attach_a_logging_handler_and_shut_down():
     telemetry = TelemetryManager(
-        service_name="neva-tests",
+        service_name="hiyal-tests",
         resource_attributes={"deployment.environment": "test"},
     )
 
@@ -98,9 +98,9 @@ def test_owned_providers_attach_a_logging_handler_and_shut_down():
         tool_calls=[
             {
                 "name": "search",
-                "response": "neva project",
+                "response": "hiyal project",
                 "error": None,
-                "arguments": {"query": "neva"},
+                "arguments": {"query": "hiyal"},
                 "duration": 0.05,
             }
         ],
@@ -122,8 +122,8 @@ def test_owned_providers_attach_a_logging_handler_and_shut_down():
         agent_name="agent-alpha",
         tool_name="search",
         duration=0.05,
-        arguments={"query": "neva"},
-        output="neva project",
+        arguments={"query": "hiyal"},
+        output="hiyal project",
     )
     telemetry.record_reasoning_step(
         conversation_id="conversation-sdk",
@@ -160,8 +160,8 @@ def test_injected_sdk_components_receive_exported_telemetry():
     logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
 
     telemetry = TelemetryManager(
-        tracer=tracer_provider.get_tracer("neva-tests"),
-        meter=meter_provider.get_meter("neva-tests"),
+        tracer=tracer_provider.get_tracer("hiyal-tests"),
+        meter=meter_provider.get_meter("hiyal-tests"),
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
@@ -185,7 +185,7 @@ def test_injected_sdk_components_receive_exported_telemetry():
     telemetry.shutdown()
 
     span_names = {span.name for span in span_exporter.get_finished_spans()}
-    assert {"neva.conversation", "neva.agent.turn"} <= span_names
+    assert {"hiyal.conversation", "hiyal.agent.turn"} <= span_names
 
     metrics_data = metric_reader.get_metrics_data()
     metric_names = {
@@ -194,7 +194,7 @@ def test_injected_sdk_components_receive_exported_telemetry():
         for scope_metric in resource_metric.scope_metrics
         for metric in scope_metric.metrics
     }
-    assert {"neva.agent.response.latency", "neva.llm.total.tokens"} <= metric_names
+    assert {"hiyal.agent.response.latency", "hiyal.llm.total.tokens"} <= metric_names
 
     log_bodies = [
         getattr(record, "log_record", record).body for record in log_exporter.get_finished_logs()
@@ -207,8 +207,8 @@ def test_fallback_instrumentation_when_opentelemetry_is_unavailable(monkeypatch)
     def missing() -> None:
         raise MissingDependencyError("opentelemetry unavailable")
 
-    monkeypatch.setattr("neva.utils.observability.telemetry._require_opentelemetry", missing)
-    telemetry = TelemetryManager(service_name="neva-fallback")
+    monkeypatch.setattr("hiyal.utils.observability.telemetry._require_opentelemetry", missing)
+    telemetry = TelemetryManager(service_name="hiyal-fallback")
 
     assert telemetry._trace_api is None and telemetry._metrics_api is None
     assert telemetry._tracer_provider is None and telemetry._logging_handler is None
@@ -253,7 +253,7 @@ def test_fallback_instrumentation_when_opentelemetry_is_unavailable(monkeypatch)
         agent_name="agent-gamma",
         tool_name="search",
         duration=0.01,
-        output="neva project",
+        output="hiyal project",
     )
     telemetry.record_reasoning_step(
         conversation_id="conversation-fallback",
@@ -265,15 +265,20 @@ def test_fallback_instrumentation_when_opentelemetry_is_unavailable(monkeypatch)
     telemetry.shutdown()
 
     spans = dict(telemetry._tracer.started)
-    assert set(spans) == {"neva.conversation", "neva.agent.turn", "neva.llm.call", "neva.tool.call"}
-    conversation_span = spans["neva.conversation"]
+    assert set(spans) == {
+        "hiyal.conversation",
+        "hiyal.agent.turn",
+        "hiyal.llm.call",
+        "hiyal.tool.call",
+    }
+    conversation_span = spans["hiyal.conversation"]
     assert conversation_span.attributes["agent.role"] == "analyst"
     assert conversation_span.ended
-    agent_span = spans["neva.agent.turn"]
+    agent_span = spans["hiyal.agent.turn"]
     assert [name for name, _ in agent_span.events][:2] == ["llm.prompt", "llm.completion"]
     assert any(name == "agent.reasoning" for name, _ in agent_span.events)
-    assert telemetry._meter.histograms["neva.agent.response.latency"].records
-    assert telemetry._meter.counters["neva.tool.invocations"].records
+    assert telemetry._meter.histograms["hiyal.agent.response.latency"].records
+    assert telemetry._meter.counters["hiyal.tool.invocations"].records
     assert telemetry._structured_logger.records[-1][0] == "reasoning_step"
 
 
@@ -323,14 +328,14 @@ def test_reconfiguring_exports_through_the_new_manager():
     first.record_agent_registration(conversation_id="first", agent_name="agent-first")
     first.end_conversation("first")
     first.shutdown()
-    assert [span.name for span in first_exporter.get_finished_spans()] == ["neva.conversation"]
+    assert [span.name for span in first_exporter.get_finished_spans()] == ["hiyal.conversation"]
 
     second_exporter = InMemorySpanExporter()
     second = configure_telemetry(span_exporter=second_exporter)
     second.record_agent_registration(conversation_id="second", agent_name="agent-second")
     second.end_conversation("second")
     second.shutdown()
-    assert [span.name for span in second_exporter.get_finished_spans()] == ["neva.conversation"]
+    assert [span.name for span in second_exporter.get_finished_spans()] == ["hiyal.conversation"]
     assert len(first_exporter.get_finished_spans()) == 1
 
     reset_telemetry()
@@ -339,7 +344,7 @@ def test_reconfiguring_exports_through_the_new_manager():
     third.record_agent_registration(conversation_id="third", agent_name="agent-third")
     third.end_conversation("third")
     third.shutdown()
-    assert [span.name for span in third_exporter.get_finished_spans()] == ["neva.conversation"]
+    assert [span.name for span in third_exporter.get_finished_spans()] == ["hiyal.conversation"]
 
 
 def test_configure_telemetry_shuts_down_the_previous_global():

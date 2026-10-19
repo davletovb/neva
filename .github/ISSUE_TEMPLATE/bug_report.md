@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a defect in Neva
+about: Report a defect in Hiyal
 title: "[bug] "
 labels: bug
 ---
@@ -19,7 +19,7 @@ labels: bug
 
 **Environment**
 
-- Neva version or commit:
+- Hiyal version or commit:
 - Python version:
 - Installed extras (`tools`, `providers`, `memory`, `observability`, ...):
 - Operating system:

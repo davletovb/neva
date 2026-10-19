@@ -3,9 +3,9 @@ import types
 
 import pytest
 
-from neva.agents import GPTAgent, TransformerAgent
-from neva.utils.caching import LLMCache
-from neva.utils.exceptions import CacheConfigurationError
+from hiyal.agents import GPTAgent, TransformerAgent
+from hiyal.utils.caching import LLMCache
+from hiyal.utils.exceptions import CacheConfigurationError
 
 # Ensure optional dependencies used by models are stubbed for the test run.
 openai_stub = types.ModuleType("openai")

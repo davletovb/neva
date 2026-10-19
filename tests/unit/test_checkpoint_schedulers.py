@@ -1,8 +1,8 @@
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import Environment
-from neva.schedulers import (
+from hiyal.agents import TransformerAgent
+from hiyal.environments import Environment
+from hiyal.schedulers import (
     EventDrivenScheduler,
     LeastRecentlyUsedScheduler,
     PriorityScheduler,
@@ -10,7 +10,7 @@ from neva.schedulers import (
     RoundRobinScheduler,
     WeightedRandomScheduler,
 )
-from neva.utils.state_management import SimulationSnapshot
+from hiyal.utils.state_management import SimulationSnapshot
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,9 @@
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.environments import BasicEnvironment, Environment
-from neva.schedulers import EventDrivenScheduler, RoundRobinScheduler
-from neva.utils.exceptions import SchedulingError
+from hiyal.agents import TransformerAgent
+from hiyal.environments import BasicEnvironment, Environment
+from hiyal.schedulers import EventDrivenScheduler, RoundRobinScheduler
+from hiyal.utils.exceptions import SchedulingError
 
 
 def test_basic_environment_exposes_error_policy():

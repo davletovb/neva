@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from neva.agents import GPTAgent, TransformerAgent
-from neva.agents.base import Tool
-from neva.tools import ArgumentSchema, ArgumentSpec, ToolGuard, ToolLoopConfig, run_tool_loop
-from neva.utils.exceptions import ToolLoopConfigurationError, ToolLoopLimitError
+from hiyal.agents import GPTAgent, TransformerAgent
+from hiyal.agents.base import Tool
+from hiyal.tools import ArgumentSchema, ArgumentSpec, ToolGuard, ToolLoopConfig, run_tool_loop
+from hiyal.utils.exceptions import ToolLoopConfigurationError, ToolLoopLimitError
 
 
 class EchoTool(Tool):
@@ -136,7 +136,7 @@ def test_gpt_default_tool_loop_model_path_excludes_existing_history(monkeypatch)
         sent.append(json)
         return Response()
 
-    monkeypatch.setattr("neva.agents.gpt.requests.post", fake_post)
+    monkeypatch.setattr("hiyal.agents.gpt.requests.post", fake_post)
     agent = GPTAgent(
         api_key="test-key",
         provider="openai",

@@ -2,8 +2,8 @@ import threading
 
 import pytest
 
-from neva.utils import safety
-from neva.utils.exceptions import (
+from hiyal.utils import safety
+from hiyal.utils.exceptions import (
     CircuitBreakerConfigurationError,
     CircuitOpenError,
     PromptValidationError,
@@ -163,7 +163,7 @@ def test_rate_limiter_fifo_order_under_contention(monkeypatch):
 
 
 def test_rate_limiter_lock_wait_is_cancellable():
-    from neva.utils.exceptions import RateLimiterCancelledError
+    from hiyal.utils.exceptions import RateLimiterCancelledError
 
     limiter = safety.RateLimiter(rate=1, per=60)
     cancel = threading.Event()
