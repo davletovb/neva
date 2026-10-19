@@ -92,7 +92,9 @@ async fn launch() -> Result<(), String> {
             trial.checkpoint()?;
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
-                trial.store.sequence(), trial.store.world().total, trial.store.chain_head()
+                trial.store.sequence(),
+                trial.store.world().total,
+                trial.store.chain_head()
             );
         }
         "resume" => {
@@ -113,7 +115,9 @@ async fn launch() -> Result<(), String> {
             trial.checkpoint()?;
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
-                trial.store.sequence(), trial.store.world().total, trial.store.chain_head()
+                trial.store.sequence(),
+                trial.store.world().total,
+                trial.store.chain_head()
             );
         }
         "inspect" | "validate" => {
@@ -136,7 +140,9 @@ async fn launch() -> Result<(), String> {
             } else {
                 println!(
                     "valid {} events and {} effects; hash={}",
-                    store.sequence(), ledger.receipt_count(), store.chain_head()
+                    store.sequence(),
+                    ledger.receipt_count(),
+                    store.chain_head()
                 );
             }
         }

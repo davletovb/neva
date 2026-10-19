@@ -125,7 +125,8 @@ impl ReplayBackend {
             .captured
             .get(key)
             .ok_or("missing keyed replay effect")?;
-        if existing.content_hash != existing.compute_hash()? || &existing.spec != spec
+        if existing.content_hash != existing.compute_hash()?
+            || &existing.spec != spec
             || spec.key(
                 &key.trial_id,
                 key.logical_step,
@@ -207,8 +208,12 @@ impl EffectJournal {
         Self::open(dir)
     }
 
-    pub fn receipt_count(&self) -> usize { self.receipts.len() }
-    pub fn receipts(&self) -> &BTreeMap<EffectCallKey, Receipt> { &self.receipts }
+    pub fn receipt_count(&self) -> usize {
+        self.receipts.len()
+    }
+    pub fn receipts(&self) -> &BTreeMap<EffectCallKey, Receipt> {
+        &self.receipts
+    }
 
     fn append(&mut self, mut receipt: Receipt) -> Result<Receipt, String> {
         if self.poisoned {
@@ -296,8 +301,8 @@ impl EffectJournal {
                         EffectSpec::Model(m) => (m.provider.clone(), Some(m.model.clone())),
                         EffectSpec::Tool { name, .. } => (format!("tool:{name}"), None),
                     };
-                    let charged = matches!(response, EffectResult::Model { .. })
-                        && provider != "scripted";
+                    let charged =
+                        matches!(response, EffectResult::Model { .. }) && provider != "scripted";
                     Ok::<_, String>(Receipt {
                         key,
                         spec,
@@ -455,24 +460,33 @@ mod effect_integrity_tests {
 
     #[tokio::test]
     async fn tampered_model_receipt_fails_strict_replay() {
-        let path = std::env::temp_dir().join(format!(
-            "hiyal-effect-integrity-{}", std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("hiyal-effect-integrity-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         let mut journal = EffectJournal::open(&path).unwrap();
         let request = sample_request("hello");
         let key = request.key("trial", 0, AgentId(0), 0).unwrap();
-        journal.resolve_all(
-            vec![(key, request)], Arc::new(ScriptedBackend),
-            1, Duration::from_secs(2), false,
-        ).await.unwrap();
+        journal
+            .resolve_all(
+                vec![(key, request)],
+                Arc::new(ScriptedBackend),
+                1,
+                Duration::from_secs(2),
+                false,
+            )
+            .await
+            .unwrap();
         drop(journal);
         let file = path.join("effects.jsonl");
         let original = std::fs::read_to_string(&file).unwrap();
         let mut value: serde_json::Value = serde_json::from_str(original.trim()).unwrap();
         value["result"]["payload"]["content"] = "forged".into();
-        std::fs::write(&file, format!("{}\n", serde_json::to_string(&value).unwrap())).unwrap();
+        std::fs::write(
+            &file,
+            format!("{}\n", serde_json::to_string(&value).unwrap()),
+        )
+        .unwrap();
         assert!(EffectJournal::open_existing(&path).is_err());
         std::fs::remove_dir_all(&path).unwrap();
     }

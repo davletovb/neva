@@ -516,18 +516,26 @@ mod tests {
         }
         {
             let mut trial = Trial::resume(
-                &path, "counter", Policy { effects: false },
-                Arc::new(ScriptedBackend), false,
-            ).unwrap();
+                &path,
+                "counter",
+                Policy { effects: false },
+                Arc::new(ScriptedBackend),
+                false,
+            )
+            .unwrap();
             let entry = trial.step().await.unwrap();
             assert!(matches!(entry, Step::Accepted(ref e) if e.actor == AgentId(2)));
             trial.resume_actor(AgentId(0)).unwrap();
             trial.checkpoint().unwrap();
         }
         let verified = Trial::resume(
-            &path, "counter", Policy { effects: false },
-            Arc::new(ScriptedBackend), false,
-        ).unwrap();
+            &path,
+            "counter",
+            Policy { effects: false },
+            Arc::new(ScriptedBackend),
+            false,
+        )
+        .unwrap();
         assert_eq!(verified.store.logical_step, 2);
         drop(verified);
         std::fs::remove_dir_all(path).unwrap();
@@ -543,9 +551,13 @@ mod tests {
         std::fs::write(path.join("snapshot.tmp"), b"abandoned partial snapshot").unwrap();
         {
             let trial = Trial::resume(
-                &path, "counter", Policy { effects: false },
-                Arc::new(ScriptedBackend), false,
-            ).unwrap();
+                &path,
+                "counter",
+                Policy { effects: false },
+                Arc::new(ScriptedBackend),
+                false,
+            )
+            .unwrap();
             assert!(!path.join("snapshot.tmp").exists());
             trial.checkpoint().unwrap();
         }

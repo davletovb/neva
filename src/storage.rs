@@ -392,8 +392,11 @@ where
         let mut sched = state.schedule.clone();
         let mut rng = state.streams.clone();
         if let Outcome::Control { paused } = &event.outcome {
-            if *paused { sched.pause(event.actor)?; }
-            else { sched.resume(event.actor)?; }
+            if *paused {
+                sched.pause(event.actor)?;
+            } else {
+                sched.resume(event.actor)?;
+            }
             if sched != event.after_schedule || rng != event.after_streams {
                 return Err("logged control change differs from scheduler state".into());
             }
@@ -492,18 +495,38 @@ where
     }
 
     /// Read-only views: consumers cannot corrupt authoritative state or IDs.
-    pub fn genesis(&self) -> &Genesis<W> { &self.genesis }
-    pub fn world(&self) -> &W { &self.world }
-    pub fn sequence(&self) -> u64 { self.sequence }
-    pub fn logical_step(&self) -> u64 { self.logical_step }
-    pub fn chain_head(&self) -> &str { &self.chain_head }
-    pub fn log_bytes(&self) -> u64 { self.log_bytes }
+    pub fn genesis(&self) -> &Genesis<W> {
+        &self.genesis
+    }
+    pub fn world(&self) -> &W {
+        &self.world
+    }
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub fn logical_step(&self) -> u64 {
+        self.logical_step
+    }
+    pub fn chain_head(&self) -> &str {
+        &self.chain_head
+    }
+    pub fn log_bytes(&self) -> u64 {
+        self.log_bytes
+    }
 
     pub fn set_paused(&mut self, actor: AgentId, paused: bool) -> Result<(), String> {
         let mut scheduled = self.schedule.clone();
-        if paused { scheduled.pause(actor)?; }
-        else { scheduled.resume(actor)?; }
-        self.append(actor, Outcome::Control { paused }, scheduled, self.streams.clone())?;
+        if paused {
+            scheduled.pause(actor)?;
+        } else {
+            scheduled.resume(actor)?;
+        }
+        self.append(
+            actor,
+            Outcome::Control { paused },
+            scheduled,
+            self.streams.clone(),
+        )?;
         Ok(())
     }
 

@@ -79,7 +79,8 @@ async fn run() -> Result<(), String> {
                 trial.checkpoint()?;
                 println!(
                     "{} {}",
-                    trial.store.world().total_actions, trial.store.chain_head()
+                    trial.store.world().total_actions,
+                    trial.store.chain_head()
                 );
             }
             "resume" => {
@@ -94,14 +95,17 @@ async fn run() -> Result<(), String> {
                 trial.checkpoint()?;
                 println!(
                     "{} {}",
-                    trial.store.world().total_actions, trial.store.chain_head()
+                    trial.store.world().total_actions,
+                    trial.store.chain_head()
                 );
             }
             "inspect" => {
                 let store: Store<Society, u64> = Store::open(path)?;
                 println!(
                     "actions={} events={} hash={}",
-                    store.world().total_actions, store.sequence(), store.chain_head()
+                    store.world().total_actions,
+                    store.sequence(),
+                    store.chain_head()
                 );
             }
             _ => return Err("use run|resume|inspect <dir> [steps]".into()),
