@@ -265,7 +265,12 @@ def test_fallback_instrumentation_when_opentelemetry_is_unavailable(monkeypatch)
     telemetry.shutdown()
 
     spans = dict(telemetry._tracer.started)
-    assert set(spans) == {"hiyal.conversation", "hiyal.agent.turn", "hiyal.llm.call", "hiyal.tool.call"}
+    assert set(spans) == {
+        "hiyal.conversation",
+        "hiyal.agent.turn",
+        "hiyal.llm.call",
+        "hiyal.tool.call",
+    }
     conversation_span = spans["hiyal.conversation"]
     assert conversation_span.attributes["agent.role"] == "analyst"
     assert conversation_span.ended

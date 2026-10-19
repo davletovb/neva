@@ -4,7 +4,12 @@ import pytest
 
 from hiyal.agents import TransformerAgent
 from hiyal.environments import Environment
-from hiyal.memory import AdaptiveConversationMemory, MemoryBudget, ShortTermMemory, VectorStoreMemory
+from hiyal.memory import (
+    AdaptiveConversationMemory,
+    MemoryBudget,
+    ShortTermMemory,
+    VectorStoreMemory,
+)
 from hiyal.schedulers import RoundRobinScheduler
 from hiyal.utils.state_management import SimulationSnapshot
 
