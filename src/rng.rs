@@ -51,7 +51,8 @@ impl Streams {
         let mut rng = ChaCha20Rng::from_seed(self.stream_seed(name));
         rng.set_word_pos(position);
         let value = rng.next_u64();
-        self.positions.insert(name.to_owned(), rng.get_word_pos().to_string());
+        self.positions
+            .insert(name.to_owned(), rng.get_word_pos().to_string());
         Ok(value)
     }
 
@@ -84,7 +85,12 @@ mod tests {
         let mut restored = snapshot;
         assert_eq!(next, restored.draw_u64("scheduler").unwrap());
         assert_ne!(first, next);
-        assert_ne!(Streams::new("trial".into(), 18).draw_u64("scheduler").unwrap(), first);
+        assert_ne!(
+            Streams::new("trial".into(), 18)
+                .draw_u64("scheduler")
+                .unwrap(),
+            first
+        );
     }
     #[test]
     fn bounded_sampling_is_valid() {

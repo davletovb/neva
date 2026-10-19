@@ -28,7 +28,12 @@ impl Schedule {
         if unique.len() != agents.len() {
             return Err("duplicate agent ID".into());
         }
-        Ok(Self { mode, agents, paused: BTreeSet::new(), cursor: 0 })
+        Ok(Self {
+            mode,
+            agents,
+            paused: BTreeSet::new(),
+            cursor: 0,
+        })
     }
 
     pub fn select(&mut self, streams: &mut Streams) -> Result<Option<AgentId>, String> {
@@ -47,19 +52,28 @@ impl Schedule {
                 Ok(None)
             }
             Scheduling::Random => {
-                let candidates: Vec<_> = self.agents.iter().filter(|a| !self.paused.contains(a)).copied().collect();
+                let candidates: Vec<_> = self
+                    .agents
+                    .iter()
+                    .filter(|a| !self.paused.contains(a))
+                    .copied()
+                    .collect();
                 let idx = streams.uniform_index("scheduler", candidates.len())?;
                 Ok(Some(candidates[idx]))
             }
         }
     }
     pub fn pause(&mut self, actor: AgentId) -> Result<(), String> {
-        if !self.agents.contains(&actor) { return Err("unknown actor".into()); }
+        if !self.agents.contains(&actor) {
+            return Err("unknown actor".into());
+        }
         self.paused.insert(actor);
         Ok(())
     }
     pub fn resume(&mut self, actor: AgentId) -> Result<(), String> {
-        if !self.agents.contains(&actor) { return Err("unknown actor".into()); }
+        if !self.agents.contains(&actor) {
+            return Err("unknown actor".into());
+        }
         self.paused.remove(&actor);
         Ok(())
     }
