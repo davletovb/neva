@@ -1,0 +1,8 @@
+# Built-in society, edited values are resolved at trial creation.
+name = "counter-demo"
+seed = 42
+actors = 3
+attempts = 20
+amount = 1
+scheduler = "random"
+model = false
