@@ -156,6 +156,7 @@ impl EffectJournal {
                 .open(&path)
                 .and_then(|f| f.sync_all())
                 .map_err(|e| e.to_string())?;
+            crate::storage::sync_trial_directory(dir.as_ref())?;
         }
         let raw = fs::read(&path).map_err(|e| e.to_string())?;
         let length = raw

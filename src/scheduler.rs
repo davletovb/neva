@@ -36,7 +36,19 @@ impl Schedule {
         })
     }
 
+    pub fn validate(&self) -> Result<(), String> {
+        if self.agents.is_empty() || self.cursor >= self.agents.len() {
+            return Err("invalid scheduler population/cursor".into());
+        }
+        let unique: BTreeSet<_> = self.agents.iter().copied().collect();
+        if unique.len() != self.agents.len() || !self.paused.is_subset(&unique) {
+            return Err("duplicate or unknown paused actor in scheduler".into());
+        }
+        Ok(())
+    }
+
     pub fn select(&mut self, streams: &mut Streams) -> Result<Option<AgentId>, String> {
+        self.validate()?;
         if self.agents.iter().all(|a| self.paused.contains(a)) {
             return Ok(None);
         }
@@ -76,5 +88,22 @@ impl Schedule {
         }
         self.paused.remove(&actor);
         Ok(())
+    }
+}
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn reject_corrupt_persisted_schedules_before_indexing() {
+        let mut s = Schedule::new(Scheduling::RoundRobin, vec![AgentId(0), AgentId(1)]).unwrap();
+        s.cursor = 7;
+        assert!(s.validate().is_err());
+        s.cursor = 0;
+        s.paused.insert(AgentId(123));
+        assert!(s.validate().is_err());
+        s.paused.clear();
+        s.agents.push(AgentId(1));
+        assert!(s.validate().is_err());
     }
 }

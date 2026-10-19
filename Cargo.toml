@@ -22,6 +22,9 @@ toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 
+[target.'cfg(windows)'.dependencies]
+atomicwrites = "0.4.4"
+
 [workspace]
 members = ["examples/custom_world"]
 resolver = "3"

@@ -203,7 +203,11 @@ fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         return Err(error.to_string());
     }
     drop(file);
-    if let Err(error) = fs::rename(&temporary, path) {
+    #[cfg(not(windows))]
+    let result = fs::rename(&temporary, path);
+    #[cfg(windows)]
+    let result = atomicwrites::replace_atomic(&temporary, path);
+    if let Err(error) = result {
         let _ = fs::remove_file(&temporary);
         return Err(error.to_string());
     }
@@ -227,6 +231,14 @@ impl Drop for WriterLock {
         let _ = fs::remove_file(&self.path);
     }
 }
+pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    File::open(dir).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
 fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
     let path = dir.join(".writer.lock");
     let file = OpenOptions::new()
@@ -257,11 +269,13 @@ where
         if genesis.initial_streams.trial != genesis.trial_id {
             return Err("stream/trial mismatch".into());
         }
+        genesis.initial_schedule.validate()?;
         let raw = stable_bytes(&genesis)?;
         save_atomic(&dir.join("manifest.json"), &raw)?;
         File::create(dir.join("events.jsonl"))
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())?;
+        sync_trial_directory(dir)?;
         Ok(Self {
             dir: dir.to_path_buf(),
             world: genesis.initial_world.clone(),
@@ -292,6 +306,7 @@ where
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
             return Err("unsupported manifest/trial schema".into());
         }
+        genesis.initial_schedule.validate()?;
         let mut projected = Projection {
             world: genesis.initial_world.clone(),
             schedule: genesis.initial_schedule.clone(),
@@ -306,36 +321,29 @@ where
             .rposition(|b| *b == b'\n')
             .map(|i| i + 1)
             .unwrap_or(0);
-        let mut checkpoints = Vec::new();
+        // Read the one snapshot *before* replay. Keep at most one matching projection,
+        // never a clone of every event's entire world.
+        let snap_path = dir.join("snapshot.json");
+        let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
+            Some(serde_json::from_slice(&fs::read(&snap_path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?)
+        } else { None };
+        let initial_projection = projected.clone();
+        let mut matched = if snapshot.as_ref().is_some_and(|s| s.log_bytes == 0) {
+            Some(initial_projection)
+        } else { None };
         let mut cursor = 0usize;
         for raw_line in data[..durable_length].split_inclusive(|b| *b == b'\n') {
             let entry: Entry<W, A> = serde_json::from_slice(raw_line)
                 .map_err(|e| format!("corrupt committed log: {e}"))?;
             Self::validate_entry(&genesis, &mut projected, &entry)?;
             cursor += raw_line.len();
-            checkpoints.push((cursor as u64, projected.clone()));
+            if snapshot.as_ref().is_some_and(|s| s.log_bytes == cursor as u64) {
+                matched = Some(projected.clone());
+            }
         }
-        // Compare snapshot against a fully independently replayed prefix.
-        let snap_path = dir.join("snapshot.json");
-        if snap_path.exists() {
-            let raw = fs::read(&snap_path).map_err(|e| e.to_string())?;
-            let snapshot: Snapshot<W> = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-            let expected = if snapshot.log_bytes == 0 {
-                Projection {
-                    world: genesis.initial_world.clone(),
-                    schedule: genesis.initial_schedule.clone(),
-                    streams: genesis.initial_streams.clone(),
-                    sequence: 0,
-                    logical_step: 0,
-                    chain_head: digest(&genesis)?,
-                }
-            } else {
-                checkpoints
-                    .iter()
-                    .find(|(offset, _)| *offset == snapshot.log_bytes)
-                    .map(|(_, projection)| projection.clone())
-                    .ok_or("snapshot offset not on a committed boundary")?
-            };
+        if let Some(snapshot) = snapshot {
+            let expected = matched.ok_or("snapshot offset not on a committed boundary")?;
             if snapshot.schema != SCHEMA
                 || snapshot.trial_id != genesis.trial_id
                 || snapshot.sequence != expected.sequence
@@ -389,6 +397,7 @@ where
         {
             return Err("log identity/hash/sequence mismatch".into());
         }
+        state.schedule.validate()?;
         let mut sched = state.schedule.clone();
         let mut rng = state.streams.clone();
         if let Outcome::Control { paused } = &event.outcome {

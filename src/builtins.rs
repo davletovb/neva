@@ -26,6 +26,7 @@ pub struct Increment {
     pub amount: u64,
     pub model: bool,
     pub model_id: String,
+    pub provider: String,
 }
 impl EffectPolicy<Counter> for Increment {
     fn requests(&self, actor: AgentId, obs: &u64) -> Result<Vec<EffectSpec>, String> {
@@ -35,7 +36,8 @@ impl EffectPolicy<Counter> for Increment {
                 return Err("scripted request must be a model".into());
             };
             message.model = self.model_id.clone();
-            message.provider = "openai-compatible".into();
+            message.resolved_model_version = None;
+            message.provider = self.provider.clone();
             Ok(vec![request])
         } else {
             Ok(vec![])
@@ -48,13 +50,11 @@ impl EffectPolicy<Counter> for Increment {
         Ok(self.amount)
     }
 }
-pub fn kind(amount: u64, model: bool, model_id: &str) -> Result<String, String> {
-    if model_id.is_empty() || model_id.contains(':') {
-        return Err("model_id must be non-empty and must not contain ':'".into());
+pub fn kind(amount: u64, model: bool, model_id: &str, provider: &str) -> Result<String, String> {
+    if model_id.is_empty() || model_id.contains(':') || !matches!(provider, "scripted" | "openai-compatible") {
+        return Err("invalid model or provider".into());
     }
-    Ok(format!(
-        "{KIND}:amount={amount}:model={model}:model_id={model_id}"
-    ))
+    Ok(format!("{KIND}:amount={amount}:model={model}:model_id={model_id}:provider={provider}"))
 }
 pub fn parse_kind(input: &str) -> Result<Increment, String> {
     let tail = input
@@ -80,12 +80,10 @@ pub fn parse_kind(input: &str) -> Result<Increment, String> {
         .ok_or("missing model_id")?
         .strip_prefix("model_id=")
         .ok_or("invalid model_id")?;
-    if parts.next().is_some() || model_id.is_empty() {
+    let provider = parts.next().ok_or("missing provider")?
+        .strip_prefix("provider=").ok_or("invalid provider")?;
+    if parts.next().is_some() || model_id.is_empty() || !matches!(provider, "scripted" | "openai-compatible") {
         return Err("invalid world kind".into());
     }
-    Ok(Increment {
-        amount,
-        model,
-        model_id: model_id.into(),
-    })
+    Ok(Increment { amount, model, model_id: model_id.into(), provider: provider.into() })
 }
