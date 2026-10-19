@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from neva.agents import TransformerAgent
-from neva.agents.base import TOOL_TEXT_ARGUMENT_KEYS, ToolCall
-from neva.tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
+from hiyal.agents import TransformerAgent
+from hiyal.agents.base import TOOL_TEXT_ARGUMENT_KEYS, ToolCall
+from hiyal.tools import MathTool, SummarizerTool, TranslatorTool, WikipediaTool
 
 
 def make_agent():
@@ -108,7 +108,7 @@ def test_builtin_schema_rejects_invalid_call_before_tool_execution():
 
 
 def test_builtin_call_tool_accepts_supported_payloads(monkeypatch):
-    import neva.tools.wikipedia as wikipedia_module
+    import hiyal.tools.wikipedia as wikipedia_module
 
     monkeypatch.setattr(
         wikipedia_module,

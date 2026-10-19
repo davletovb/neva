@@ -3,8 +3,8 @@ import threading
 
 import pytest
 
-from neva.agents import GPTAgent
-from neva.utils.exceptions import BackendError
+from hiyal.agents import GPTAgent
+from hiyal.utils.exceptions import BackendError
 
 
 def test_real_http_server_roundtrip_and_retry_classification():

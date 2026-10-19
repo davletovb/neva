@@ -11,10 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from neva.agents import GPTAgent
-from neva.agents.streaming import StreamInterruptedError
-from neva.utils.exceptions import BackendError, RateLimiterCancelledError
-from neva.utils.metrics import SpendBudget
+from hiyal.agents import GPTAgent
+from hiyal.agents.streaming import StreamInterruptedError
+from hiyal.utils.exceptions import BackendError, RateLimiterCancelledError
+from hiyal.utils.metrics import SpendBudget
 
 
 @pytest.fixture
@@ -247,7 +247,7 @@ def test_stream_telemetry_records_both_latencies(stream_server, monkeypatch):
         def record_agent_turn(self, **kwargs):
             pass
 
-    monkeypatch.setattr("neva.agents.gpt.get_telemetry", lambda: Telemetry())
+    monkeypatch.setattr("hiyal.agents.gpt.get_telemetry", lambda: Telemetry())
     event = list(_agent(url).stream_response("timed"))[-1]
     assert calls[0]["first_token_seconds"] == event.first_token_seconds
     assert calls[0]["latency"] == event.completion_seconds
@@ -423,7 +423,7 @@ def test_gemini_stream_adapter_and_usage(monkeypatch):
     )
     original = importlib.import_module
     monkeypatch.setattr(
-        "neva.agents.gpt._import_module",
+        "hiyal.agents.gpt._import_module",
         lambda name: module if name == "google.generativeai" else original(name),
     )
     agent = GPTAgent(api_key="test", provider="gemini", model="gemini-test", max_retries=0)

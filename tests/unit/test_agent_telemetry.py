@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from neva.agents.base import AIAgent
-from neva.environments.base import Environment
+from hiyal.agents.base import AIAgent
+from hiyal.environments.base import Environment
 
 
 class EchoAgent(AIAgent):
@@ -25,7 +25,7 @@ class DummyTelemetryCollector:
 
 def test_receive_emits_agent_turn(monkeypatch):
     telemetry = DummyTelemetryCollector()
-    monkeypatch.setattr("neva.agents.base.get_telemetry", lambda: telemetry)
+    monkeypatch.setattr("hiyal.agents.base.get_telemetry", lambda: telemetry)
 
     agent = EchoAgent(name="echo")
     env = Environment()
