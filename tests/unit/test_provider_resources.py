@@ -341,9 +341,9 @@ def test_legacy_provider_coordination_setting_and_new_precedence(tmp_path, monke
     monkeypatch.setenv("NEVA_PROVIDER_COORDINATION_DB", str(legacy))
     monkeypatch.delenv("HIYAL_PROVIDER_COORDINATION_DB", raising=False)
     first = shared_provider_resources(provider="openai", api_key="legacy-test")
-    assert first._state_path == legacy or str(first._state_path) == str(legacy)
+    assert first.state_path == legacy
 
     _clear_provider_resource_registry_for_tests()
     monkeypatch.setenv("HIYAL_PROVIDER_COORDINATION_DB", str(current))
     second = shared_provider_resources(provider="openai", api_key="new-test")
-    assert second._state_path == current or str(second._state_path) == str(current)
+    assert second.state_path == current
