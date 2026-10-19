@@ -37,3 +37,7 @@ results. Do **not** activate legacy GitHub Actions or Dependabot.
 
 The project may move on to R1 implementation in parallel, but **R0 is not
 verified/complete until these measurements and build checks are recorded**.
+
+The new [low-cost Rust CI policy](ci-budget.md) provides a narrow Rust build/test
+check on selected pull-request lifecycle events and version tags. It does not
+run Python benchmarks or replace the measured R0 evidence requirement.

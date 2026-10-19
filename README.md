@@ -37,5 +37,8 @@ before treating any prototypes as stable APIs.
 The prior implementation, tests, docs and historical (inactive) CI are under
 [`hiyal-python/`](hiyal-python/README.md). The new Rust workspace does not
 depend on it. The [Python benchmark harness](benchmarks/README.md) is used
-only to measure the legacy observer-on/off reference fairly. Historical CI
-and Dependabot configuration remain archived and inactive at repository root.
+only to measure the legacy observer-on/off reference fairly. The historical
+Python CI and Dependabot configuration remain archived and inactive. The
+[new Rust verification workflow](docs/ci-budget.md) is deliberately minimal:
+one Linux job on selected PR lifecycle events, an explicit manual request, or
+a version tag—not on every agent push.

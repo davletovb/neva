@@ -1,0 +1,75 @@
+# Deliberately separate from archived hiyal-python/.github/workflows/ci.yml.
+# One Linux smoke job, NO per-commit synchronize or main push triggers.
+name: Rust smoke (cost controlled)
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'fixtures/**'
+      - '.github/workflows/rust-smoke.yml'
+  workflow_dispatch:
+    inputs:
+      extended:
+        description: 'Run additional Clippy checks (manual verification)'
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-smoke-${{ github.head_ref || github.ref }}
+  # A stale PR/manual run should not consume more minutes. Never cancel a tag release.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  essential:
+    name: Rust essentials (Ubuntu)
+    # Draft PRs are cheap: GitHub does not allocate a runner to a skipped job.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Toolchain identity
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Rust workspace unit and integration tests
+        # R0 has no committed lockfile yet. When it is added, enforce it strictly.
+        run: |
+          if test -f Cargo.lock; then
+            cargo test --workspace --locked
+          else
+            cargo test --workspace
+          fi
+
+      - name: Standalone external-world smoke
+        run: |
+          cargo run --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
+          test "$(wc -l </tmp/hiyal-events.jsonl)" -eq 6
+
+      - name: Additional release/manual lint
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.extended) }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
