@@ -1,4 +1,4 @@
-"""Neva core package providing agents, environments, and schedulers."""
+"""Hiyal core package providing agents, environments, and schedulers."""
 
 from . import agents, environments, memory, schedulers, tools, utils
 

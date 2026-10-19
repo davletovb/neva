@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 from .base import MemoryModule, MemoryRecord
 from .budget import MemoryBudget

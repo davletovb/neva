@@ -13,19 +13,19 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 
-from neva.agents.base import AIAgent, LLMBackend
-from neva.agents.streaming import StreamEvent, StreamInterruptedError, StreamSession
-from neva.memory import MemoryModule
-from neva.utils.caching import LLMCache
-from neva.utils.context_budget import ModelContextBudget, RequestContent
-from neva.utils.exceptions import (
+from hiyal.agents.base import AIAgent, LLMBackend
+from hiyal.agents.streaming import StreamEvent, StreamInterruptedError, StreamSession
+from hiyal.memory import MemoryModule
+from hiyal.utils.caching import LLMCache
+from hiyal.utils.context_budget import ModelContextBudget, RequestContent
+from hiyal.utils.exceptions import (
     BackendError,
     CircuitOpenError,
     ConfigurationError,
     RateLimiterCancelledError,
     SpendBudgetExceededError,
 )
-from neva.utils.metrics import (
+from hiyal.utils.metrics import (
     CostTracker,
     ResponseTimeTracker,
     SpendBudget,
@@ -33,13 +33,13 @@ from neva.utils.metrics import (
     TokenUsageTracker,
     estimate_token_count,
 )
-from neva.utils.observability.telemetry import get_telemetry
-from neva.utils.provider_resources import (
+from hiyal.utils.observability.telemetry import get_telemetry
+from hiyal.utils.provider_resources import (
     ProviderPermit,
     ProviderResourceCoordinator,
     shared_provider_resources,
 )
-from neva.utils.safety import CircuitBreaker, RateLimiter
+from hiyal.utils.safety import CircuitBreaker, RateLimiter
 
 # Provider SDKs are imported lazily. Route them through a module-level alias so
 # tests can stub the resolver: patching ``importlib.import_module`` directly
@@ -48,7 +48,7 @@ from neva.utils.safety import CircuitBreaker, RateLimiter
 _import_module = importlib.import_module
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
-    from neva.tools.guard import ToolGuard
+    from hiyal.tools.guard import ToolGuard
 
 _DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
@@ -70,7 +70,7 @@ _CHAT_COMPLETION_URLS = {
 
 # ~6k tokens at 4 chars/token; leaves headroom for the current prompt and completion.
 _DEFAULT_MAX_CONTEXT_CHARS = 24000
-_RAW_PROMPT_MODE: ContextVar[bool] = ContextVar("neva_gpt_raw_prompt_mode", default=False)
+_RAW_PROMPT_MODE: ContextVar[bool] = ContextVar("hiyal_gpt_raw_prompt_mode", default=False)
 
 
 def _chat_completions_url(api_base: Optional[str], default_url: str) -> str:

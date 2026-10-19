@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from neva.environments.base import Environment
-from neva.schedulers.base import Scheduler
-from neva.utils.failures import FailureLog
-from neva.utils.recovery import RecoveryPolicy
+from hiyal.environments.base import Environment
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.failures import FailureLog
+from hiyal.utils.recovery import RecoveryPolicy
 
 
 class BasicEnvironment(Environment):

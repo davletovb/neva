@@ -1,4 +1,4 @@
-"""Core agent abstractions and coordination utilities for Neva."""
+"""Core agent abstractions and coordination utilities for Hiyal."""
 
 from __future__ import annotations
 
@@ -30,9 +30,9 @@ from typing import (
 )
 from uuid import uuid4
 
-from neva.memory import MemoryModule
-from neva.utils.caching import LLMCache
-from neva.utils.exceptions import (
+from hiyal.memory import MemoryModule
+from hiyal.utils.caching import LLMCache
+from hiyal.utils.exceptions import (
     AgentActionError,
     AgentCommunicationError,
     AgentCreationError,
@@ -42,16 +42,16 @@ from neva.utils.exceptions import (
     ToolNotFoundError,
     ToolSchemaConfigurationError,
 )
-from neva.utils.metrics import ResponseTimeTracker, batch_prompt_summary, profile_memory_usage
-from neva.utils.observability.telemetry import get_telemetry
-from neva.utils.safety import PromptValidator, sanitize_input
-from neva.utils.state_management import ConversationState
+from hiyal.utils.metrics import ResponseTimeTracker, batch_prompt_summary, profile_memory_usage
+from hiyal.utils.observability.telemetry import get_telemetry
+from hiyal.utils.safety import PromptValidator, sanitize_input
+from hiyal.utils.state_management import ConversationState
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
-    from neva.environments.base import Environment
-    from neva.tools.guard import ToolGuard
-    from neva.tools.loop import ToolLoopConfig, ToolLoopResult
-    from neva.utils.observability.observer import SimulationObserver
+    from hiyal.environments.base import Environment
+    from hiyal.tools.guard import ToolGuard
+    from hiyal.tools.loop import ToolLoopConfig, ToolLoopResult
+    from hiyal.utils.observability.observer import SimulationObserver
 
 
 @dataclass
@@ -110,7 +110,7 @@ class ToolResponse:
         return self.error is None
 
 
-_TOOL_USE_REENTRY: ContextVar[Tuple[int, ...]] = ContextVar("neva_tool_use_reentry", default=())
+_TOOL_USE_REENTRY: ContextVar[Tuple[int, ...]] = ContextVar("hiyal_tool_use_reentry", default=())
 
 
 class Tool(ABC):
@@ -122,7 +122,7 @@ class Tool(ABC):
 
         if implementation is None:
             inherited = getattr(cls, "use", None)
-            if inherited is Tool.use or getattr(inherited, "_neva_tool_wrapper", False):
+            if inherited is Tool.use or getattr(inherited, "_hiyal_tool_wrapper", False):
                 return
             implementation = inherited
 
@@ -139,7 +139,7 @@ class Tool(ABC):
                 return implementation(self, task)
             return Tool.use(self, task)
 
-        setattr(guarded_use, "_neva_tool_wrapper", True)
+        setattr(guarded_use, "_hiyal_tool_wrapper", True)
         setattr(cls, "use", guarded_use)
 
     def __init__(
@@ -234,7 +234,7 @@ class Tool(ABC):
         *,
         additional_guards: Sequence["ToolGuard"] = (),
     ) -> str:
-        from neva.tools.guard import _execute_with_guards
+        from hiyal.tools.guard import _execute_with_guards
 
         guards = []
         if self.tool_guard is not None:
@@ -513,7 +513,7 @@ class AIAgent(ABC):
         remain the single enforcement path.
         """
 
-        from neva.tools.loop import run_tool_loop
+        from hiyal.tools.loop import run_tool_loop
 
         return run_tool_loop(self, task, model=model, config=config)
 

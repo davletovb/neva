@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from neva.utils.exceptions import MemoryConfigurationError
+from hiyal.utils.exceptions import MemoryConfigurationError
 
 from .adaptive import AdaptiveConversationMemory
 from .base import MemoryModule, MemoryRecord

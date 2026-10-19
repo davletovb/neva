@@ -1,4 +1,4 @@
-"""Environment implementations for Neva simulations."""
+"""Environment implementations for Hiyal simulations."""
 
 from .base import Environment
 from .basic import BasicEnvironment

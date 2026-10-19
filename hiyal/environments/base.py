@@ -8,13 +8,13 @@ from time import perf_counter, sleep, time
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from neva.agents.base import AIAgent
-from neva.schedulers.base import Scheduler
-from neva.utils.exceptions import SchedulingError
-from neva.utils.failures import FailureLog, FailureRecord
-from neva.utils.observability.telemetry import get_telemetry
-from neva.utils.recovery import RecoveryPolicy, RecoveryState
-from neva.utils.state_management import (
+from hiyal.agents.base import AIAgent
+from hiyal.schedulers.base import Scheduler
+from hiyal.utils.exceptions import SchedulingError
+from hiyal.utils.failures import FailureLog, FailureRecord
+from hiyal.utils.observability.telemetry import get_telemetry
+from hiyal.utils.recovery import RecoveryPolicy, RecoveryState
+from hiyal.utils.state_management import (
     CheckpointLimits,
     ConversationState,
     SimulationSnapshot,
@@ -112,9 +112,9 @@ class Environment:
         optional_libraries: bool = True,
         set_child_hash_seed: bool = False,
     ):
-        """Seed Neva-owned RNGs, optionally setting child-process hash seeding."""
+        """Seed Hiyal-owned RNGs, optionally setting child-process hash seeding."""
 
-        from neva.utils.reproducibility import seed_everything
+        from hiyal.utils.reproducibility import seed_everything
 
         return seed_everything(
             seed,
@@ -416,7 +416,7 @@ class Environment:
         limits: Optional[CheckpointLimits] = None,
     ) -> SimulationSnapshot:
         """Capture a versioned snapshot of the environment and agent state."""
-        from neva.utils.checkpoint import capture_runtime
+        from hiyal.utils.checkpoint import capture_runtime
 
         snapshot = create_snapshot(
             environment_state=self.state,
@@ -437,7 +437,7 @@ class Environment:
         """Restore state from ``snapshot``, validating its limits first."""
         from copy import deepcopy
 
-        from neva.utils.checkpoint import restore_runtime
+        from hiyal.utils.checkpoint import restore_runtime
 
         snapshot.validate_limits(limits)
         if snapshot.version == 2:

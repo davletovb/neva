@@ -9,7 +9,7 @@ from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Callable, Iterator, Optional
 
-from neva.utils.exceptions import BackendError, RateLimiterCancelledError
+from hiyal.utils.exceptions import BackendError, RateLimiterCancelledError
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ class StreamSession:
                     pass
 
         threading.Thread(
-            target=lambda: self._context.run(run), daemon=True, name="neva-stream"
+            target=lambda: self._context.run(run), daemon=True, name="hiyal-stream"
         ).start()
 
     def _accepted(self, item: object) -> StreamEvent:

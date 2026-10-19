@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
-from neva.agents.base import AIAgent, LLMBackend
-from neva.memory import MemoryModule
-from neva.utils.caching import LLMCache
-from neva.utils.exceptions import BackendUnavailableError
-from neva.utils.safety import PromptValidator
+from hiyal.agents.base import AIAgent, LLMBackend
+from hiyal.memory import MemoryModule
+from hiyal.utils.caching import LLMCache
+from hiyal.utils.exceptions import BackendUnavailableError
+from hiyal.utils.safety import PromptValidator
 
 if TYPE_CHECKING:  # pragma: no cover - import used only for typing.
-    from neva.tools.guard import ToolGuard
+    from hiyal.tools.guard import ToolGuard
 
 try:  # pragma: no cover - optional dependency
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
