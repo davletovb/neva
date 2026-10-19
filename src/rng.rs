@@ -50,7 +50,9 @@ impl Streams {
     pub fn paired_branch(&self, branch_trial_id: String) -> Self {
         let mut next = self.clone();
         next.seed_domain = Some(
-            self.seed_domain.clone().unwrap_or_else(|| self.trial.clone())
+            self.seed_domain
+                .clone()
+                .unwrap_or_else(|| self.trial.clone()),
         );
         next.trial = branch_trial_id;
         next
@@ -119,7 +121,10 @@ mod tests {
         let mut b = parent.paired_branch("treatment".into());
         assert_ne!(a.trial, b.trial);
         for _ in 0..10 {
-            assert_eq!(a.draw_u64("scheduler").unwrap(), b.draw_u64("scheduler").unwrap());
+            assert_eq!(
+                a.draw_u64("scheduler").unwrap(),
+                b.draw_u64("scheduler").unwrap()
+            );
         }
         assert_eq!(a.seed_domain.as_deref(), Some("parent"));
     }

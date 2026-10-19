@@ -30,7 +30,10 @@ pub trait MetricProjector<W: World>: Send + Sync {
 }
 
 fn escape_cell(value: &str) -> String {
-    if value.chars().any(|ch| matches!(ch, ',' | '"' | '\n' | '\r')) {
+    if value
+        .chars()
+        .any(|ch| matches!(ch, ',' | '"' | '\n' | '\r'))
+    {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
@@ -49,7 +52,11 @@ where
     W::Action: Serialize + DeserializeOwned + Clone,
     M: MetricProjector<W>,
 {
-    fn write_event(writer: &mut impl Write, event: &Entry<W, W::Action>, projector: &M) -> Result<(), String> {
+    fn write_event(
+        writer: &mut impl Write,
+        event: &Entry<W, W::Action>,
+        projector: &M,
+    ) -> Result<(), String> {
         let Outcome::Accepted { world, .. } = &event.outcome else {
             return Ok(());
         };
@@ -66,7 +73,9 @@ where
                 escape_cell(&metric.name),
                 escape_cell(&metric.value),
             );
-            writer.write_all(row.as_bytes()).map_err(|e| e.to_string())?;
+            writer
+                .write_all(row.as_bytes())
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -83,15 +92,22 @@ where
             fs::remove_file(&tmp).map_err(|e| e.to_string())?;
         }
         let result = (|| -> Result<(), String> {
-            let mut output = OpenOptions::new().create_new(true).write(true)
-                .open(&tmp).map_err(|e| e.to_string())?;
-            output.write_all(HEADER.as_bytes()).map_err(|e| e.to_string())?;
+            let mut output = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&tmp)
+                .map_err(|e| e.to_string())?;
+            output
+                .write_all(HEADER.as_bytes())
+                .map_err(|e| e.to_string())?;
             let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
             for line in BufReader::new(input).lines() {
                 let line = line.map_err(|e| e.to_string())?;
-                if line.is_empty() { return Err("empty event line".into()); }
-                let event: Entry<W,W::Action> = serde_json::from_str(&line)
-                    .map_err(|e| e.to_string())?;
+                if line.is_empty() {
+                    return Err("empty event line".into());
+                }
+                let event: Entry<W, W::Action> =
+                    serde_json::from_str(&line).map_err(|e| e.to_string())?;
                 Self::write_event(&mut output, &event, &projector)?;
             }
             output.sync_all().map_err(|e| e.to_string())?;
@@ -103,23 +119,32 @@ where
             crate::storage::sync_trial_directory(dir)?;
             Ok(())
         })();
-        if result.is_err() { let _ = fs::remove_file(&tmp); }
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
         result?;
-        let file = OpenOptions::new().append(true).open(&target).map_err(|e| e.to_string())?;
-        Ok(Self { file: Mutex::new(file), projector, _world: PhantomData })
+        let file = OpenOptions::new()
+            .append(true)
+            .open(&target)
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            file: Mutex::new(file),
+            projector,
+            _world: PhantomData,
+        })
     }
 
     pub fn csv_path(dir: impl AsRef<Path>) -> PathBuf {
         dir.as_ref().join("metrics.csv")
     }
 }
-impl<W, M> Observer<W> for CsvMetrics<W,M>
+impl<W, M> Observer<W> for CsvMetrics<W, M>
 where
     W: World + Serialize + DeserializeOwned,
     W::Action: Serialize + DeserializeOwned + Clone,
     M: MetricProjector<W>,
 {
-    fn committed(&self, event: &Entry<W,W::Action>) -> Result<(), String> {
+    fn committed(&self, event: &Entry<W, W::Action>) -> Result<(), String> {
         let mut file = self.file.lock().map_err(|_| "metrics lock poisoned")?;
         Self::write_event(&mut *file, event, &self.projector)?;
         file.sync_data().map_err(|e| e.to_string())
@@ -141,7 +166,10 @@ mod tests {
     struct CounterProjection;
     impl MetricProjector<Counter> for CounterProjection {
         fn project(&self, world: &Counter) -> Result<Vec<Metric>, String> {
-            Ok(vec![Metric {name:"total".into(), value:world.total.to_string()}])
+            Ok(vec![Metric {
+                name: "total".into(),
+                value: world.total.to_string(),
+            }])
         }
     }
 
@@ -150,24 +178,48 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hiyal-r2-metrics-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         {
-            let mut trial = Trial::create(&dir, "metrics", 11, &kind(1,false,"fixed-v1","scripted").unwrap(),
-                Counter{total:0},
-                Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()},
-                Arc::new(ScriptedBackend), vec![AgentId(0),AgentId(1)], Scheduling::RoundRobin).unwrap();
+            let mut trial = Trial::create(
+                &dir,
+                "metrics",
+                11,
+                &kind(1, false, "fixed-v1", "scripted").unwrap(),
+                Counter { total: 0 },
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0), AgentId(1)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             let sink = Arc::new(CsvMetrics::recover(&dir, CounterProjection).unwrap());
             trial.observe_with(sink);
             trial.run_attempts(5).await.unwrap();
             trial.checkpoint().unwrap();
         }
-        let expected = fs::read(CsvMetrics::<Counter,CounterProjection>::csv_path(&dir)).unwrap();
-        assert_eq!(std::str::from_utf8(&expected).unwrap().lines().count(),6);
+        let expected = fs::read(CsvMetrics::<Counter, CounterProjection>::csv_path(&dir)).unwrap();
+        assert_eq!(std::str::from_utf8(&expected).unwrap().lines().count(), 6);
         {
-            let _trial = Trial::resume(&dir, &kind(1,false,"fixed-v1","scripted").unwrap(),
-                Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()},
-                Arc::new(ScriptedBackend),false).unwrap();
-            let _recovered = CsvMetrics::<Counter,CounterProjection>::recover(&dir, CounterProjection).unwrap();
+            let _trial = Trial::resume(
+                &dir,
+                &kind(1, false, "fixed-v1", "scripted").unwrap(),
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                false,
+            )
+            .unwrap();
+            let _recovered =
+                CsvMetrics::<Counter, CounterProjection>::recover(&dir, CounterProjection).unwrap();
         }
-        assert_eq!(fs::read(dir.join("metrics.csv")).unwrap(),expected);
+        assert_eq!(fs::read(dir.join("metrics.csv")).unwrap(), expected);
         fs::remove_dir_all(dir).unwrap();
     }
 }

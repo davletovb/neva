@@ -104,9 +104,15 @@ where
         let mut effects = EffectJournal::open(&dir)?;
         effects.bind_trial(&store.genesis.trial_id)?;
         Ok(Self {
-            store, effects, policy, backend, replay_only: false,
-            concurrency: 4, timeout: Duration::from_secs(15),
-            observers: vec![], diagnostics: vec![],
+            store,
+            effects,
+            policy,
+            backend,
+            replay_only: false,
+            concurrency: 4,
+            timeout: Duration::from_secs(15),
+            observers: vec![],
+            diagnostics: vec![],
         })
     }
 
