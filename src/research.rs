@@ -499,7 +499,8 @@ where
     static STAGE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let parent_folder = child_dir
         .parent()
-        .ok_or("fork destination lacks a parent")?;
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent_folder).map_err(|e| e.to_string())?;
     let basename = child_dir
         .file_name()
@@ -866,6 +867,41 @@ mod tests {
         let path = canonical_future_path(Path::new(&name)).unwrap();
         let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
         assert_eq!(path, cwd.join(&name));
+    }
+
+    #[tokio::test]
+    async fn one_component_relative_child_publishes_complete_fork() {
+        let root = directory("relative-fork-publication");
+        let parent = root.join("parent");
+        let kind = kind(1, false, "fixed-v1", "scripted").unwrap();
+        let policy = || Increment {
+            amount: 1,
+            model: false,
+            model_id: "fixed-v1".into(),
+            provider: "scripted".into(),
+        };
+        {
+            let trial = Trial::create(
+                &parent, "relative-parent", 11, &kind, Counter { total: 0 },
+                policy(), Arc::new(ScriptedBackend), vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            ).unwrap();
+            drop(trial);
+        }
+        let relative_child = PathBuf::from(format!(
+            "hiyal-relative-fork-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&relative_child);
+        let fork = fork_at_head(
+            &parent, &relative_child, "test", "treatment",
+            serde_json::json!({"delta": 2}),
+            |world: &mut Counter| {world.total = 2; Ok(())},
+            policy(), Arc::new(ScriptedBackend),
+        ).unwrap();
+        assert!(verify_fork::<Counter>(&relative_child).is_ok());
+        drop(fork);
+        fs::remove_dir_all(relative_child).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
