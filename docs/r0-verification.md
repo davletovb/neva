@@ -9,7 +9,7 @@ Implementation work: [PR #106](https://github.com/davletovb/hiyal/pull/106).
 | Rust extension model and CLI registration limits | [contracts](r0-contracts.md), `examples/custom_world/` | Specified; Rust custom-world builds and runs in focused CI |
 | Typed world, action, scheduler, model/effect and log boundary | [contracts](r0-contracts.md), `src/core.rs`, `src/effects.rs` | Specified; prototype |
 | IDs, logical time, random streams, numerical profile, JSON hashing | [R0 decisions](r0-decisions.md) | Specified; conformance tests are R1 |
-| Archive defect register and golden cases | `fixtures/golden/`, Rust core tests, R0 decisions | Authored; 10 Rust tests passed on e96e523 |
+| Archive defect register and golden cases | `fixtures/golden/`, Rust core tests, R0 decisions | Authored; 11 Rust tests passed on d65680a |
 | Python observer-on/off and snapshot benchmark plan | `benchmarks/reference_python.py`, archived checkpoint benchmark, [reviewer-only results](../benchmarks/REVIEWER_REPORTED.md) | Harness authored; independent results missing |
 | Removed/retained features list | [R0 decisions](r0-decisions.md) | Done |
 | Prior art/stop conditions | [prior art](r0-prior-art.md), issue #103 | Done |
@@ -50,16 +50,20 @@ run Python benchmarks or replace the measured R0 evidence requirement.
 
 
 The October 19 reviewer reported testing the original branch `047b4b9`
-(4 Rust tests passed, formatting and Clippy failed). The revised branch's
-Rust formatting, all 10 tests and standalone example were checked in
-[`run 39246204608`](https://github.com/davletovb/hiyal/actions/runs/39246204608)
-on `e96e523`. Subsequent documentation-only changes do not modify the
+(4 Rust tests passed, formatting and Clippy failed). The revised branch passed format, all 10 tests and standalone example in
+[`run 39246204608`](https://github.com/davletovb/hiyal/actions/runs/39246204608).
+New determinism fixes passed **11 tests** including feature-unification tests in
+[`run 39247148177`](https://github.com/davletovb/hiyal/actions/runs/39247148177)
+on `d65680a`. Subsequent documentation-only changes do not modify the
 tested Rust sources. Extended Clippy remains unverified until an intentional
 release/manual-extended run. CI is deliberately low-frequency; if code changes,
 re-verify the resulting head before merge.
 
-After CI run 39246204608, two additional review threads identified
-downstream `serde_json/preserve_order` feature unification and missing
-untracked-source provenance. Both are addressed in a follow-up code change,
-which requires a fresh targeted Rust smoke run before claiming verification
-for the updated Rust source.
+Two subsequent review threads identified downstream
+`serde_json/preserve_order` feature unification and untracked-source
+provenance. Commit `d65680a` fixes both. A final focused
+[CI run 39247148177](https://github.com/davletovb/hiyal/actions/runs/39247148177)
+**passed** formatting, **11 workspace tests**, **11 crate tests** under
+`serde_json/preserve_order`, and the standalone custom-world smoke.
+Extended Clippy still requires an intentional manual/release check, and
+independent Python baseline figures are still outstanding.

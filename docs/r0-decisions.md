@@ -193,8 +193,10 @@ runtime dependency. Parquet stays optional until needed.
       and pinned golden values remain R1.
 - [x] Run `cargo test --workspace` on GitHub's standard Ubuntu Rust runner:
       [run 39246204608](https://github.com/davletovb/hiyal/actions/runs/39246204608)
-      verified rustfmt, 10 passing Rust tests and the custom-world binary at
-      `e96e523`. The local container lacks Rust; Clippy was not run.
+      verified rustfmt and the custom-world binary; subsequently
+      [run 39247148177](https://github.com/davletovb/hiyal/actions/runs/39247148177)
+      verified 11 Rust tests both in the normal workspace and with
+      `serde_json/preserve_order` enabled at `d65680a`. The local container lacks Rust; Clippy was not run.
 - [ ] Implement durable replay/resume and confirm independent application gate.
 
 The engineering **preparation** of R0 is complete and the initial Rust
