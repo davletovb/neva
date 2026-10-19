@@ -59,7 +59,6 @@ jobs:
       - name: Rust workspace unit and integration tests
         # R0 has no committed lockfile yet. When it is added, enforce it strictly.
         run: |
-          cargo generate-lockfile
           cargo test --workspace --locked
 
       - name: Deterministic map-order regression (feature unification)
@@ -84,12 +83,6 @@ jobs:
         run: |
           cargo run --locked --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
           test "$(wc -l </tmp/hiyal-events.jsonl)" -eq 6
-
-      - name: Capture updated lockfile after Windows atomic-replace dependency
-        run: |
-          echo BEGIN_HIYAL_CARGO_LOCK
-          cat Cargo.lock
-          echo END_HIYAL_CARGO_LOCK
 
       - name: Additional release/manual lint
         if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.extended) }}
