@@ -92,6 +92,28 @@ jobs:
           test -s "$work/paired/control/ancestry/events.jsonl"
           test -s "$work/paired/treatment/fork.json"
           cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/paired" 3 8
+
+          # Restart must reject a different source parent.
+          sed 's/name = "counter-demo"/name = "another-parent"/' examples/counter.toml > "$work/other.toml"
+          cargo run --locked --quiet -p hiyal -- run "$work/other.toml" "$work/other"
+          if cargo run --locked --quiet -p hiyal -- fork "$work/other" "$work/paired" 3 8; then
+            echo "incorrectly accepted different parent" >&2
+            exit 1
+          fi
+
+          # Simulate death between two published (fully verified) fork arms.
+          cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/half" 3 0
+          rm -rf "$work/half/treatment"
+          cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/half" 3 0
+
+          # Never silently accept swapped control/treatment directories.
+          mv "$work/half/control" "$work/half/temp"
+          mv "$work/half/treatment" "$work/half/control"
+          mv "$work/half/temp" "$work/half/treatment"
+          if cargo run --locked --quiet -p hiyal -- fork "$work/parent" "$work/half" 3 0; then
+            echo "incorrectly accepted swapped arms" >&2
+            exit 1
+          fi
           rm -rf "$work"
 
       - name: Standalone external-world smoke

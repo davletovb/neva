@@ -5,7 +5,7 @@ use hiyal::{
     core::AgentId,
     experiment::Trial,
     metrics::CsvMetrics,
-    research::{CounterMetrics, Sweep, paired_forks, resume_fork, verify_fork},
+    research::{CounterMetrics, Sweep, ensure_observer_health, paired_forks, verify_fork},
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
     storage::Store,
@@ -169,27 +169,57 @@ async fn launch() -> Result<(), String> {
             }
             let control_dir = root.join("control");
             let treatment_dir = root.join("treatment");
-            let (mut control, mut treatment) = if control_dir.exists() || treatment_dir.exists() {
-                if !control_dir.exists() || !treatment_dir.exists() {
-                    return Err("partial paired fork: both arms must exist".into());
+            // A crash between publication of the two *complete* arms may
+            // leave exactly one. Recreate only when it is a verified,
+            // unstarted arm belonging to this exact requested parent.
+            if control_dir.exists() != treatment_dir.exists() {
+                let (existing, expected_arm, expected_parameters) = if control_dir.exists() {
+                    (&control_dir, "control", serde_json::json!({}))
+                } else {
+                    (&treatment_dir, "treatment", serde_json::json!({"added":shock}))
+                };
+                let meta = verify_fork::<Counter>(existing)?;
+                let prior = Store::<Counter, u64>::inspect_read_only(existing)?;
+                if meta.parent_id != source.genesis.trial_id
+                    || meta.parent_head != source.chain_head
+                    || meta.parent_sequence != source.sequence
+                    || meta.arm != expected_arm
+                    || meta.intervention != "counter-shock"
+                    || meta.parameters != expected_parameters
+                    || prior.sequence != 0
+                    || existing.join(".writer.lock").exists()
+                    || existing.join(".effects-writer.lock").exists() {
+                    return Err("partial fork cannot be safely recreated".into());
                 }
+                fs::remove_dir_all(existing).map_err(|e| e.to_string())?;
+            }
+            let (mut control, mut treatment) = if control_dir.exists() && treatment_dir.exists() {
                 let c = verify_fork::<Counter>(&control_dir)?;
                 let t = verify_fork::<Counter>(&treatment_dir)?;
                 if c.intervention != "counter-shock"
                     || t.intervention != "counter-shock"
+                    || c.parent_id != source.genesis.trial_id
+                    || t.parent_id != source.genesis.trial_id
+                    || c.parent_head != source.chain_head
+                    || t.parent_head != source.chain_head
+                    || c.parent_sequence != source.sequence
+                    || t.parent_sequence != source.sequence
                     || c.parent_head != t.parent_head
+                    || c.arm != "control"
+                    || t.arm != "treatment"
+                    || c.parameters != serde_json::json!({})
                     || t.parameters != serde_json::json!({"added":shock})
                 {
                     return Err("paired fork restart attribution mismatch".into());
                 }
                 (
-                    resume_fork(
+                    Trial::resume(
                         &control_dir,
                         parse_kind(&kind)?,
                         Arc::new(ScriptedBackend),
                         false,
                     )?,
-                    resume_fork(
+                    Trial::resume(
                         &treatment_dir,
                         parse_kind(&kind)?,
                         Arc::new(ScriptedBackend),
@@ -207,6 +237,7 @@ async fn launch() -> Result<(), String> {
                         world.total = world.total.checked_add(shock).ok_or("shock overflow")?;
                         Ok(())
                     },
+                    Arc::new(ScriptedBackend),
                 )?
             };
             if control.store.sequence() > attempts || treatment.store.sequence() > attempts {
@@ -223,6 +254,8 @@ async fn launch() -> Result<(), String> {
             treatment
                 .run_attempts(attempts - treatment.store.sequence())
                 .await?;
+            ensure_observer_health(&control.diagnostics)?;
+            ensure_observer_health(&treatment.diagnostics)?;
             control.checkpoint()?;
             treatment.checkpoint()?;
             println!(

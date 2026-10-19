@@ -79,6 +79,11 @@ impl Sweep {
         if !self.parameter_values.iter().all(|v| seen.insert(v)) {
             return Err("duplicate sweep parameter".into());
         }
+        // Counter::apply rejects overflow, so exclude configurations that
+        // cannot complete every requested increment *before* launching jobs.
+        if self.parameter_values.iter().any(|amount| amount.checked_mul(self.attempts).is_none()) {
+            return Err("counter amount multiplied by attempts overflows u64".into());
+        }
         let mut jobs = Vec::new();
         for parameter in &self.parameter_values {
             for replicate in 0..self.replicates {
@@ -184,15 +189,7 @@ impl Sweep {
                 return Err("cannot restart a sweep with different parameters".into());
             }
         } else {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&plan_path)
-                .map_err(|e| e.to_string())?;
-            file.write_all(&planned)
-                .and_then(|_| file.sync_all())
-                .map_err(|e| e.to_string())?;
-            crate::storage::sync_trial_directory(&root)?;
+            crate::storage::save_atomic(&plan_path, &planned)?;
         }
         let settings = self.clone();
         let job_root = root.clone();
@@ -223,7 +220,6 @@ impl Sweep {
                             || trial.store.genesis().initial_schedule.agents.len()
                                 != settings.actors as usize
                             || trial.store.sequence() > settings.attempts
-                            || trial.store.logical_step() != trial.store.sequence()
                         {
                             return Err("resumed sweep configuration/progress mismatch".into());
                         }
@@ -246,6 +242,7 @@ impl Sweep {
                     trial
                         .run_attempts(settings.attempts - trial.store.sequence())
                         .await?;
+                    ensure_observer_health(&trial.diagnostics)?;
                     trial.checkpoint()?;
                     Ok(JobResult {
                         trial_id: trial.store.genesis().trial_id.clone(),
@@ -274,27 +271,19 @@ impl Sweep {
             ));
         }
         let path = root.join("results.csv");
-        let temp = root.join("results.tmp");
-        if temp.exists() {
-            fs::remove_file(&temp).map_err(|e| e.to_string())?;
-        }
-        let mut output = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .map_err(|e| e.to_string())?;
-        output
-            .write_all(csv.as_bytes())
-            .and_then(|_| output.sync_all())
-            .map_err(|e| e.to_string())?;
-        drop(output);
-        #[cfg(not(windows))]
-        fs::rename(&temp, &path).map_err(|e| e.to_string())?;
-        #[cfg(windows)]
-        atomicwrites::replace_atomic(&temp, &path).map_err(|e| e.to_string())?;
-        crate::storage::sync_trial_directory(&root)?;
+        crate::storage::save_atomic(&path, csv.as_bytes())?;
         Ok(result)
     }
+}
+
+/// Observers do not roll back authoritative committed events, but a research
+/// runner must not publish a successful derived dataset after observer errors.
+pub fn ensure_observer_health(diagnostics: &[String]) -> Result<(), String> {
+    if diagnostics.is_empty() { Ok(()) }
+    else { Err(format!(
+        "derived metrics failed; restart will rebuild the CSV: {}",
+        diagnostics.join("; ")
+    )) }
 }
 
 pub struct CounterMetrics;
@@ -451,15 +440,40 @@ where
         initial_streams: streams,
         world_kind: parent.genesis.world_kind.clone(),
     };
-    let trial = Trial::create_from_genesis(child_dir, genesis, policy, backend)?;
-    let result = (|| -> Result<(), String> {
-        let bundle = child_dir.join("ancestry");
+    // Build an entire branch in a unique sibling directory. The public child
+    // path appears only after ancestry, attribution and both ledgers verify.
+    // A process kill leaves an ignorable orphan staging directory, not a
+    // partially published branch that blocks restart.
+    static STAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let parent_folder = child_dir.parent().ok_or("fork destination lacks a parent")?;
+    fs::create_dir_all(parent_folder).map_err(|e| e.to_string())?;
+    let basename = child_dir.file_name().and_then(|value| value.to_str())
+        .ok_or("invalid fork destination name")?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?
+        .as_nanos();
+    let sequence = STAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stage = parent_folder.join(format!(
+        ".{basename}.pending-{}-{nonce}-{sequence}", std::process::id()
+    ));
+    let kind = genesis.world_kind.clone();
+    let mut stage_owned = false;
+    let create = (|| -> Result<(), String> {
+        let store = Store::<W, W::Action>::create(&stage, genesis)?;
+        stage_owned = true;
+        let mut ledger = crate::runtime::EffectJournal::open(&stage)?;
+        ledger.bind_trial(&store.genesis().trial_id)?;
+        drop(ledger);
+        drop(store);
+        let bundle = stage.join("ancestry");
         copy_evidence(parent_dir, &bundle)?;
-        let verified: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(&bundle)?;
-        if verified.chain_head != parent.chain_head
-            || verified.sequence != parent.sequence
-            || digest(&verified.world)? != before
-        {
+        // verify_fork below independently reconstructs ancestry once. An
+        // exact log length check here rejects a changed parent prefix without
+        // pointlessly replaying the captured log an extra time.
+        let captured_length = fs::metadata(bundle.join("events.jsonl"))
+            .map_err(|e| e.to_string())?.len();
+        if captured_length != parent.log_bytes {
             return Err("parent advanced during branch evidence capture".into());
         }
         let mut meta = ForkMetadata {
@@ -479,24 +493,18 @@ where
             attribution_hash: String::new(),
         };
         meta.attribution_hash = meta.fingerprint()?;
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(child_dir.join("fork.json"))
-            .map_err(|e| e.to_string())?;
-        file.write_all(&stable_bytes(&meta)?)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
-        crate::storage::sync_trial_directory(child_dir)?;
-        verify_fork::<W>(child_dir)?;
+        crate::storage::save_atomic(&stage.join("fork.json"), &stable_bytes(&meta)?)?;
+        verify_fork::<W>(&stage)?;
+        if child_dir.exists() { return Err("fork destination appeared during creation".into()); }
+        fs::rename(&stage, child_dir).map_err(|e| e.to_string())?;
+        crate::storage::sync_trial_directory(parent_folder)?;
         Ok(())
     })();
-    if let Err(error) = result {
-        drop(trial);
-        let _ = fs::remove_dir_all(child_dir);
+    if let Err(error) = create {
+        if stage_owned { let _ = fs::remove_dir_all(&stage); }
         return Err(error);
     }
-    Ok(trial)
+    Trial::resume(child_dir, &kind, policy, backend, false)
 }
 
 /// Paired branches share an independently verified parent boundary and RNG
@@ -508,6 +516,7 @@ pub fn paired_forks<W, P, F>(
     parameters: serde_json::Value,
     make_policy: impl Fn() -> P,
     treatment: F,
+    backend: Arc<dyn Backend>,
 ) -> Result<(Trial<W, P>, Trial<W, P>), String>
 where
     W: World + Serialize + DeserializeOwned,
@@ -517,42 +526,52 @@ where
 {
     let root = root.as_ref();
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let control_dir = root.join("control");
+    let treatment_dir = root.join("treatment");
     let control = fork_at_head(
-        parent.as_ref(),
-        root.join("control"),
-        intervention,
-        "control",
-        serde_json::json!({}),
-        |_world: &mut W| Ok(()),
-        make_policy(),
-        Arc::new(ScriptedBackend),
+        parent.as_ref(), &control_dir, intervention, "control",
+        serde_json::json!({}), |_world: &mut W| Ok(()),
+        make_policy(), backend.clone(),
     )?;
     let treatment = match fork_at_head(
-        parent.as_ref(),
-        root.join("treatment"),
-        intervention,
-        "treatment",
-        parameters,
-        treatment,
-        make_policy(),
-        Arc::new(ScriptedBackend),
+        parent.as_ref(), &treatment_dir, intervention, "treatment",
+        parameters, treatment, make_policy(), backend,
     ) {
         Ok(value) => value,
         Err(error) => {
             drop(control);
-            let _ = fs::remove_dir_all(root.join("control"));
+            let _ = fs::remove_dir_all(&control_dir);
             return Err(error);
         }
     };
-    if control.store.genesis().initial_streams.seed_domain
-        != treatment.store.genesis().initial_streams.seed_domain
-        || control.store.genesis().initial_schedule != treatment.store.genesis().initial_schedule
-        || verify_fork::<W>(root.join("control"))?.parent_head
-            != verify_fork::<W>(root.join("treatment"))?.parent_head
-    {
-        drop(control);
-        drop(treatment);
-        return Err("paired branches do not share RNG/scheduler boundary".into());
+    // fork_at_head independently validated both arms before publication.
+    // Compare compact committed attribution metadata rather than replaying
+    // the complete copied prefix a third time for each new arm.
+    let paired_check = (|| -> Result<(), String> {
+        let left: ForkMetadata = serde_json::from_slice(
+            &fs::read(control_dir.join("fork.json")).map_err(|e| e.to_string())?
+        ).map_err(|e| e.to_string())?;
+        let right: ForkMetadata = serde_json::from_slice(
+            &fs::read(treatment_dir.join("fork.json")).map_err(|e| e.to_string())?
+        ).map_err(|e| e.to_string())?;
+        if left.parent_id != right.parent_id
+            || left.parent_head != right.parent_head
+            || left.parent_sequence != right.parent_sequence
+            || left.parent_logical_step != right.parent_logical_step
+            || left.arm != "control" || right.arm != "treatment"
+            || control.store.genesis().initial_streams.seed_domain
+                != treatment.store.genesis().initial_streams.seed_domain
+            || control.store.genesis().initial_schedule
+                != treatment.store.genesis().initial_schedule {
+            return Err("paired branches differ in ancestry, RNG or schedule".into());
+        }
+        Ok(())
+    })();
+    if let Err(error) = paired_check {
+        drop(control); drop(treatment);
+        let _ = fs::remove_dir_all(&control_dir);
+        let _ = fs::remove_dir_all(&treatment_dir);
+        return Err(error);
     }
     Ok((control, treatment))
 }
@@ -661,6 +680,90 @@ mod tests {
         assert!(peak.load(Ordering::SeqCst) <= 2);
         assert_eq!(current.load(Ordering::SeqCst), 0);
         assert!(count.load(Ordering::SeqCst) < 6);
+    }
+
+    #[test]
+    fn oversized_counter_parameters_are_rejected_before_execution() {
+        let mut plan=sweep(1);
+        plan.parameter_values=vec![u64::MAX];
+        plan.attempts=2;
+        assert!(plan.jobs().is_err());
+        plan.attempts=1;
+        assert!(plan.jobs().is_ok());
+    }
+
+    #[test]
+    fn incomplete_derived_metrics_cannot_be_reported_as_success() {
+        assert!(ensure_observer_health(&[]).is_ok());
+        assert!(ensure_observer_health(&["observer failed: disk full".into()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_second_arm_rolls_back_published_first_arm() {
+        use std::sync::atomic::AtomicUsize;
+        let root=directory("second-arm-failure");
+        let parent=root.join("parent");
+        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
+        {
+            let trial=Trial::create(
+                &parent,"parent-for-rollback",5,&kind,Counter{total:0},
+                Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()},
+                Arc::new(ScriptedBackend), vec![AgentId(0)],Scheduling::RoundRobin
+            ).unwrap();
+            drop(trial);
+        }
+        let changed=Arc::new(AtomicUsize::new(0));
+        let parent_clone=parent.clone();
+        let kind_clone=kind.clone();
+        let result=paired_forks::<Counter,_,_>(
+            &parent,root.join("pair"),"test",serde_json::json!({"delta":1}),
+            {
+                let changed=changed.clone();
+                move || {
+                    if changed.fetch_add(1,Ordering::SeqCst)==1 {
+                        let mut source=Trial::resume(
+                            &parent_clone, &kind_clone,
+                            Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()},
+                            Arc::new(ScriptedBackend),false
+                        ).unwrap();
+                        source.pause_actor(AgentId(0)).unwrap();
+                        source.checkpoint().unwrap();
+                    }
+                    Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()}
+                }
+            },
+            |world:&mut Counter| {world.total+=1;Ok(())},
+            Arc::new(ScriptedBackend)
+        );
+        assert!(result.is_err());
+        assert!(!root.join("pair/control").exists());
+        assert!(!root.join("pair/treatment").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn orphan_staging_directory_does_not_block_complete_fork_publication() {
+        let root=directory("orphan-staging");
+        let parent=root.join("parent");
+        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
+        let policy=|| Increment{amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()};
+        {
+            let trial=Trial::create(
+                &parent,"orphan",7,&kind,Counter{total:0},policy(),
+                Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin
+            ).unwrap();
+            drop(trial);
+        }
+        let published=root.join("branch");
+        let orphan=root.join(format!(".branch.pending-{}-old",std::process::id()));
+        fs::create_dir_all(&orphan).unwrap();
+        fs::write(orphan.join("manifest.json"),b"half-written").unwrap();
+        let result=fork_at_head(&parent,&published,"change","treatment",serde_json::json!({"delta":2}),
+            |world:&mut Counter|{world.total=2;Ok(())},policy(),Arc::new(ScriptedBackend)).unwrap();
+        assert!(verify_fork::<Counter>(&published).is_ok());
+        assert!(orphan.exists());
+        drop(result);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

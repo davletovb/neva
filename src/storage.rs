@@ -166,17 +166,27 @@ where
     _action: std::marker::PhantomData<A>,
 }
 
-fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write_with(
+    path: &Path,
+    populate: impl FnOnce(&mut File) -> Result<(), String>,
+) -> Result<(), String> {
     let temporary = path.with_extension("tmp");
+    // The caller holds its directory's writer lease; this is uncommitted
+    // output from a crashed prior publication, never a verified record.
+    if temporary.exists() {
+        fs::remove_file(&temporary).map_err(|e| e.to_string())?;
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)
         .map_err(|e| format!("write {}: {e}", temporary.display()))?;
-    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+    if let Err(error) = populate(&mut file)
+        .and_then(|_| file.sync_all().map_err(|e| e.to_string()))
+    {
         drop(file);
         let _ = fs::remove_file(&temporary);
-        return Err(error.to_string());
+        return Err(error);
     }
     drop(file);
     #[cfg(not(windows))]
@@ -194,6 +204,10 @@ fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+pub(crate) fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    atomic_write_with(path, |file| file.write_all(bytes).map_err(|e| e.to_string()))
 }
 
 /// RAII lock: even a malformed manifest/snapshot never strands a lock.

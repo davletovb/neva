@@ -115,3 +115,12 @@ causal estimators, Parquet, dashboards, or live-vs-simulated economic claims.
 Parquet can be added when an actual analytical use case needs a columnar
 format; CSV and verified JSONL already remain interoperable with R, Julia,
 Python and DuckDB without a Python runtime in Hiyal.
+
+## R2 review hardening
+
+- Fork publication uses a unique sibling staging directory. The public child appears only after valid ancestry, attribution and journals are confirmed. A killed process may leave an ignorable pending folder. The CLI can safely recreate one valid, unstarted arm after an interrupted paired publication. It never auto-deletes progressed or mismatched arms.
+- On restart, the CLI checks parent identity, committed head/sequence, roles, intervention and parameters, rejecting another source or swapped arms.
+- The generic paired-fork API accepts a caller-selected model backend. The CLI deliberately uses the scripted backend for its fixed reference counter.
+- Sweeps exclude counter-overflow configurations before running and distinguish accepted logical steps from attempt counts. Worker parallelism can change without changing scientific identity.
+- Observer/CSV projection failures are not reported as successful runs; repeat execution rebuilds CSV from verified events.
+- Shared atomic writing now handles plan, result, metrics and fork metadata. Rebuilt CSV is streamed rather than buffered. Metric append no longer calls fsync on every committed step; world events are still durable. Paired checks compare previously verified fork metadata without redundant full-ancestry replay.

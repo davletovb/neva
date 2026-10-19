@@ -5,11 +5,11 @@
 use crate::{
     core::World,
     experiment::Observer,
-    storage::{Entry, Outcome, Store},
+    storage::{Entry, Outcome, Store, atomic_write_with},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{File, OpenOptions},
     io::{BufRead, BufReader, Write},
     marker::PhantomData,
     path::{Path, PathBuf},
@@ -87,42 +87,18 @@ where
         let dir = dir.as_ref();
         let _: crate::storage::ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(dir)?;
         let target = dir.join("metrics.csv");
-        let tmp = dir.join("metrics.tmp");
-        if tmp.exists() {
-            fs::remove_file(&tmp).map_err(|e| e.to_string())?;
-        }
-        let result = (|| -> Result<(), String> {
-            let mut output = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&tmp)
-                .map_err(|e| e.to_string())?;
-            output
-                .write_all(HEADER.as_bytes())
-                .map_err(|e| e.to_string())?;
+        atomic_write_with(&target, |output| {
+            output.write_all(HEADER.as_bytes()).map_err(|e| e.to_string())?;
             let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
             for line in BufReader::new(input).lines() {
                 let line = line.map_err(|e| e.to_string())?;
-                if line.is_empty() {
-                    return Err("empty event line".into());
-                }
+                if line.is_empty() { return Err("empty event line".into()); }
                 let event: Entry<W, W::Action> =
                     serde_json::from_str(&line).map_err(|e| e.to_string())?;
-                Self::write_event(&mut output, &event, &projector)?;
+                Self::write_event(output, &event, &projector)?;
             }
-            output.sync_all().map_err(|e| e.to_string())?;
-            drop(output);
-            #[cfg(windows)]
-            atomicwrites::replace_atomic(&tmp, &target).map_err(|e| e.to_string())?;
-            #[cfg(not(windows))]
-            fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
-            crate::storage::sync_trial_directory(dir)?;
             Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&tmp);
-        }
-        result?;
+        })?;
         let file = OpenOptions::new()
             .append(true)
             .open(&target)
@@ -147,13 +123,16 @@ where
     fn committed(&self, event: &Entry<W, W::Action>) -> Result<(), String> {
         let mut file = self.file.lock().map_err(|_| "metrics lock poisoned")?;
         Self::write_event(&mut *file, event, &self.projector)?;
-        file.sync_data().map_err(|e| e.to_string())
+        // Derived data is reconstructed from fsynced events on restart.
+        // No second synchronous disk barrier on every accepted action.
+        file.flush().map_err(|e| e.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::{
         builtins::{Counter, Increment, kind},
         core::AgentId,
