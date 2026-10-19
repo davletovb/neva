@@ -59,18 +59,29 @@ jobs:
       - name: Rust workspace unit and integration tests
         # R0 has no committed lockfile yet. When it is added, enforce it strictly.
         run: |
-          if test -f Cargo.lock; then
-            cargo test --workspace --locked
-          else
-            cargo test --workspace
-          fi
+          cargo test --workspace --locked
 
       - name: Deterministic map-order regression (feature unification)
-        run: cargo test -p hiyal --features serde_json/preserve_order
+        run: cargo test -p hiyal --locked --features serde_json/preserve_order
+
+      - name: Opt-in HTTP adapter loopback test
+        run: cargo test -p hiyal --locked --features live-http
+
+      - name: Native CLI run and resume smoke
+        run: |
+          work="$(mktemp -d)"
+          cargo run --locked --quiet -p hiyal -- run examples/counter.toml "$work/builtin"
+          cargo run --locked --quiet -p hiyal -- inspect "$work/builtin"
+          cargo run --locked --quiet -p hiyal -- resume "$work/builtin" 3
+          cargo run --locked --quiet -p hiyal -- validate "$work/builtin"
+          cargo run --locked --quiet -p hiyal-custom-world-example -- run "$work/custom" 5
+          cargo run --locked --quiet -p hiyal-custom-world-example -- resume "$work/custom" 5
+          cargo run --locked --quiet -p hiyal-custom-world-example -- inspect "$work/custom"
+          rm -rf "$work"
 
       - name: Standalone external-world smoke
         run: |
-          cargo run --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
+          cargo run --locked --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
           test "$(wc -l </tmp/hiyal-events.jsonl)" -eq 6
 
       - name: Additional release/manual lint

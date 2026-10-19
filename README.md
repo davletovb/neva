@@ -10,27 +10,25 @@ models; JSONL and later open-data exports let Python, R, Julia, Rust and DuckDB
 analyze the results independently. No Python runtime or bindings are required
 by the Rust engine.
 
-## Current implementation status
+## Native engine (R1)
 
-An early Rust vertical slice is available: typed `World` and `Policy`
-traits, guarded round-robin scheduling, deterministic logical identities,
-staged world commits, explicit rejection audits and in-memory event export. **This is not yet a
-persistent, replayable research engine.** Async effects, durable event
-storage, restart/fork, seeded random scheduling and the native CLI follow
-as part of [issue #103](https://github.com/davletovb/hiyal/issues/103).
+Hiyal ships a typed Rust world/policy API, deterministic random and
+round-robin scheduling, append-only committed/rejected events, versioned
+checkpoints, strict keyed model-effect replay, opt-in OpenAI-compatible HTTP,
+and a built-in `hiyal` CLI. User-defined worlds compile in independent
+consumer crates. See [R1 usage and guarantees](docs/r1-engine.md).
 
 ```sh
 cargo test --workspace
-cargo run -p hiyal-custom-world-example
+cargo run -p hiyal -- run examples/counter.toml /tmp/hiyal-counter
+cargo run -p hiyal -- resume /tmp/hiyal-counter 10
+cargo run -p hiyal-custom-world-example -- run /tmp/hiyal-custom 5
 ```
 
-The [custom-world example](examples/custom_world/src/main.rs) is a separate
-consumer crate, showing how to extend Hiyal without editing its source.
-The package is currently `publish = false`; no crates.io publication or name
-reservation is claimed.
-
-Read [R0 design decisions and acceptance register](docs/r0-decisions.md)
-before treating any prototypes as stable APIs.
+R1 tests are Rust-only; Python is never required by Hiyal's engine or CI.
+The current package is still unpublished. Full R0 Python baseline
+measurements remain an optional **separate historical measurement** and are
+not part of the R1 implementation gate.
 
 ## Archived Python reference
 

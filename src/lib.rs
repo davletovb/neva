@@ -1,9 +1,11 @@
-//! An early, Rust-only vertical slice of the Hiyal simulation engine.
-//!
-//! This crate is intentionally unpublished. Storage, effect execution, replay,
-//! seeded random scheduling, and canonical event hashing are **not** implemented
-//! in this first slice; see issue #103 and docs/r0-decisions.md.
+//! Hiyal: Rust-only simulation library. No embedded Python runtime.
 #![forbid(unsafe_code)]
 
+pub mod builtins;
 pub mod core;
 pub mod effects;
+pub mod experiment;
+pub mod rng;
+pub mod runtime;
+pub mod scheduler;
+pub mod storage;

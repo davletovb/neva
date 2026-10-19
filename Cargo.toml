@@ -1,6 +1,6 @@
 [package]
 name = "hiyal"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Experimental Rust-native agent-based simulation engine"
@@ -8,10 +8,22 @@ license = "MIT"
 repository = "https://github.com/davletovb/hiyal"
 publish = false
 
+[features]
+default = []
+live-http = ["dep:reqwest"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+rand_chacha = "0.9"
+rand_core = "0.9"
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+atomicwrites = "0.4.4"
 
 [workspace]
 members = ["examples/custom_world"]
