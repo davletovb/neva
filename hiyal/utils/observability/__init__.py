@@ -4,10 +4,10 @@
 OpenTelemetry integration (with a dependency-free fallback), and ``observer``
 turns simulation events into observer callbacks and tool-call telemetry. Both
 describe the same concern - reporting what agents, tools, and schedulers do -
-so they live together instead of among the general-purpose ``neva.utils``
+so they live together instead of among the general-purpose ``hiyal.utils``
 modules.
 
-``neva.utils.telemetry`` and ``neva.utils.observer`` remain importable as
+``hiyal.utils.telemetry`` and ``hiyal.utils.observer`` remain importable as
 compatibility shims that alias the implementation modules defined here, so
 imports *and* module-level attribute mutation on the old paths keep working.
 """

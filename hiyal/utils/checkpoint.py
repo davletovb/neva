@@ -12,7 +12,7 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from neva.memory import (
+from hiyal.memory import (
     AdaptiveConversationMemory,
     CompositeMemory,
     MemoryRecord,
@@ -20,8 +20,8 @@ from neva.memory import (
     SummaryMemory,
     VectorStoreMemory,
 )
-from neva.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
-from neva.utils.state_management import (
+from hiyal.utils.scheduler_checkpoint import capture_scheduler, prepare_scheduler
+from hiyal.utils.state_management import (
     CheckpointLimits,
     _CheckpointLimitExceeded,
     _json_key_text,

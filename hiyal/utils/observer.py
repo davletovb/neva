@@ -1,6 +1,6 @@
-"""Compatibility shim: ``neva.utils.observer`` *is* the implementation module.
+"""Compatibility shim: ``hiyal.utils.observer`` *is* the implementation module.
 
-The implementation moved to :mod:`neva.utils.observability.observer`; this
+The implementation moved to :mod:`hiyal.utils.observability.observer`; this
 module rebinds its own name in :data:`sys.modules` to that module object, so
 existing imports and module-level attribute mutation on the legacy path keep
 working unchanged.

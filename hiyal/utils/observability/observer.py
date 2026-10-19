@@ -26,7 +26,7 @@ from typing import (
     cast,
 )
 
-from neva.utils.exceptions import MissingDependencyError
+from hiyal.utils.exceptions import MissingDependencyError
 
 from .telemetry import get_telemetry
 
@@ -285,7 +285,7 @@ class SimulationObserver:
         self,
         *,
         step: Optional[int] = None,
-        prefix: str = "neva",
+        prefix: str = "hiyal",
     ) -> None:
         """Log the most recent metrics to an active MLflow run.
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple
 
-from neva.utils.exceptions import SpendBudgetConfigurationError, SpendBudgetExceededError
+from hiyal.utils.exceptions import SpendBudgetConfigurationError, SpendBudgetExceededError
 
 
 def estimate_token_count(text: str) -> int:
@@ -68,7 +68,7 @@ class TokenUsageTracker:
 class CostTracker:
     """Estimate the monetary cost of LLM usage based on token counts.
 
-    Default table is USD per 1k tokens for Neva's built-in models (list
+    Default table is USD per 1k tokens for Hiyal's built-in models (list
     prices as of 2026-09). Override ``pricing_per_1k_tokens`` for billing.
     Split input/output dicts are used for current models; legacy flat rates
     remain for ``gpt-3.5-turbo`` and ``gpt-4``.

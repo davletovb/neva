@@ -1,4 +1,4 @@
-"""OpenTelemetry-based observability primitives for Neva."""
+"""OpenTelemetry-based observability primitives for Hiyal."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from typing import (
     Union,
 )
 
-from neva.utils.exceptions import MissingDependencyError
+from hiyal.utils.exceptions import MissingDependencyError
 
 try:  # pragma: no cover - imported for typing only when available.
     from opentelemetry.metrics import Meter
@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - optional dependency.
     Tracer = Any  # type: ignore[misc, assignment]
 
 if TYPE_CHECKING:  # pragma: no cover - import for type checking only.
-    from neva.utils.state_management import ConversationState
+    from hiyal.utils.state_management import ConversationState
 
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ def _require_opentelemetry() -> "_OpenTelemetryModules":
     except Exception as exc:  # pragma: no cover - dependency missing at runtime.
         raise MissingDependencyError(
             "OpenTelemetry is required for telemetry support. Install the 'observability' extra "
-            'via `pip install neva[observability]` or `poetry install --extras "observability"`.'
+            'via `pip install hiyal[observability]` or `poetry install --extras "observability"`.'
         ) from exc
 
     return _OpenTelemetryModules(
@@ -350,12 +350,12 @@ class _TelemetryInstruments:
 
 
 class TelemetryManager:
-    """Coordinate OpenTelemetry traces, metrics, and logs for Neva."""
+    """Coordinate OpenTelemetry traces, metrics, and logs for Hiyal."""
 
     def __init__(
         self,
         *,
-        service_name: str = "neva",
+        service_name: str = "hiyal",
         resource_attributes: Optional[Mapping[str, Any]] = None,
         tracer_provider: Optional[Any] = None,
         meter_provider: Optional[Any] = None,
@@ -484,7 +484,7 @@ class TelemetryManager:
                 handler = modules.logging_handler_cls(
                     level=logging.NOTSET, logger_provider=logger_provider
                 )
-                telemetry_logger = logging.getLogger("neva.telemetry")
+                telemetry_logger = logging.getLogger("hiyal.telemetry")
                 telemetry_logger.setLevel(logging.INFO)
                 telemetry_logger.propagate = False
                 # Remove any stale telemetry handlers to avoid duplicate emission.
@@ -510,47 +510,47 @@ class TelemetryManager:
         instruments = _TelemetryInstruments()
         try:
             instruments.agent_latency = self._meter.create_histogram(
-                name="neva.agent.response.latency",
+                name="hiyal.agent.response.latency",
                 unit="s",
                 description="Latency for each agent turn.",
             )
             instruments.llm_latency = self._meter.create_histogram(
-                name="neva.llm.api.latency",
+                name="hiyal.llm.api.latency",
                 unit="s",
                 description="Latency of direct LLM API calls.",
             )
             instruments.llm_first_token_latency = self._meter.create_histogram(
-                name="neva.llm.first_token.latency",
+                name="hiyal.llm.first_token.latency",
                 unit="s",
                 description="Time from provider request start to first streamed text.",
             )
             instruments.tool_latency = self._meter.create_histogram(
-                name="neva.tool.invocation.latency",
+                name="hiyal.tool.invocation.latency",
                 unit="s",
                 description="Runtime of tool invocations triggered by agents.",
             )
             instruments.prompt_tokens = self._meter.create_counter(
-                name="neva.llm.prompt.tokens",
+                name="hiyal.llm.prompt.tokens",
                 unit="{token}",
                 description="Estimated prompt tokens consumed per turn.",
             )
             instruments.completion_tokens = self._meter.create_counter(
-                name="neva.llm.completion.tokens",
+                name="hiyal.llm.completion.tokens",
                 unit="{token}",
                 description="Estimated completion tokens produced per turn.",
             )
             instruments.total_tokens = self._meter.create_counter(
-                name="neva.llm.total.tokens",
+                name="hiyal.llm.total.tokens",
                 unit="{token}",
                 description="Total estimated tokens exchanged with language models.",
             )
             instruments.context_tokens = self._meter.create_histogram(
-                name="neva.context.window.tokens",
+                name="hiyal.context.window.tokens",
                 unit="{token}",
                 description="Tokens tracked in the active conversation context.",
             )
             instruments.tool_invocations = self._meter.create_counter(
-                name="neva.tool.invocations",
+                name="hiyal.tool.invocations",
                 unit="{count}",
                 description="Number of tool invocations triggered by agents.",
             )
@@ -569,7 +569,7 @@ class TelemetryManager:
             return span
         payload = {"conversation.id": conversation_id}
         payload.update(_normalise_attributes(attributes))
-        span = self._tracer.start_span("neva.conversation", attributes=payload)
+        span = self._tracer.start_span("hiyal.conversation", attributes=payload)
         self._conversation_spans[conversation_id] = span
         return span
 
@@ -669,7 +669,7 @@ class TelemetryManager:
             reasoning_steps = _extract_reasoning_steps(response)
 
         with self._tracer.start_as_current_span(
-            "neva.agent.turn",
+            "hiyal.agent.turn",
             context=context,
             attributes=span_attrs,
             kind=self._span_kind.INTERNAL,
@@ -814,7 +814,7 @@ class TelemetryManager:
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
         with self._tracer.start_as_current_span(
-            "neva.llm.call",
+            "hiyal.llm.call",
             context=context,
             attributes=span_attrs,
             kind=self._span_kind.CLIENT,
@@ -887,7 +887,7 @@ class TelemetryManager:
         span_attrs.update(_normalise_attributes(metadata))
         context = self._conversation_context(conversation_id)
         with self._tracer.start_as_current_span(
-            "neva.tool.call",
+            "hiyal.tool.call",
             context=context,
             attributes=span_attrs,
             kind=self._span_kind.CLIENT,

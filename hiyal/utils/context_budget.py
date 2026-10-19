@@ -20,7 +20,7 @@ class ModelContextBudget:
     sequence of role/content messages for chat APIs, or the flattened request
     string for Gemini. It must include any message framing, priming, and
     provider-specific overhead. The caller supplies the model's context size
-    and an appropriate counter; Neva cannot verify provider-side tokenization.
+    and an appropriate counter; Hiyal cannot verify provider-side tokenization.
     ``counter_id`` versions the counter for cache/replay identity.
     """
 
@@ -42,8 +42,8 @@ class ModelContextBudget:
             raise ConfigurationError("context budget max_tokens must be a positive integer")
         if not callable(self.count_request_tokens):
             raise ConfigurationError("context budget count_request_tokens must be callable")
-        bound_provider = getattr(self.count_request_tokens, "_neva_provider", None)
-        bound_model = getattr(self.count_request_tokens, "_neva_model", None)
+        bound_provider = getattr(self.count_request_tokens, "_hiyal_provider", None)
+        bound_model = getattr(self.count_request_tokens, "_hiyal_model", None)
         if (bound_provider is not None and bound_provider != self.provider) or (
             bound_model is not None and bound_model != self.model
         ):
@@ -93,6 +93,6 @@ def openai_chat_counter(model: str) -> RequestTokenCounter:
             for message in request
         )
 
-    setattr(count, "_neva_provider", "openai")
-    setattr(count, "_neva_model", model)
+    setattr(count, "_hiyal_provider", "openai")
+    setattr(count, "_hiyal_model", model)
     return count

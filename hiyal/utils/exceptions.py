@@ -1,23 +1,23 @@
-"""Project-wide custom exception hierarchy for Neva."""
+"""Project-wide custom exception hierarchy for Hiyal."""
 
 from __future__ import annotations
 
 from concurrent.futures import CancelledError
 
 
-class NevaError(Exception):
-    """Base class for all custom exceptions raised by Neva."""
+class HiyalError(Exception):
+    """Base class for all custom exceptions raised by Hiyal."""
 
 
-class ConfigurationError(NevaError):
+class ConfigurationError(HiyalError):
     """Raised when a component receives an invalid configuration."""
 
 
-class ValidationError(NevaError):
+class ValidationError(HiyalError):
     """Raised when input data fails validation checks."""
 
 
-class DependencyError(NevaError):
+class DependencyError(HiyalError):
     """Raised when optional dependencies are unavailable or fail to load."""
 
 
@@ -25,7 +25,7 @@ class MissingDependencyError(DependencyError):
     """Raised when an optional dependency is not installed."""
 
 
-class BackendError(NevaError):
+class BackendError(HiyalError):
     """Raised when an external service or model backend fails."""
 
 
@@ -41,7 +41,7 @@ class CircuitBreakerConfigurationError(ConfigurationError):
     """Raised when circuit breaker parameters are invalid."""
 
 
-class CacheError(NevaError):
+class CacheError(HiyalError):
     """Base class for cache related errors."""
 
 
@@ -49,7 +49,7 @@ class CacheConfigurationError(CacheError, ConfigurationError):
     """Raised when cache parameters are invalid."""
 
 
-class MemoryModuleError(NevaError):
+class MemoryModuleError(HiyalError):
     """Base class for memory module related errors."""
 
 
@@ -69,7 +69,7 @@ class SpendBudgetConfigurationError(ConfigurationError):
     """Raised when a spend budget is configured with invalid parameters."""
 
 
-class SpendBudgetExceededError(NevaError):
+class SpendBudgetExceededError(HiyalError):
     """Raised when a spend budget has been exhausted or would be exceeded."""
 
 
@@ -83,7 +83,7 @@ class RateLimiterCancelledError(CancelledError):
     """
 
 
-class AgentError(NevaError):
+class AgentError(HiyalError):
     """Base class for agent related errors."""
 
 
@@ -107,11 +107,11 @@ class AgentManagerError(AgentError):
     """Raised when the agent manager encounters an unrecoverable error."""
 
 
-class SchedulingError(NevaError):
+class SchedulingError(HiyalError):
     """Raised when a scheduler cannot select an agent to run."""
 
 
-class ToolError(NevaError):
+class ToolError(HiyalError):
     """Base class for tool related failures."""
 
 
@@ -147,7 +147,7 @@ class ToolLoopLimitError(ToolError):
     """Raised when a bounded tool-loop resource envelope cannot be satisfied."""
 
 
-class ReproducibilityError(NevaError):
+class ReproducibilityError(HiyalError):
     """Base class for experiment reproducibility failures."""
 
 
