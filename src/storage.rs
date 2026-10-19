@@ -431,13 +431,18 @@ where
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, String> {
-        if self.poisoned { return Err("writer poisoned; reopen/recover".into()); }
+        if self.poisoned {
+            return Err("writer poisoned; reopen/recover".into());
+        }
         self.schedule.validate()?;
         let mut expected_schedule = self.schedule.clone();
         let mut expected_streams = self.streams.clone();
         if let Outcome::Control { paused } = &outcome {
-            if *paused { expected_schedule.pause(actor)?; }
-            else { expected_schedule.resume(actor)?; }
+            if *paused {
+                expected_schedule.pause(actor)?;
+            } else {
+                expected_schedule.resume(actor)?;
+            }
         } else if expected_schedule.select(&mut expected_streams)? != Some(actor) {
             return Err("unexpected selected actor".into());
         }
@@ -445,27 +450,41 @@ where
             return Err("scheduler or random stream divergence".into());
         }
         let accepted = matches!(&outcome, Outcome::Accepted { .. });
-        let next_step = self.logical_step
-            .checked_add(u64::from(accepted)).ok_or("logical-step overflow")?;
+        let next_step = self
+            .logical_step
+            .checked_add(u64::from(accepted))
+            .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
         let new_world = match &outcome {
-            Outcome::Accepted { world, state_hash, .. } => {
-                if digest(world)? != *state_hash { return Err("staged state hash mismatch".into()); }
+            Outcome::Accepted {
+                world, state_hash, ..
+            } => {
+                if digest(world)? != *state_hash {
+                    return Err("staged state hash mismatch".into());
+                }
                 world.clone()
             }
             Outcome::Rejected { .. } | Outcome::Control { .. } => self.world.clone(),
         };
         let mut event = Entry {
-            schema: SCHEMA, trial_id: self.genesis.trial_id.clone(),
-            sequence: self.sequence, logical_step: self.logical_step,
-            actor, outcome, after_schedule: schedule, after_streams: streams,
-            previous_hash: self.chain_head.clone(), hash: String::new(),
+            schema: SCHEMA,
+            trial_id: self.genesis.trial_id.clone(),
+            sequence: self.sequence,
+            logical_step: self.logical_step,
+            actor,
+            outcome,
+            after_schedule: schedule,
+            after_streams: streams,
+            previous_hash: self.chain_head.clone(),
+            hash: String::new(),
         };
         event.hash = event.compute_hash()?;
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
         let write_result = (|| -> std::io::Result<()> {
-            let mut file = OpenOptions::new().append(true).open(self.dir.join("events.jsonl"))?;
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(self.dir.join("events.jsonl"))?;
             file.write_all(&encoded)?;
             file.sync_all()
         })();

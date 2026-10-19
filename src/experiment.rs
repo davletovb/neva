@@ -135,41 +135,46 @@ where
         };
         // The attempt sequence, not only the accepted-world step, forms the
         // effect call key; failed attempts cannot reuse paid calls accidentally.
-        let result =
-            match self.store.world.observe(actor) {
-                Ok(obs) => match self.policy.requests(actor, &obs) {
-                    Ok(specs) => {
-                        let mut keyed = Vec::new();
-                        for (index, spec) in specs.into_iter().enumerate() {
-                            let index =
-                                u32::try_from(index).map_err(|_| "too many effect calls")?;
-                            let key = spec.key(
-                                &self.store.genesis.trial_id,
-                                self.store.sequence,
-                                actor,
-                                index,
-                            )?;
-                            keyed.push((key, spec));
-                        }
-                        let receipts = self
-                            .effects
-                            .resolve_all(keyed, self.backend.clone(), self.concurrency,
-                                self.timeout, self.replay_only)
-                            .await?; // Storage, replay-integrity and task failures are fatal.
-                        if receipts.iter().any(|r| matches!(
+        let result = match self.store.world.observe(actor) {
+            Ok(obs) => match self.policy.requests(actor, &obs) {
+                Ok(specs) => {
+                    let mut keyed = Vec::new();
+                    for (index, spec) in specs.into_iter().enumerate() {
+                        let index = u32::try_from(index).map_err(|_| "too many effect calls")?;
+                        let key = spec.key(
+                            &self.store.genesis.trial_id,
+                            self.store.sequence,
+                            actor,
+                            index,
+                        )?;
+                        keyed.push((key, spec));
+                    }
+                    let receipts = self
+                        .effects
+                        .resolve_all(
+                            keyed,
+                            self.backend.clone(),
+                            self.concurrency,
+                            self.timeout,
+                            self.replay_only,
+                        )
+                        .await?; // Storage, replay-integrity and task failures are fatal.
+                    if receipts.iter().any(|r| {
+                        matches!(
                             &r.result,
                             crate::effects::EffectResult::Failed { .. }
-                            | crate::effects::EffectResult::UnsupportedCapability { .. }
-                        )) {
-                            Err("effect failed or capability unsupported".into())
-                        } else {
-                            self.policy.decide(actor, &obs, &receipts)
-                        }
+                                | crate::effects::EffectResult::UnsupportedCapability { .. }
+                        )
+                    }) {
+                        Err("effect failed or capability unsupported".into())
+                    } else {
+                        self.policy.decide(actor, &obs, &receipts)
                     }
-                    Err(e) => Err(e),
-                },
+                }
                 Err(e) => Err(e),
-            };
+            },
+            Err(e) => Err(e),
+        };
         match result {
             Ok(action) => {
                 let mut staged = self.store.world.clone();
@@ -670,16 +675,32 @@ mod tests {
         }
         {
             let _trial = Trial::create(
-                &two, "other-name", 57, "counter", Counter { value: 0, reject: false },
-                Policy { effects: true }, Arc::new(ScriptedBackend),
-                vec![AgentId(0), AgentId(1), AgentId(2)], Scheduling::RoundRobin,
-            ).unwrap();
+                &two,
+                "other-name",
+                57,
+                "counter",
+                Counter {
+                    value: 0,
+                    reject: false,
+                },
+                Policy { effects: true },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0), AgentId(1), AgentId(2)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
         }
         std::fs::copy(one.join("effects.jsonl"), two.join("effects.jsonl")).unwrap();
-        assert!(Trial::resume(
-            &two, "counter", Policy { effects: true },
-            Arc::new(ScriptedBackend), true
-        ).is_err());
+        assert!(
+            Trial::resume(
+                &two,
+                "counter",
+                Policy { effects: true },
+                Arc::new(ScriptedBackend),
+                true
+            )
+            .is_err()
+        );
         assert!(!two.join(".writer.lock").exists());
         std::fs::remove_dir_all(one).unwrap();
         std::fs::remove_dir_all(two).unwrap();
@@ -694,9 +715,10 @@ mod tests {
         let view = Store::<Counter, u64>::inspect_read_only(&path).unwrap();
         assert_eq!(view.world.value, 3);
         assert_eq!(view.sequence, 3);
-        assert_eq!(EffectJournal::inspect_read_only(
-            &path, &trial.store.genesis.trial_id
-        ).unwrap(), 0);
+        assert_eq!(
+            EffectJournal::inspect_read_only(&path, &trial.store.genesis.trial_id).unwrap(),
+            0
+        );
         assert_eq!(std::fs::read(path.join("events.jsonl")).unwrap(), original);
         assert!(path.join(".writer.lock").exists());
         drop(trial);

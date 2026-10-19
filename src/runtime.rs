@@ -80,7 +80,9 @@ impl Receipt {
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
     /// Useful for distinguishing scripted from network-backed billing semantics.
-    fn backend_id(&self) -> &'static str { "custom" }
+    fn backend_id(&self) -> &'static str {
+        "custom"
+    }
     fn resolve<'a>(&'a self, request: &'a EffectSpec) -> BoxResult<'a>;
 }
 
@@ -88,7 +90,9 @@ pub trait Backend: Send + Sync {
 #[derive(Default)]
 pub struct ScriptedBackend;
 impl Backend for ScriptedBackend {
-    fn backend_id(&self) -> &'static str { "scripted" }
+    fn backend_id(&self) -> &'static str {
+        "scripted"
+    }
     fn resolve<'a>(&'a self, spec: &'a EffectSpec) -> BoxResult<'a> {
         Box::pin(async move {
             match spec {
@@ -236,8 +240,12 @@ impl EffectJournal {
             let key = &receipt.key;
             if key.trial_id != trial
                 || receipt.content_hash != receipt.compute_hash()?
-                || receipt.spec.key(trial, key.logical_step, key.agent_id, key.call_index)? != *key
-                || !keys.insert(key.clone()) {
+                || receipt
+                    .spec
+                    .key(trial, key.logical_step, key.agent_id, key.call_index)?
+                    != *key
+                || !keys.insert(key.clone())
+            {
                 return Err("effect ledger failed read-only trial/integrity check".into());
             }
         }
@@ -265,7 +273,11 @@ impl EffectJournal {
         if self.receipts.contains_key(&receipt.key) {
             return Err("effect already recorded".into());
         }
-        if self.owning_trial.as_ref().is_some_and(|trial| trial != &receipt.key.trial_id) {
+        if self
+            .owning_trial
+            .as_ref()
+            .is_some_and(|trial| trial != &receipt.key.trial_id)
+        {
             return Err("attempt to write effect receipt for another trial".into());
         }
         receipt.content_hash = receipt.compute_hash()?;
@@ -304,8 +316,18 @@ impl EffectJournal {
             if !seen.insert(key.clone()) {
                 return Err("duplicate effect call key".into());
             }
-            if self.owning_trial.as_ref().is_some_and(|trial| trial != &key.trial_id)
-                || key != spec.key(&key.trial_id, key.logical_step, key.agent_id, key.call_index)? {
+            if self
+                .owning_trial
+                .as_ref()
+                .is_some_and(|trial| trial != &key.trial_id)
+                || key
+                    != spec.key(
+                        &key.trial_id,
+                        key.logical_step,
+                        key.agent_id,
+                        key.call_index,
+                    )?
+            {
                 return Err("effect trial/request key mismatch".into());
             }
             if let Some(existing) = self.receipts.get(&key) {
@@ -314,7 +336,10 @@ impl EffectJournal {
                 }
                 finished.push(existing.clone());
             } else if replay_only {
-                return Err(format!("missing recorded effect: {}", key.canonical_request_hash));
+                return Err(format!(
+                    "missing recorded effect: {}",
+                    key.canonical_request_hash
+                ));
             } else {
                 pending.push((key, spec));
             }
@@ -333,19 +358,24 @@ impl EffectJournal {
                 let response = match result {
                     Ok(Ok(value)) => value,
                     Ok(Err(error)) => EffectResult::Failed {
-                        category: "backend".into(), message: error
+                        category: "backend".into(),
+                        message: error,
                     },
                     Err(_) => EffectResult::Failed {
-                        category: "timeout".into(), message: "effect deadline exceeded".into()
+                        category: "timeout".into(),
+                        message: "effect deadline exceeded".into(),
                     },
                 };
                 let backend_kind = backend.backend_id();
                 let model = match &response {
-                    EffectResult::Model { effective_model, .. } => Some(effective_model.clone()),
+                    EffectResult::Model {
+                        effective_model, ..
+                    } => Some(effective_model.clone()),
                     _ => None,
                 };
                 let billing = if backend_kind == "scripted"
-                    || matches!(&response, EffectResult::UnsupportedCapability { .. }) {
+                    || matches!(&response, EffectResult::UnsupportedCapability { .. })
+                {
                     BillingDisposition::NotCharged
                 } else if matches!(&response, EffectResult::Model { .. }) {
                     BillingDisposition::Charged
@@ -353,7 +383,10 @@ impl EffectJournal {
                     BillingDisposition::Unknown
                 };
                 Ok::<_, String>(Receipt {
-                    key, spec, result: response, billing,
+                    key,
+                    spec,
+                    result: response,
+                    billing,
                     effective_provider: backend_kind.into(),
                     effective_model: model,
                     content_hash: String::new(),
@@ -374,7 +407,10 @@ impl EffectJournal {
             }
         }
         if !failures.is_empty() {
-            return Err(format!("effect batch incomplete; reconcile provider charges before retry: {}", failures.join("; ")));
+            return Err(format!(
+                "effect batch incomplete; reconcile provider charges before retry: {}",
+                failures.join("; ")
+            ));
         }
         finished.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(finished)
@@ -400,22 +436,32 @@ impl OpenAiCompatible {
         let allowed = match parsed.scheme() {
             "https" => true,
             "http" => parsed.host_str().is_some_and(|host| {
-                host == "localhost" || host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
+                host == "localhost"
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| address.is_loopback())
             }),
             _ => false,
         };
-        if !allowed { return Err("live model URL must be HTTPS or parsed loopback HTTP".into()); }
+        if !allowed {
+            return Err("live model URL must be HTTPS or parsed loopback HTTP".into());
+        }
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .build().map_err(|e|e.to_string())?;
-        Ok(Self { client, url: parsed.to_string(), api_key })
+            .build()
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            client,
+            url: parsed.to_string(),
+            api_key,
+        })
     }
 }
 #[cfg(feature = "live-http")]
 impl Backend for OpenAiCompatible {
-    fn backend_id(&self) -> &'static str { "openai-compatible" }
+    fn backend_id(&self) -> &'static str {
+        "openai-compatible"
+    }
     fn resolve<'a>(&'a self, spec: &'a EffectSpec) -> BoxResult<'a> {
         Box::pin(async move {
             let model = match spec {
@@ -444,9 +490,10 @@ impl Backend for OpenAiCompatible {
                     };
                     let mut message = serde_json::json!({"role":role,"content":m.content});
                     if matches!(m.role, crate::effects::Role::Tool) {
-                        let call_id = m.tool_call_id.as_ref().ok_or(
-                            "tool role message requires tool_call_id"
-                        )?;
+                        let call_id = m
+                            .tool_call_id
+                            .as_ref()
+                            .ok_or("tool role message requires tool_call_id")?;
                         message["tool_call_id"] = serde_json::json!(call_id);
                     }
                     Ok::<_, String>(message)
@@ -566,17 +613,15 @@ mod effect_integrity_tests {
 #[cfg(test)]
 mod batch_regression_tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     struct Tracking {
         launches: Arc<AtomicUsize>,
     }
     impl Backend for Tracking {
         fn resolve<'a>(&'a self, _: &'a EffectSpec) -> BoxResult<'a> {
             self.launches.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async {
-                Err("provider connection interrupted after sending".into())
-            })
+            Box::pin(async { Err("provider connection interrupted after sending".into()) })
         }
     }
     #[tokio::test]
@@ -589,11 +634,17 @@ mod batch_regression_tests {
         let spec = sample_request("one");
         let key = spec.key("trial", 0, AgentId(0), 0).unwrap();
         let launches = Arc::new(AtomicUsize::new(0));
-        let result = journal.resolve_all(
-            vec![(key.clone(), spec.clone()), (key, spec)],
-            Arc::new(Tracking { launches: launches.clone() }),
-            2, Duration::from_secs(1), false,
-        ).await;
+        let result = journal
+            .resolve_all(
+                vec![(key.clone(), spec.clone()), (key, spec)],
+                Arc::new(Tracking {
+                    launches: launches.clone(),
+                }),
+                2,
+                Duration::from_secs(1),
+                false,
+            )
+            .await;
         assert!(result.is_err());
         assert_eq!(launches.load(Ordering::SeqCst), 0);
         assert_eq!(journal.receipt_count(), 0);
@@ -609,10 +660,18 @@ mod batch_regression_tests {
         journal.bind_trial("trial").unwrap();
         let spec = sample_request("perhaps billed");
         let key = spec.key("trial", 0, AgentId(0), 0).unwrap();
-        let result = journal.resolve_all(
-            vec![(key, spec)], Arc::new(Tracking { launches: Arc::new(AtomicUsize::new(0)) }),
-            1, Duration::from_secs(1), false
-        ).await.unwrap();
+        let result = journal
+            .resolve_all(
+                vec![(key, spec)],
+                Arc::new(Tracking {
+                    launches: Arc::new(AtomicUsize::new(0)),
+                }),
+                1,
+                Duration::from_secs(1),
+                false,
+            )
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].billing, BillingDisposition::Unknown);
         drop(journal);
@@ -631,18 +690,22 @@ mod http_tests {
 
     #[test]
     fn parse_live_host_safely_before_sending_bearer_token() {
-        assert!(OpenAiCompatible::new(
-            "http://localhost:8080@attacker.invalid/chat".into(), "token".into()
-        ).is_err());
-        assert!(OpenAiCompatible::new(
-            "http://127.0.0.1.attacker.invalid/chat".into(), "token".into()
-        ).is_err());
-        assert!(OpenAiCompatible::new(
-            "http://192.168.1.10/chat".into(), "token".into()
-        ).is_err());
-        assert!(OpenAiCompatible::new(
-            "http://127.0.0.1:3333/chat".into(), "token".into()
-        ).is_ok());
+        assert!(
+            OpenAiCompatible::new(
+                "http://localhost:8080@attacker.invalid/chat".into(),
+                "token".into()
+            )
+            .is_err()
+        );
+        assert!(
+            OpenAiCompatible::new(
+                "http://127.0.0.1.attacker.invalid/chat".into(),
+                "token".into()
+            )
+            .is_err()
+        );
+        assert!(OpenAiCompatible::new("http://192.168.1.10/chat".into(), "token".into()).is_err());
+        assert!(OpenAiCompatible::new("http://127.0.0.1:3333/chat".into(), "token".into()).is_ok());
     }
     #[tokio::test]
     async fn opt_in_http_chat_adapter_parses_model_and_usage_from_loopback() {
