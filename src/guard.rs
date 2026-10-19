@@ -25,17 +25,13 @@ pub struct BudgetConfig {
 
 impl BudgetConfig {
     pub fn reserve_amount(&self, request: &ModelRequest) -> Result<u64, String> {
-        let bytes = request.messages.iter().try_fold(0usize, |sum, message| {
-            sum.checked_add(message.content.len())
-                .ok_or_else(|| "prompt length overflow".to_string())
-        })?;
-        let schema_bytes = request.tool_schemas.iter().try_fold(0usize, |sum, value| {
-            let size = serde_json::to_vec(value).map_err(|e| e.to_string())?.len();
-            sum.checked_add(size)
-                .ok_or_else(|| "tool schema size overflow".to_string())
-        })?;
-        let total = bytes
-            .checked_add(schema_bytes)
+        // Serialize *every* caller controlled field, including role and
+        // tool-call identifiers. Reserve additional framing bytes for the
+        // wire format (chat message wrappers and model API envelope).
+        let serialized=serde_json::to_vec(request).map_err(|e|e.to_string())?.len();
+        let overhead=request.messages.len().checked_mul(64)
+            .and_then(|n|n.checked_add(256)).ok_or("prompt overhead overflow")?;
+        let total=serialized.checked_add(overhead)
             .ok_or("request size overflow")?;
         if total > self.max_input_bytes {
             return Err("prompt exceeds configured byte limit".into());
@@ -155,7 +151,8 @@ impl GovernedBackend {
             })
             .is_ok()
     }
-    fn admit(&self, key: Option<&EffectCallKey>, spec: &EffectSpec) -> Result<(), String> {
+    fn admit(&self, key: Option<&EffectCallKey>, spec: &EffectSpec) -> Result<Option<u64>, String> {
+        let mut reserved=None;
         match spec {
             EffectSpec::Model(request) => {
                 if let Some(config) = &self.budget {
@@ -163,6 +160,7 @@ impl GovernedBackend {
                     if !Self::reserve(&self.remaining, cost) {
                         return Err("spend cap exhausted".into());
                     }
+                    reserved=Some(cost);
                 }
             }
             EffectSpec::Tool { name, input } => {
@@ -192,7 +190,7 @@ impl GovernedBackend {
                 }
             }
         }
-        Ok(())
+        Ok(reserved)
     }
 }
 impl GovernedBackend {
@@ -216,11 +214,21 @@ impl GovernedBackend {
                 capability: "effect quota exceeded".into(),
             });
         }
-        if let Err(reason) = self.admit(key, spec) {
-            return Ok(EffectResult::UnsupportedCapability { capability: reason });
-        }
+        let reserved=match self.admit(key,spec) {
+            Ok(held)=>held,
+            Err(reason)=>return Ok(EffectResult::UnsupportedCapability{capability:reason}),
+        };
         match spec {
-            EffectSpec::Model(_) => self.backend.resolve(spec).await,
+            EffectSpec::Model(_) => {
+                let result=self.backend.resolve(spec).await;
+                if let (Some(cost),Ok(EffectResult::UnsupportedCapability{..}))=(reserved,&result) {
+                    if self.backend.unsupported_is_pre_dispatch() {
+                        // Only explicitly trusted backends may certify no launch.
+                        self.remaining.fetch_add(cost,Ordering::SeqCst);
+                    }
+                }
+                result
+            },
             EffectSpec::Tool { name, input } => {
                 self.executor
                     .as_ref()
@@ -324,6 +332,41 @@ mod tests {
             EffectResult::UnsupportedCapability { .. }
         ));
     }
+    struct PreflightRefusal;
+    impl Backend for PreflightRefusal {
+        fn unsupported_is_pre_dispatch(&self)->bool {true}
+        fn resolve<'a>(&'a self,_:&'a EffectSpec)->BoxResult<'a>{
+            Box::pin(async {Ok(EffectResult::UnsupportedCapability{
+                capability:"no provider dispatch".into()
+            })})
+        }
+    }
+    #[tokio::test]
+    async fn rejected_pre_dispatch_requests_refund_only_admission_reservations(){
+        let cfg=BudgetConfig{maximum_micro_usd:10_000,
+            prompt_micro_usd_per_token:1,output_micro_usd_per_token:1,
+            max_input_bytes:4096,max_output_tokens:80};
+        let guard=GovernedBackend::new(Arc::new(PreflightRefusal),4)
+            .with_budget(cfg);
+        let spec=sample_request("safe");
+        for _ in 0..3 {
+            assert!(matches!(guard.resolve(&spec).await.unwrap(),
+                EffectResult::UnsupportedCapability{..}));
+        }
+        assert_eq!(guard.remaining_micro_usd(),Some(10_000));
+    }
+    #[test]
+    fn full_message_framing_and_tool_ids_are_budgeted(){
+        let mut spec=sample_request("x");
+        if let EffectSpec::Model(ref mut m)=spec {
+            m.messages[0].tool_call_id=Some("a".repeat(1000));
+            let cfg=BudgetConfig{maximum_micro_usd:1_000_000,
+                prompt_micro_usd_per_token:1,output_micro_usd_per_token:1,
+                max_input_bytes:512,max_output_tokens:100};
+            assert!(cfg.reserve_amount(m).is_err());
+        }
+    }
+
     #[tokio::test]
     async fn recorded_side_effect_replays_without_live_tool_permission() {
         let dir = std::env::temp_dir().join(format!("hiyal-r3-tool-replay-{}", std::process::id()));
@@ -389,10 +432,10 @@ mod tests {
     #[tokio::test]
     async fn reservations_are_monotonic_even_after_backend_error() {
         let config = BudgetConfig {
-            maximum_micro_usd: 1_000,
-            prompt_micro_usd_per_token: 1,
+            maximum_micro_usd: 2_000,
+            prompt_micro_usd_per_token: 2,
             output_micro_usd_per_token: 10,
-            max_input_bytes: 200,
+            max_input_bytes: 4096,
             max_output_tokens: 80,
         };
         let guarded = GovernedBackend::new(Arc::new(ScriptedBackend), 3).with_budget(config);
@@ -403,7 +446,7 @@ mod tests {
         let first = guarded.resolve(&spec).await.unwrap();
         assert!(matches!(first, EffectResult::Model { .. }));
         let remaining = guarded.remaining_micro_usd().unwrap();
-        assert!(remaining < 1000);
+        assert!(remaining < 2000);
         assert!(matches!(
             guarded.resolve(&spec).await.unwrap(),
             EffectResult::UnsupportedCapability { .. }

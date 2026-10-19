@@ -96,3 +96,6 @@ by local mocks. No Python benchmarks, legacy CI, or new CI matrix.
 
 - Loopback bearer requests bypass all environment proxy settings with a direct HTTP client, preventing token leakage through `HTTP_PROXY` when `NO_PROXY` is unreliable.
 - Permission checks apply only to *pending* tool executions. A strict replay of an already hashed, durable tool receipt can use an inert `ScriptedBackend` without approval or a live executor. A captured keyed-tool replay regression verifies this distinction.
+
+- The admission reservation accounts for **every serialized model request field**, including tool-call IDs, messages, schemas, sampling and wrapper overhead. Only built-in backends that guarantee an `UnsupportedCapability` result occurs **before any dispatch** may return that reservation to the per-process budget; transport and post-dispatch failures never refund.
+- Intermediate retryable HTTP 429 statuses do not trip the circuit prematurely. A final/exhausted 429 counts as a failure. The regression tests the boundary with a threshold of one and a single allowed retry.
