@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a capability or improvement for Neva
+about: Suggest a capability or improvement for Hiyal
 title: "[feature] "
 labels: enhancement
 ---
@@ -15,5 +15,5 @@ labels: enhancement
 
 **Boundaries**
 
-<!-- What should stay out of scope? Neva documents explicit boundaries for
+<!-- What should stay out of scope? Hiyal documents explicit boundaries for
 determinism, guardrails, and provider behavior; note any that apply here. -->

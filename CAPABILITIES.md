@@ -1,6 +1,6 @@
-# Neva Library Capabilities
+# Hiyal Library Capabilities
 
-This document describes durable capabilities available in Neva today. It is a
+This document describes durable capabilities available in Hiyal today. It is a
 reference for users and contributors, not a roadmap, implementation tracker, or
 release history. For chronological changes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -58,7 +58,7 @@ request timeout.
 
 ## Context and output budgets
 
-Neva provides separate controls for stored history, formatted request size,
+Hiyal provides separate controls for stored history, formatted request size,
 model-aware token envelopes, and generated output.
 
 ### Conversation retention
@@ -110,7 +110,7 @@ A stream:
   begun and the stream then fails.
 
 Pre-output retryable failures may use configured retries. Once partial output
-has been emitted, Neva does not replay the call automatically.
+has been emitted, Hiyal does not replay the call automatically.
 
 ## Durable failure recovery
 
@@ -142,7 +142,7 @@ idempotent.
 
 ## Checkpointing and persistence
 
-Neva can snapshot and restore supported environment, scheduler, agent, memory,
+Hiyal can snapshot and restore supported environment, scheduler, agent, memory,
 and conversation state.
 
 Persistence controls include:
@@ -161,11 +161,11 @@ Custom schedulers and memory implementations can participate through explicit
 checkpoint hooks.
 
 The checkpoint format remains a single JSON document. The graph and file limits
-bound Neva's serialization path; they are not an operating-system RSS limit.
+bound Hiyal's serialization path; they are not an operating-system RSS limit.
 
 ## Memory
 
-Neva supports pluggable memory components, including FAISS-backed vector memory
+Hiyal supports pluggable memory components, including FAISS-backed vector memory
 through the optional `memory` extra.
 
 Supported first-party memory state can participate in checkpointing and
@@ -198,7 +198,7 @@ access unless the application supplies a stronger external sandbox.
 
 ## Model-driven tool orchestration
 
-`agent.run_tool_loop(task)` and `neva.tools.run_tool_loop(...)` provide a
+`agent.run_tool_loop(task)` and `hiyal.tools.run_tool_loop(...)` provide a
 bounded model/tool/feedback loop.
 
 The loop:
@@ -218,7 +218,7 @@ authoritative enforcement path.
 
 ## Reproducible experiments and offline replay
 
-`neva.utils.reproducibility` provides a unified workflow for experiment
+`hiyal.utils.reproducibility` provides a unified workflow for experiment
 manifests, seeding, recording, and replay.
 
 It can capture behavior-affecting configuration such as:
@@ -238,11 +238,11 @@ offline replay of captured model-boundary behavior.
 
 This does not make live providers deterministic. Provider revisions, hidden
 service state, sampling implementations, and hardware/runtime behavior remain
-outside Neva's control.
+outside Hiyal's control.
 
 ## Observability and privacy defaults
 
-Neva exposes simulation metrics and optional OpenTelemetry instrumentation for
+Hiyal exposes simulation metrics and optional OpenTelemetry instrumentation for
 conversation turns, provider calls, and tool execution.
 
 Telemetry omits raw prompt/completion content by default. Applications may opt
@@ -252,7 +252,7 @@ they contain caller-provided data.
 
 ## Scheduling
 
-Neva includes a scheduler registry and built-in strategies such as:
+Hiyal includes a scheduler registry and built-in strategies such as:
 
 - round robin;
 - random;
@@ -267,7 +267,7 @@ Custom schedulers can be registered at runtime.
 
 ## Scope and security boundaries
 
-Neva provides library-level controls, not a universal sandbox or account-wide
+Hiyal provides library-level controls, not a universal sandbox or account-wide
 policy system.
 
 In particular:
@@ -282,4 +282,4 @@ In particular:
   unless documented otherwise.
 
 These boundaries are part of the supported behavior and should be considered
-when embedding Neva in a larger application.
+when embedding Hiyal in a larger application.

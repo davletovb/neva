@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Neva is pre-1.0. Security fixes land on `main` and ship in the next patch
+Hiyal is pre-1.0. Security fixes land on `main` and ship in the next patch
 release; older commits, forks, and unpinned environments are not maintained.
 
 | Version | Supported |
@@ -26,7 +26,7 @@ of scope.
 
 ## Scope notes
 
-- Provider credentials are never logged, serialized, or replayed by Neva.
+- Provider credentials are never logged, serialized, or replayed by Hiyal.
   Reports that a key leaks into checkpoints, run manifests, logs, telemetry, or
   exception messages are in scope and treated as high severity.
 - `ToolGuard`, prompt validators, checkpoint limits, spend budgets, and rate
