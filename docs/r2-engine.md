@@ -124,3 +124,6 @@ Python and DuckDB without a Python runtime in Hiyal.
 - Sweeps exclude counter-overflow configurations before running and distinguish accepted logical steps from attempt counts. Worker parallelism can change without changing scientific identity.
 - Observer/CSV projection failures are not reported as successful runs; repeat execution rebuilds CSV from verified events.
 - Shared atomic writing now handles plan, result, metrics and fork metadata. Rebuilt CSV is streamed rather than buffered. Metric append no longer calls fsync on every committed step; world events are still durable. Paired checks compare previously verified fork metadata without redundant full-ancestry replay.
+
+- Fork IDs incorporate a canonical hash of the committed parent head, intervention/arm parameters and before/after state. Identical intervention names applied at different boundaries cannot alias in trial/receipt identity.
+- Generic Sweep::execute continues to accept arbitrary u64 parameter categories. Overflow rejection is intentionally specific to Sweep::run_counter, which performs checked integer addition.

@@ -79,11 +79,6 @@ impl Sweep {
         if !self.parameter_values.iter().all(|v| seen.insert(v)) {
             return Err("duplicate sweep parameter".into());
         }
-        // Counter::apply rejects overflow, so exclude configurations that
-        // cannot complete every requested increment *before* launching jobs.
-        if self.parameter_values.iter().any(|amount| amount.checked_mul(self.attempts).is_none()) {
-            return Err("counter amount multiplied by attempts overflows u64".into());
-        }
         let mut jobs = Vec::new();
         for parameter in &self.parameter_values {
             for replicate in 0..self.replicates {
@@ -169,8 +164,14 @@ impl Sweep {
     pub async fn run_counter(&self, root: impl AsRef<Path>) -> Result<Vec<JobResult>, String> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        // Validate all limits before persisting the study's immutable plan.
+        // Generic Sweep::execute accepts arbitrary scientific parameters;
+        // only this fixed counter reference needs multiplication checked.
         let _ = self.jobs()?;
+        if self.parameter_values.iter().any(|amount|
+            amount.checked_mul(self.attempts).is_none()
+        ) {
+            return Err("counter amount multiplied by attempts overflows u64".into());
+        }
         let plan_path = root.join("sweep-plan.json");
         // Worker count is an operational resource limit, not scientific
         // experiment identity. Switching 1 -> 16 workers must be restartable.
@@ -429,7 +430,20 @@ where
     let mut world = parent.world.clone();
     intervene(&mut world)?;
     let after = digest(&world)?;
-    let name = format!("fork:{}:{intervention}:{arm}", parent.genesis.trial_id);
+    // Different parent boundaries, parameters, and post-intervention states
+    // must never share trial IDs or model-effect call identities.
+    let attribution = digest(&(
+        "r2-fork-id-v2",
+        &parent.genesis.trial_id,
+        &parent.chain_head,
+        parent.sequence,
+        intervention,
+        arm,
+        &parameters,
+        &before,
+        &after,
+    ))?;
+    let name = format!("fork:{}:{attribution}", parent.genesis.trial_id);
     let branch_id = TrialId::new(&name, parent.streams.root_seed).0;
     let streams = parent.streams.paired_branch(branch_id.clone());
     let genesis = Genesis {
@@ -683,11 +697,18 @@ mod tests {
     }
 
     #[test]
-    fn oversized_counter_parameters_are_rejected_before_execution() {
+    #[tokio::test]
+    async fn oversized_counter_parameters_are_rejected_only_by_counter_runner() {
         let mut plan=sweep(1);
         plan.parameter_values=vec![u64::MAX];
         plan.attempts=2;
-        assert!(plan.jobs().is_err());
+        assert!(plan.jobs().is_ok());
+        let custom=plan.execute(|job| async move { Ok(job.parameter) }).await.unwrap();
+        assert_eq!(custom.len(),3);
+        let path=directory("counter-overflow");
+        assert!(plan.run_counter(&path).await.is_err());
+        assert!(!path.join("sweep-plan.json").exists());
+        fs::remove_dir_all(path).unwrap();
         plan.attempts=1;
         assert!(plan.jobs().is_ok());
     }
@@ -738,6 +759,46 @@ mod tests {
         assert!(result.is_err());
         assert!(!root.join("pair/control").exists());
         assert!(!root.join("pair/treatment").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn fork_ids_change_with_parameters_and_committed_parent_boundary() {
+        let root=directory("unique-fork-identity");
+        let parent=root.join("parent");
+        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
+        let policy=|| Increment {
+            amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()
+        };
+        {
+            let trial=Trial::create(&parent,"identity-source",7,&kind,Counter{total:0},
+                policy(),Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin).unwrap();
+            drop(trial);
+        }
+        let a=fork_at_head(&parent,root.join("a"),"shock","treatment",
+            serde_json::json!({"change":1}),|world:&mut Counter|{
+                world.total+=1;Ok(())
+            },policy(),Arc::new(ScriptedBackend)).unwrap();
+        let b=fork_at_head(&parent,root.join("b"),"shock","treatment",
+            serde_json::json!({"change":2}),|world:&mut Counter|{
+                world.total+=2;Ok(())
+            },policy(),Arc::new(ScriptedBackend)).unwrap();
+        assert_ne!(a.store.genesis().trial_id,b.store.genesis().trial_id);
+        let first=a.store.genesis().trial_id.clone();
+        drop(a);drop(b);
+        {
+            let mut source=Trial::resume(&parent,&kind,policy(),Arc::new(ScriptedBackend),false).unwrap();
+            source.run_attempts(1).await.unwrap();
+            source.checkpoint().unwrap();
+        }
+        let c=fork_at_head(&parent,root.join("c"),"shock","treatment",
+            serde_json::json!({"change":1}),|world:&mut Counter|{
+                world.total+=1;Ok(())
+            },policy(),Arc::new(ScriptedBackend)).unwrap();
+        assert_ne!(first,c.store.genesis().trial_id);
+        drop(c);
+        assert!(verify_fork::<Counter>(root.join("a")).is_ok());
+        assert!(verify_fork::<Counter>(root.join("c")).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 
