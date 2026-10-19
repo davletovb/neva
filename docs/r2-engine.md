@@ -127,3 +127,5 @@ Python and DuckDB without a Python runtime in Hiyal.
 
 - Fork IDs incorporate a canonical hash of the committed parent head, intervention/arm parameters and before/after state. Identical intervention names applied at different boundaries cannot alias in trial/receipt identity.
 - Generic Sweep::execute continues to accept arbitrary u64 parameter categories. Overflow rejection is intentionally specific to Sweep::run_counter, which performs checked integer addition.
+
+- Fork placement checks canonicalized source and prospective child paths, including existing symlink ancestors and lexical aliases. A path that resolves under its own source ancestry is rejected before creating a child.

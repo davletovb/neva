@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs::{self, File},
     future::Future,
-    io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::task::JoinSet;
@@ -49,6 +48,25 @@ pub struct JobResult {
     pub sequence: u64,
     pub final_value: u64,
     pub chain_head: String,
+}
+
+/// Resolve existing symlinks in the longest available ancestor, then
+/// append any not-yet-created path components. This checks containment
+/// without first materializing an unsafe child under the source.
+fn canonical_future_path(path: &Path) -> Result<PathBuf, String> {
+    let mut ancestor = path.to_path_buf();
+    let mut missing = Vec::new();
+    while !ancestor.exists() {
+        let name = ancestor.file_name()
+            .ok_or("destination contains unresolved or invalid path components")?;
+        missing.push(name.to_os_string());
+        ancestor = ancestor.parent().ok_or("destination has no existing ancestor")?.to_path_buf();
+    }
+    let mut resolved = fs::canonicalize(&ancestor).map_err(|e| e.to_string())?;
+    for name in missing.iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
 }
 
 fn simple_name(value: &str) -> bool {
@@ -421,7 +439,11 @@ where
     }
     let parent_dir = parent_dir.as_ref();
     let child_dir = child_dir.as_ref();
-    if child_dir.exists() || child_dir.starts_with(parent_dir) || parent_dir.starts_with(child_dir)
+    let canonical_parent = fs::canonicalize(parent_dir).map_err(|e| e.to_string())?;
+    let canonical_child = canonical_future_path(child_dir)?;
+    if child_dir.exists()
+        || canonical_child.starts_with(&canonical_parent)
+        || canonical_parent.starts_with(&canonical_child)
     {
         return Err("branch directory must be new and independent of parent".into());
     }
@@ -759,6 +781,39 @@ mod tests {
         assert!(result.is_err());
         assert!(!root.join("pair/control").exists());
         assert!(!root.join("pair/treatment").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reject_aliases_and_symlinks_into_parent_directory() {
+        let root=directory("fork-containment");
+        let parent=root.join("parent");
+        let kind=kind(1,false,"fixed-v1","scripted").unwrap();
+        let policy=|| Increment{
+            amount:1,model:false,model_id:"fixed-v1".into(),provider:"scripted".into()
+        };
+        {
+            let trial=Trial::create(
+                &parent,"containment",9,&kind,Counter{total:0},policy(),
+                Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin
+            ).unwrap();
+            drop(trial);
+        }
+        let aliased=root.join(".").join("parent").join("nested");
+        assert!(fork_at_head(
+            &parent,&aliased,"shock","treatment",serde_json::json!({}),
+            |_world:&mut Counter|Ok(()),policy(),Arc::new(ScriptedBackend)
+        ).is_err());
+        assert!(!parent.join("nested").exists());
+        #[cfg(unix)] {
+            let link=root.join("source-link");
+            std::os::unix::fs::symlink(&parent,&link).unwrap();
+            assert!(fork_at_head(
+                &parent,link.join("nested"),"shock","treatment",serde_json::json!({}),
+                |_world:&mut Counter|Ok(()),policy(),Arc::new(ScriptedBackend)
+            ).is_err());
+            assert!(!parent.join("nested").exists());
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
