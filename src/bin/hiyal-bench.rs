@@ -115,7 +115,7 @@ async fn run() -> Result<(), String> {
         "latency_p95_ms": percentile_ns(&durations, 95, 100) as f64 / 1e6,
         "rss_current_bytes": rss_bytes(),
         "checkpoints": checkpoints,
-        "rust_version": option_env!("RUSTC_VERSION"),
+        "rust_version": env!("HIYAL_RUSTC_VERSION"),
         "platform": {"os":env::consts::OS,"arch":env::consts::ARCH},
         "semantics": "disk-backed hash-chained world commits, no provider, observers project JSONL and CSV",
         "comparison_warning": "NOT the same unit of work as the historical Python BasicEnvironment.step; no speedup inference"
