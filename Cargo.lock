@@ -281,6 +281,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hiyal-custom-model-example"
+version = "0.1.0"
+dependencies = [
+ "hiyal",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hiyal-custom-world-example"
 version = "0.1.0"
 dependencies = [
