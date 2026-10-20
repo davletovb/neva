@@ -56,7 +56,11 @@ pub trait Observer<W: World>: Send + Sync {
     fn committed(&self, entry: &Entry<W, W::Action>) -> Result<(), String>;
     /// The authoritative byte boundary enables safe suffix recovery of
     /// derived projections without changing existing observer implementations.
-    fn committed_with_log_offset(&self, entry: &Entry<W, W::Action>, _end: u64) -> Result<(), String> {
+    fn committed_with_log_offset(
+        &self,
+        entry: &Entry<W, W::Action>,
+        _end: u64,
+    ) -> Result<(), String> {
         self.committed(entry)
     }
 }
@@ -90,7 +94,10 @@ struct RoundPlan {
 impl RoundPlan {
     fn hash(&self) -> Result<String, String> {
         let mut value = serde_json::to_value(self).map_err(|e| e.to_string())?;
-        value.as_object_mut().ok_or("invalid round plan structure")?.remove("content_hash");
+        value
+            .as_object_mut()
+            .ok_or("invalid round plan structure")?
+            .remove("content_hash");
         crate::storage::digest(&value)
     }
     fn persist(&mut self, path: &Path) -> Result<(), String> {
@@ -268,7 +275,8 @@ where
         if plan.schema != ROUND_PLAN_SCHEMA
             || plan.trial_id != self.store.genesis.trial_id
             || plan.hash()? != plan.content_hash
-            || plan.actors.is_empty() || plan.actors.len() > 10_000
+            || plan.actors.is_empty()
+            || plan.actors.len() > 10_000
             || self.store.sequence < plan.start_sequence
             || self.store.sequence - plan.start_sequence > plan.actors.len() as u64
         {
@@ -276,9 +284,14 @@ where
         }
         for (i, actor) in plan.actors.iter().enumerate() {
             for (call, (key, spec)) in actor.specs.iter().enumerate() {
-                let expected = spec.key(&plan.trial_id,
-                    plan.start_sequence.checked_add(i as u64).ok_or("round sequence overflow")?,
-                    actor.actor, call as u32)?;
+                let expected = spec.key(
+                    &plan.trial_id,
+                    plan.start_sequence
+                        .checked_add(i as u64)
+                        .ok_or("round sequence overflow")?,
+                    actor.actor,
+                    call as u32,
+                )?;
                 if expected != *key {
                     return Err("round plan effect identity changed".into());
                 }
@@ -295,8 +308,10 @@ where
         let mut seen = 0;
         self.store.visit_events(|entry| {
             if entry.sequence >= plan.start_sequence {
-                if seen >= completed || entry.actor != plan.actors[seen].actor
-                    || entry.previous_hash != expected {
+                if seen >= completed
+                    || entry.actor != plan.actors[seen].actor
+                    || entry.previous_hash != expected
+                {
                     return Err("interrupted round history does not match saved plan".into());
                 }
                 expected = entry.hash;
@@ -485,44 +500,70 @@ where
     /// completes the saved round instead of calculating new observations.
     /// Requires serializable observations exclusively for this API.
     pub async fn run_round(&mut self, max_actors: usize) -> Result<Vec<Step<W>>, String>
-    where W::Observation: Serialize + DeserializeOwned,
+    where
+        W::Observation: Serialize + DeserializeOwned,
     {
         let path = self.pending_round_path();
         let plan: RoundPlan = if path.exists() {
             serde_json::from_slice(&crate::storage::read_metadata_limited(&path)?)
                 .map_err(|e| format!("cannot restore pending round: {e}"))?
         } else {
-            let available = self.store.schedule.agents.len()
+            let available = self
+                .store
+                .schedule
+                .agents
+                .len()
                 .saturating_sub(self.store.schedule.paused.len());
-            if max_actors == 0 || available == 0 { return Ok(Vec::new()); }
-            if max_actors > 10_000 { return Err("round exceeds 10,000 actors".into()); }
+            if max_actors == 0 || available == 0 {
+                return Ok(Vec::new());
+            }
+            if max_actors > 10_000 {
+                return Err("round exceeds 10,000 actors".into());
+            }
             let limit = max_actors.min(available);
             let mut schedule = self.store.schedule.clone();
             let mut streams = self.store.streams.clone();
             let mut actors = Vec::with_capacity(limit);
             for i in 0..limit {
-                let Some(actor) = schedule.select(&mut streams)? else { break; };
-                let sequence = self.store.sequence.checked_add(i as u64)
+                let Some(actor) = schedule.select(&mut streams)? else {
+                    break;
+                };
+                let sequence = self
+                    .store
+                    .sequence
+                    .checked_add(i as u64)
                     .ok_or("round sequence overflow")?;
                 let mut planned = PlannedActor {
-                    actor, observation: None, reason: None, specs: Vec::new()
+                    actor,
+                    observation: None,
+                    reason: None,
+                    specs: Vec::new(),
                 };
                 match self.store.world.observe(actor) {
                     Err(reason) => planned.reason = Some(reason),
                     Ok(obs) => {
-                        planned.observation = Some(serde_json::to_value(&obs)
-                            .map_err(|e| e.to_string())?);
+                        planned.observation =
+                            Some(serde_json::to_value(&obs).map_err(|e| e.to_string())?);
                         match self.policy.requests(actor, &obs) {
                             Err(reason) => planned.reason = Some(reason),
                             Ok(specs) => {
                                 if specs.len() > 32
-                                    || specs.iter().filter(|s|
-                                        matches!(s, EffectSpec::Tool { .. })).count() > 8 {
-                                    planned.reason = Some("round policy exceeds effect limits".into());
+                                    || specs
+                                        .iter()
+                                        .filter(|s| matches!(s, EffectSpec::Tool { .. }))
+                                        .count()
+                                        > 8
+                                {
+                                    planned.reason =
+                                        Some("round policy exceeds effect limits".into());
                                 } else {
                                     for (index, spec) in specs.into_iter().enumerate() {
-                                        let key = spec.key(&self.store.genesis.trial_id, sequence,
-                                            actor, index as u32)?;
+                                        let key = spec.key(
+                                            &self.store.genesis.trial_id,
+                                            sequence,
+                                            actor,
+                                            index as u32,
+                                        )?;
                                         planned.specs.push((key, spec));
                                     }
                                 }
@@ -532,13 +573,16 @@ where
                 }
                 actors.push(planned);
             }
-            if actors.is_empty() { return Ok(Vec::new()); }
+            if actors.is_empty() {
+                return Ok(Vec::new());
+            }
             let mut fresh = RoundPlan {
                 schema: ROUND_PLAN_SCHEMA,
                 trial_id: self.store.genesis.trial_id.clone(),
                 start_sequence: self.store.sequence,
                 start_chain_head: self.store.chain_head().into(),
-                actors, content_hash: String::new()
+                actors,
+                content_hash: String::new(),
             };
             fresh.persist(&path)?;
             fresh
@@ -563,13 +607,25 @@ where
             let mut tools = 0;
             while end < all_specs.len() && end - cursor < 32 {
                 let is_tool = matches!(&all_specs[end].1, EffectSpec::Tool { .. });
-                if is_tool && tools == 8 { break; }
+                if is_tool && tools == 8 {
+                    break;
+                }
                 tools += usize::from(is_tool);
                 end += 1;
             }
-            let resolved = self.effects.resolve_all(all_specs[cursor..end].to_vec(),
-                self.backend.clone(), self.concurrency, self.timeout, self.replay_only).await?;
-            for receipt in resolved { receipts.insert(receipt.key.clone(), receipt); }
+            let resolved = self
+                .effects
+                .resolve_all(
+                    all_specs[cursor..end].to_vec(),
+                    self.backend.clone(),
+                    self.concurrency,
+                    self.timeout,
+                    self.replay_only,
+                )
+                .await?;
+            for receipt in resolved {
+                receipts.insert(receipt.key.clone(), receipt);
+            }
             cursor = end;
         }
 
@@ -585,15 +641,28 @@ where
                 Err(reason.clone())
             } else {
                 let obs: W::Observation = serde_json::from_value(
-                    planned.observation.clone().ok_or("round observation missing")?
-                ).map_err(|e| format!("round observation format changed: {e}"))?;
+                    planned
+                        .observation
+                        .clone()
+                        .ok_or("round observation missing")?,
+                )
+                .map_err(|e| format!("round observation format changed: {e}"))?;
                 let mut ordered = Vec::new();
                 for (key, _) in &planned.specs {
-                    ordered.push(receipts.get(key).ok_or("round effect receipt missing")?.clone());
+                    ordered.push(
+                        receipts
+                            .get(key)
+                            .ok_or("round effect receipt missing")?
+                            .clone(),
+                    );
                 }
-                if ordered.iter().any(|r| matches!(&r.result,
-                    crate::effects::EffectResult::Failed { .. } |
-                    crate::effects::EffectResult::UnsupportedCapability { .. })) {
+                if ordered.iter().any(|r| {
+                    matches!(
+                        &r.result,
+                        crate::effects::EffectResult::Failed { .. }
+                            | crate::effects::EffectResult::UnsupportedCapability { .. }
+                    )
+                }) {
                     Err("round effect failed or unsupported".into())
                 } else {
                     self.policy.decide(actor, &obs, &ordered)
@@ -607,18 +676,30 @@ where
                     rng.checked_scope_progress(&before_apply, "world")?;
                     match apply {
                         Err(reason) => {
-                            let entry = self.store.append(actor, Outcome::Rejected {
-                                reason: reason.clone()
-                            }, scheduled, rng)?;
+                            let entry = self.store.append(
+                                actor,
+                                Outcome::Rejected {
+                                    reason: reason.clone(),
+                                },
+                                scheduled,
+                                rng,
+                            )?;
                             self.emit(&entry);
                             Step::Rejected { actor, reason }
                         }
                         Ok(()) => {
                             let state_hash = crate::storage::digest(&next)?;
-                            let accepted = self.store.append_typed(actor, Outcome::Accepted {
-                                action, world: LegacyWorld::Missing, state_hash,
-                                before_apply_streams: Some(before_apply),
-                            }, scheduled.clone(), rng.clone());
+                            let accepted = self.store.append_typed(
+                                actor,
+                                Outcome::Accepted {
+                                    action,
+                                    world: LegacyWorld::Missing,
+                                    state_hash,
+                                    before_apply_streams: Some(before_apply),
+                                },
+                                scheduled.clone(),
+                                rng.clone(),
+                            );
                             match accepted {
                                 Ok(entry) => {
                                     self.emit(&entry);
@@ -626,9 +707,14 @@ where
                                 }
                                 Err(AppendError::TooLarge) => {
                                     let reason = crate::storage::EVENT_TOO_LARGE.to_string();
-                                    let entry = self.store.append(actor, Outcome::Rejected {
-                                        reason: reason.clone()
-                                    }, scheduled, rng)?;
+                                    let entry = self.store.append(
+                                        actor,
+                                        Outcome::Rejected {
+                                            reason: reason.clone(),
+                                        },
+                                        scheduled,
+                                        rng,
+                                    )?;
                                     self.emit(&entry);
                                     Step::Rejected { actor, reason }
                                 }
@@ -638,9 +724,14 @@ where
                     }
                 }
                 Err(reason) => {
-                    let entry = self.store.append(actor, Outcome::Rejected {
-                        reason: reason.clone()
-                    }, scheduled, rng)?;
+                    let entry = self.store.append(
+                        actor,
+                        Outcome::Rejected {
+                            reason: reason.clone(),
+                        },
+                        scheduled,
+                        rng,
+                    )?;
                     self.emit(&entry);
                     Step::Rejected { actor, reason }
                 }
@@ -1207,29 +1298,49 @@ mod tests {
 #[cfg(test)]
 mod r6_interrupted_round_tests {
     use super::*;
-    use crate::{runtime::{ScriptedBackend, sample_request}, storage::Store};
-    use serde::{Serialize, Deserialize};
-    use std::{fs, sync::{Arc, atomic::{AtomicU64, Ordering}}};
+    use crate::{
+        runtime::{ScriptedBackend, sample_request},
+        storage::Store,
+    };
+    use serde::{Deserialize, Serialize};
+    use std::{
+        fs,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
     fn path() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("hiyal-r6-interrupted-round-{}-{}",
-            std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
+        std::env::temp_dir().join(format!(
+            "hiyal-r6-interrupted-round-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
     }
     #[derive(Clone, Serialize, Deserialize)]
-    struct Shared { notes: u64 }
+    struct Shared {
+        notes: u64,
+    }
     impl World for Shared {
         type Action = u64;
         type Observation = u64;
-        fn observe(&self, _actor: AgentId) -> Result<u64, String> { Ok(self.notes) }
+        fn observe(&self, _actor: AgentId) -> Result<u64, String> {
+            Ok(self.notes)
+        }
         fn apply(&mut self, _actor: AgentId, action: u64) -> Result<(), String> {
-            self.notes += action; Ok(())
+            self.notes += action;
+            Ok(())
         }
     }
     struct FrozenPolicy;
     impl EffectPolicy<Shared> for FrozenPolicy {
         fn requests(&self, a: AgentId, obs: &u64) -> Result<Vec<EffectSpec>, String> {
-            Ok(vec![sample_request(&format!("agent {} sees {obs} notes", a.0))])
+            Ok(vec![sample_request(&format!(
+                "agent {} sees {obs} notes",
+                a.0
+            ))])
         }
         fn decide(&self, _: AgentId, _: &u64, _: &[Receipt]) -> Result<u64, String> {
             Ok(1)
@@ -1245,27 +1356,49 @@ mod r6_interrupted_round_tests {
     #[tokio::test]
     async fn crash_after_paid_round_receipts_never_reissues_call() {
         let dir = path();
-        let mut trial = Trial::create(&dir, "crashed-round", 71, "shared.v1",
-            Shared { notes: 0 }, FrozenPolicy, Arc::new(ScriptedBackend),
-            vec![AgentId(0),AgentId(1)], Scheduling::RoundRobin).unwrap();
+        let mut trial = Trial::create(
+            &dir,
+            "crashed-round",
+            71,
+            "shared.v1",
+            Shared { notes: 0 },
+            FrozenPolicy,
+            Arc::new(ScriptedBackend),
+            vec![AgentId(0), AgentId(1)],
+            Scheduling::RoundRobin,
+        )
+        .unwrap();
         trial.observe_with(Arc::new(CrashAfterFirst));
         let task = tokio::spawn(async move { trial.run_round(2).await });
         assert!(task.await.unwrap_err().is_panic());
         assert!(dir.join(ROUND_PLAN_FILE).exists());
-        let mut resumed = Trial::resume(&dir, "shared.v1", FrozenPolicy,
-            Arc::new(ScriptedBackend), false).unwrap();
+        let mut resumed = Trial::resume(
+            &dir,
+            "shared.v1",
+            FrozenPolicy,
+            Arc::new(ScriptedBackend),
+            false,
+        )
+        .unwrap();
         assert_eq!(resumed.store.sequence(), 1);
         assert_eq!(resumed.effects.receipts().len(), 2);
-        assert!(resumed.step().await.is_err(), "cannot re-plan before completing frozen round");
+        assert!(
+            resumed.step().await.is_err(),
+            "cannot re-plan before completing frozen round"
+        );
         let remainder = resumed.run_round(2).await.unwrap();
         assert_eq!(remainder.len(), 1);
-        assert_eq!(resumed.effects.receipts().len(), 2, "paid call was re-dispatched");
+        assert_eq!(
+            resumed.effects.receipts().len(),
+            2,
+            "paid call was re-dispatched"
+        );
         assert_eq!(resumed.store.world().notes, 2);
         assert!(!dir.join(ROUND_PLAN_FILE).exists());
         resumed.checkpoint().unwrap();
         drop(resumed);
-        let verified=Store::<Shared,u64>::inspect_read_only(&dir).unwrap();
-        assert_eq!(verified.sequence,2);
+        let verified = Store::<Shared, u64>::inspect_read_only(&dir).unwrap();
+        assert_eq!(verified.sequence, 2);
         fs::remove_dir_all(dir).unwrap();
     }
 }
