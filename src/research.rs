@@ -391,7 +391,11 @@ fn copy_evidence(source: &Path, dest: &Path) -> Result<(), String> {
     for name in ["manifest.json", "events.jsonl"] {
         let to = dest.join(name);
         fs::copy(source.join(name), &to).map_err(|e| e.to_string())?;
-        File::open(&to)
+        // FlushFileBuffers on Windows requires a writable handle. Opening
+        // the copied file read-only works on Unix but fails with ERROR_ACCESS_DENIED.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&to)
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())?;
     }
@@ -539,7 +543,7 @@ where
         drop(ledger);
         drop(store);
         let bundle = stage.join("ancestry");
-        copy_evidence(parent_dir, &bundle)?;
+        copy_evidence(parent_dir, &bundle).map_err(|e| format!("copy ancestral evidence: {e}"))?;
         // verify_fork below independently reconstructs ancestry once. An
         // exact log length check here rejects a changed parent prefix without
         // pointlessly replaying the captured log an extra time.
@@ -567,11 +571,11 @@ where
         };
         meta.attribution_hash = meta.fingerprint()?;
         crate::storage::save_atomic(&stage.join("fork.json"), &stable_bytes(&meta)?)?;
-        verify_fork::<W>(&stage)?;
+        verify_fork::<W>(&stage).map_err(|e| format!("verify staged fork: {e}"))?;
         if child_dir.exists() {
             return Err("fork destination appeared during creation".into());
         }
-        fs::rename(&stage, child_dir).map_err(|e| e.to_string())?;
+        fs::rename(&stage, child_dir).map_err(|e| format!("publish staged fork: {e}"))?;
         crate::storage::sync_trial_directory(parent_folder)?;
         Ok(())
     })();
@@ -582,6 +586,7 @@ where
         return Err(error);
     }
     Trial::resume(child_dir, &kind, policy, backend, false)
+        .map_err(|e| format!("open published fork: {e}"))
 }
 
 /// Paired branches share an independently verified parent boundary and RNG

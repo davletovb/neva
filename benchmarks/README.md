@@ -3,8 +3,20 @@
 Run the preserved Python baseline **before** asserting any Rust performance
 advantage. The baseline is not a dependency or part of the Rust engine.
 
+The legacy Python implementation was removed from the Rust mainline and
+frozen at [archive/hiyal-python-pre-r5](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5).
+To keep the user-deferred benchmarking reproducible, check out that archived
+source in a **separate worktree** and set `HIYAL_LEGACY_SOURCE`:
+
+```sh
+git fetch origin archive/hiyal-python-pre-r5
+git worktree add --detach ../hiyal-python-reference FETCH_HEAD
+export HIYAL_LEGACY_SOURCE="$(cd ../hiyal-python-reference/hiyal-python && pwd)"
+```
+
 Install the archived project's core dependencies in an isolated Python
-environment (see `hiyal-python/pyproject.toml`), then from the repository root:
+environment (see `$HIYAL_LEGACY_SOURCE/pyproject.toml`); then from
+the Rust repository root:
 
 ```sh
 python benchmarks/reference_python.py --agents 4 --steps 100 500 --repeat 3 \
@@ -18,7 +30,7 @@ periodic retained-observer-entry counts. Current RSS checkpoints require Linux.
 Outputs in `benchmarks/results/` are machine-generated and are not committed
 without hardware/source/version provenance.
 
-The existing `hiyal-python/benchmarks/checkpoint_scaling.py` remains the
+The archived `$HIYAL_LEGACY_SOURCE/benchmarks/checkpoint_scaling.py` remains the
 snapshot/export baseline. It should be run separately on matching hardware.
 Future Rust comparisons must use equivalent action semantics and reporting
 windows; network-bound live-provider comparisons are a separate class.

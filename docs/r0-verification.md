@@ -34,8 +34,10 @@ The original reviewer figures are preserved with explicit attribution in
 fresh measured baseline.
 
 To finish the hard gate, a machine with Rust + Python + legacy dependencies
-must execute `sh scripts/r0-verify.sh` and
-`python3 hiyal-python/benchmarks/checkpoint_scaling.py --profile standard
+must check out `archive/hiyal-python-pre-r5` into a separate worktree,
+set `HIYAL_LEGACY_SOURCE` to its `hiyal-python/` folder, then execute
+`sh scripts/r0-verify.sh` and
+`python3 "$HIYAL_LEGACY_SOURCE/benchmarks/checkpoint_scaling.py" --profile standard
 --repeat 3 --output benchmarks/results/python-checkpoints.json`, then retain
 the raw JSON and machine manifest in the evidence review (prefer an opt-in
 artifact or attached issue). Run Rust checks before interpreting benchmark
