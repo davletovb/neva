@@ -56,7 +56,10 @@ hash claim. No automatic publishing or registry secrets in CI.
   (including delimiter) to 32 MiB. Replay streams committed lines in bounded
   memory. These are explicit portable storage limits; a previously unbounded
   custom world larger than this requires conversion or a separately reviewed
-  new contract. Effect-journal retention remains an external quota concern.
+  new contract. The effect journal now validates its entries with a streaming 32 MiB
+  per-record cap and a 1 GiB total cap, and reserves worst-case capacity
+  before launching new provider effects. Deployment retention and backups
+  remain external quota responsibilities.
 - `effects.jsonl` contains potentially sensitive request/response receipts
   and still requires restricted filesystem access, retention policy and an
   external provider billing/reconciliation plan.
