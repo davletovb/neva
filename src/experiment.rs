@@ -280,7 +280,9 @@ where
                         let reason = error;
                         let entry = self.store.append(
                             actor,
-                            Outcome::Rejected { reason: reason.clone() },
+                            Outcome::Rejected {
+                                reason: reason.clone(),
+                            },
                             sched,
                             rng,
                         )?;
