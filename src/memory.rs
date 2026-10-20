@@ -250,7 +250,7 @@ impl MemoryBank {
     /// Stable ranking by importance, use count, recency and key. Prefix
     /// filtering uses the agent-key BTreeMap range; only results are cloned.
     pub fn recall_prefix(
-        &self,
+        &mut self,
         agent: AgentId,
         prefix: &str,
         now: u64,
@@ -260,6 +260,9 @@ impl MemoryBank {
         if limit > self.capacity || prefix.len() > 128 {
             return Err("invalid recall limit or prefix".into());
         }
+        // A read at a future step advances the bank-wide logical clock,
+        // including empty results and zero-limit queries.
+        self.last_step = now;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -382,6 +385,19 @@ mod tests {
         let mut wire = serde_json::to_value(&m).unwrap();
         wire["last_step"] = json!(5);
         assert!(serde_json::from_value::<MemoryBank>(wire).is_err());
+    }
+
+    #[test]
+    fn prefix_recall_advances_clock_even_when_empty_or_zero_limit() {
+        let mut m = MemoryBank::new(3, 32).unwrap();
+        m.put(AgentId(1), "expires", json!(1), 1, 1, Some(2)).unwrap();
+        assert!(m.recall_prefix(AgentId(1), "expires", 3, 1).unwrap().is_empty());
+        let prior = m.clone();
+        assert!(m.get(AgentId(1), "expires", 2).is_err());
+        assert_eq!(m, prior);
+        assert!(m.recall_prefix(AgentId(1), "", 4, 0).unwrap().is_empty());
+        assert_eq!(m.last_step(), 4);
+        assert!(m.get(AgentId(1), "expires", 3).is_err());
     }
 
     #[test]
