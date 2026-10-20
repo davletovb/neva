@@ -635,7 +635,11 @@ where
     }
 
     /// Commit a scheduler control record and return the durable log entry.
-    pub fn set_paused_event(&mut self, actor: AgentId, paused: bool) -> Result<Entry<W, A>, String> {
+    pub fn set_paused_event(
+        &mut self,
+        actor: AgentId,
+        paused: bool,
+    ) -> Result<Entry<W, A>, String> {
         let mut scheduled = self.schedule.clone();
         if paused {
             scheduled.pause(actor)?;
