@@ -81,6 +81,7 @@ where
         let store = Store::create(&dir, genesis)?;
         let mut effects = EffectJournal::open(&dir)?;
         effects.bind_trial(&store.genesis.trial_id)?;
+        backend.recover_admission(dir.as_ref(), effects.receipts())?;
         Ok(Self {
             store,
             effects,
@@ -104,6 +105,7 @@ where
         let store = Store::create(&dir, genesis)?;
         let mut effects = EffectJournal::open(&dir)?;
         effects.bind_trial(&store.genesis.trial_id)?;
+        backend.recover_admission(dir.as_ref(), effects.receipts())?;
         Ok(Self {
             store,
             effects,
@@ -130,6 +132,7 @@ where
         }
         let mut effects = EffectJournal::open_existing(dir)?;
         effects.bind_trial(&store.genesis.trial_id)?;
+        backend.recover_admission(dir.as_ref(), effects.receipts())?;
         Ok(Self {
             store,
             effects,
