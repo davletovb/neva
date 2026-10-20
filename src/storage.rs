@@ -18,7 +18,12 @@ pub const SCHEMA: u32 = 1;
 /// `AtCheckpoint` trades crash durability for throughput and must be opted
 /// into explicitly by the application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Durability { EveryEvent, AtCheckpoint }
+impl Default for Durability {
+    fn default() -> Self { Self::EveryEvent }
+}
 
 /// Per-record limit bounds corrupted or hostile files during streaming replay.
 pub const MAX_EVENT_RECORD_BYTES: usize = 32 * 1024 * 1024;
