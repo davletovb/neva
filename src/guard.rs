@@ -284,16 +284,7 @@ impl Backend for GovernedBackend {
                     );
                 }
                 let serialized = serde_json::to_vec(config).map_err(|e| e.to_string())?;
-                let mut out = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&file)
-                    .map_err(|e| e.to_string())?;
-                use std::io::Write;
-                out.write_all(&serialized)
-                    .and_then(|_| out.sync_all())
-                    .map_err(|e| e.to_string())?;
-                crate::storage::sync_trial_directory(dir)?;
+                crate::storage::save_atomic(&file, &serialized)?;
             }
             let mut used = 0u64;
             for receipt in receipts.values() {
