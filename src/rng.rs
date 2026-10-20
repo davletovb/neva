@@ -80,21 +80,33 @@ impl Streams {
     /// Validate that policy/world draws only advance named streams. The
     /// scheduler's stream must be left to the engine alone.
     pub fn checked_progress(&self, from: &Self) -> Result<(), String> {
-        if self.profile != from.profile || self.trial != from.trial
-            || self.root_seed != from.root_seed || self.seed_domain != from.seed_domain
+        if self.profile != from.profile
+            || self.trial != from.trial
+            || self.root_seed != from.root_seed
+            || self.seed_domain != from.seed_domain
             || self.positions.get("scheduler") != from.positions.get("scheduler")
         {
             return Err("RNG origin or scheduler stream modified outside scheduler".into());
         }
         for (name, before) in &from.positions {
-            let old = before.parse::<u128>().map_err(|_| "invalid old RNG position")?;
-            let new = self.positions.get(name).ok_or("removed named RNG stream")?
-                .parse::<u128>().map_err(|_| "invalid new RNG position")?;
-            if old > new || before != &old.to_string() { return Err("non-monotonic RNG stream".into()); }
+            let old = before
+                .parse::<u128>()
+                .map_err(|_| "invalid old RNG position")?;
+            let new = self
+                .positions
+                .get(name)
+                .ok_or("removed named RNG stream")?
+                .parse::<u128>()
+                .map_err(|_| "invalid new RNG position")?;
+            if old > new || before != &old.to_string() {
+                return Err("non-monotonic RNG stream".into());
+            }
         }
         for value in self.positions.values() {
             let parsed = value.parse::<u128>().map_err(|_| "invalid RNG position")?;
-            if value != &parsed.to_string() { return Err("noncanonical RNG position".into()); }
+            if value != &parsed.to_string() {
+                return Err("noncanonical RNG position".into());
+            }
         }
         Ok(())
     }
