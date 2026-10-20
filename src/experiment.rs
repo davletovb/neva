@@ -4,7 +4,7 @@ use crate::{
     rng::Streams,
     runtime::{Backend, EffectJournal, EffectSpec, Receipt},
     scheduler::{Schedule, Scheduling},
-    storage::{Entry, Genesis, Outcome, SCHEMA, Store},
+    storage::{BuildProvenance, Entry, Genesis, Outcome, SCHEMA, Store},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -77,6 +77,7 @@ where
             initial_schedule: Schedule::new(mode, agents)?,
             initial_streams: Streams::new(trial, seed),
             world_kind: kind.into(),
+            build: Some(BuildProvenance::current()),
         };
         let store = Store::create(&dir, genesis)?;
         let mut effects = EffectJournal::open(&dir)?;
