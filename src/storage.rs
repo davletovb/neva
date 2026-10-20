@@ -278,7 +278,10 @@ fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
         .map_err(|e| {
             format!("trial already open or stale lock (remove ONLY after verifying no writer): {e}")
         })?;
-    Ok(WriterLock { file: Some(file), path })
+    Ok(WriterLock {
+        file: Some(file),
+        path,
+    })
 }
 
 impl<W, A> Store<W, A>
