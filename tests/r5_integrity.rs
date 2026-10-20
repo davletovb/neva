@@ -169,7 +169,104 @@ fn hostile_metadata_size_rejected_before_parsing() {
     file.set_len((hiyal::storage::MAX_METADATA_BYTES + 1) as u64)
         .unwrap();
     drop(file);
-    assert!(Store::<Counter, u64>::inspect_read_only(&dir).is_err());
-    assert!(resume(&dir).is_err());
+    let inspect = Store::<Counter, u64>::inspect_read_only(&dir)
+        .err().expect("size validation must fail before JSON parsing");
+    assert!(inspect.contains("exceeds portable size limit"), "{inspect}");
+    let opened = match resume(&dir) {
+        Ok(_) => panic!("oversized manifest was accepted"),
+        Err(error) => error,
+    };
+    assert!(opened.contains("exceeds portable size limit"), "{opened}");
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct SmallState {
+    amount: u64,
+}
+impl hiyal::core::World for SmallState {
+    type Action = String;
+    type Observation = u64;
+    fn observe(&self, _: AgentId) -> Result<u64, String> { Ok(self.amount) }
+    fn apply(&mut self, _: AgentId, action: String) -> Result<(), String> {
+        self.amount = self.amount.checked_add(action.len() as u64).ok_or("overflow")?;
+        Ok(())
+    }
+}
+struct HugeFirst {
+    attempts: Arc<AtomicU64>,
+}
+impl hiyal::experiment::EffectPolicy<SmallState> for HugeFirst {
+    fn decide(&self, _: AgentId, _: &u64, _: &[hiyal::runtime::Receipt]) -> Result<String, String> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok("Z".repeat(hiyal::storage::MAX_EVENT_RECORD_BYTES))
+        } else {
+            Ok("ok".into())
+        }
+    }
+}
+
+#[tokio::test]
+async fn oversized_accepted_event_becomes_durable_rejection_and_progresses() {
+    let dir = trial_dir("over-event");
+    let policy = HugeFirst { attempts: Arc::new(AtomicU64::new(0)) };
+    {
+        let mut trial = Trial::create(
+            &dir, "over-limit", 99, "test.small-state.v1",
+            SmallState { amount: 0 }, policy, Arc::new(ScriptedBackend),
+            vec![AgentId(0)], Scheduling::RoundRobin,
+        ).unwrap();
+        assert!(matches!(trial.step().await.unwrap(), hiyal::experiment::Step::Rejected { .. }));
+        assert_eq!(trial.store.sequence(), 1);
+        assert_eq!(trial.store.logical_step(), 0);
+        assert_eq!(trial.store.world().amount, 0);
+        assert_eq!(trial.run_attempts(1).await.unwrap(), 1);
+        assert_eq!(trial.store.sequence(), 2);
+        assert_eq!(trial.store.world().amount, 2);
+        trial.checkpoint().unwrap();
+    }
+    let result = Store::<SmallState, String>::inspect_read_only(&dir).unwrap();
+    assert_eq!(result.sequence, 2);
+    assert_eq!(result.world.amount, 2);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn oversized_genesis_does_not_create_unusable_directory() {
+    let dir = trial_dir("genesis-preflight");
+    let result = Trial::create(
+        &dir, "very-large", 33, "test.huge-initial-state.v1",
+        StringWorld { data: "G".repeat(hiyal::storage::MAX_METADATA_BYTES) },
+        TextPolicy,
+        Arc::new(ScriptedBackend),
+        vec![AgentId(0)], Scheduling::RoundRobin,
+    );
+    assert!(result.is_err());
+    assert!(!dir.exists(), "preflight must not strand a trial directory");
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct StringWorld { data: String }
+impl hiyal::core::World for StringWorld {
+    type Action = u64;
+    type Observation = ();
+    fn observe(&self, _: AgentId) -> Result<(), String> { Ok(()) }
+    fn apply(&mut self, _: AgentId, _: u64) -> Result<(), String> { Ok(()) }
+}
+struct TextPolicy;
+impl hiyal::experiment::EffectPolicy<StringWorld> for TextPolicy {
+    fn decide(&self, _: AgentId, _: &(), _: &[hiyal::runtime::Receipt]) -> Result<u64, String> {
+        Ok(0)
+    }
+}
+
+#[test]
+fn event_record_reader_refuses_excessive_memory_growth() {
+    let bytes = vec![b'A'; hiyal::storage::MAX_EVENT_RECORD_BYTES + 2];
+    let mut reader = std::io::BufReader::new(std::io::Cursor::new(bytes));
+    let mut line = Vec::new();
+    let error = hiyal::storage::read_record_limited(&mut reader, &mut line)
+        .unwrap_err();
+    assert!(error.contains("event record exceeds"), "{error}");
+    assert_eq!(line.len(), hiyal::storage::MAX_EVENT_RECORD_BYTES + 1);
 }
