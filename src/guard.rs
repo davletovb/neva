@@ -154,9 +154,10 @@ impl GovernedBackend {
             .as_ref()
             .map(|_| self.remaining.load(Ordering::SeqCst))
     }
+    #[allow(deprecated)] // MSRV 1.89: AtomicU64::try_update requires 1.95
     fn reserve(counter: &AtomicU64, units: u64) -> bool {
         counter
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |now| {
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |now| {
                 now.checked_sub(units)
             })
             .is_ok()
@@ -204,6 +205,7 @@ impl GovernedBackend {
     }
 }
 impl GovernedBackend {
+    #[allow(deprecated)] // MSRV 1.89: retain fetch_update compatibility
     async fn call_effect(
         &self,
         key: Option<&EffectCallKey>,
@@ -211,7 +213,7 @@ impl GovernedBackend {
     ) -> Result<EffectResult, String> {
         if self
             .started
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
                 if old < self.max_total_effects {
                     old.checked_add(1)
                 } else {
@@ -295,12 +297,12 @@ impl Backend for GovernedBackend {
             }
             let mut used = 0u64;
             for receipt in receipts.values() {
-                if receipt.billing != crate::runtime::BillingDisposition::NotCharged {
-                    if let EffectSpec::Model(request) = &receipt.spec {
-                        used = used
-                            .checked_add(config.reserve_amount(request)?)
-                            .ok_or("durable budget accounting overflow")?;
-                    }
+                if receipt.billing != crate::runtime::BillingDisposition::NotCharged
+                    && let EffectSpec::Model(request) = &receipt.spec
+                {
+                    used = used
+                        .checked_add(config.reserve_amount(request)?)
+                        .ok_or("durable budget accounting overflow")?;
                 }
             }
             if used > config.maximum_micro_usd {
