@@ -367,7 +367,7 @@ mod tests {
             m.put(
                 AgentId(1),
                 "b",
-                json!("oversized oversized oversized"),
+                json!("oversized ".repeat(6)),
                 12,
                 1,
                 None
