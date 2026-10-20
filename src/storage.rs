@@ -247,12 +247,15 @@ pub(crate) fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 /// RAII lock: even a malformed manifest/snapshot never strands a lock.
 struct WriterLock {
-    file: File,
+    file: Option<File>,
     path: PathBuf,
 }
 impl Drop for WriterLock {
     fn drop(&mut self) {
-        let _ = self.file.sync_all();
+        if let Some(file) = self.file.take() {
+            let _ = file.sync_all();
+            drop(file); // Windows cannot always unlink while a handle is live.
+        }
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -275,7 +278,7 @@ fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
         .map_err(|e| {
             format!("trial already open or stale lock (remove ONLY after verifying no writer): {e}")
         })?;
-    Ok(WriterLock { file, path })
+    Ok(WriterLock { file: Some(file), path })
 }
 
 impl<W, A> Store<W, A>
