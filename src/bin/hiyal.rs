@@ -334,14 +334,20 @@ async fn launch() -> Result<(), String> {
             let source = Store::<Counter, u64>::inspect_read_only(dir)?;
             hiyal::runtime::EffectJournal::inspect_read_only(dir, &source.genesis.trial_id)?;
             // Do not modify an existing output or write inside the trial root.
-            if output.exists() || output.parent().is_some_and(|p| {
-                std::fs::canonicalize(p).ok() == std::fs::canonicalize(dir).ok()
-            }) {
+            if output.exists()
+                || output.parent().is_some_and(|p| {
+                    std::fs::canonicalize(p).ok() == std::fs::canonicalize(dir).ok()
+                })
+            {
                 return Err("export destination exists or is inside the trial root".into());
             }
             let mut output_file = std::fs::OpenOptions::new()
-                .write(true).create_new(true).open(output).map_err(|e| e.to_string())?;
-            let source_file = std::fs::File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+                .write(true)
+                .create_new(true)
+                .open(output)
+                .map_err(|e| e.to_string())?;
+            let source_file =
+                std::fs::File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
             use std::io::{BufRead, BufReader, Write};
             for line in BufReader::new(source_file).lines() {
                 let line = line.map_err(|e| e.to_string())?;
