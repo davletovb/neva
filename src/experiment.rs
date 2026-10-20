@@ -230,6 +230,7 @@ where
         };
         // The attempt sequence, not only the accepted-world step, forms the
         // effect call key; failed attempts cannot reuse paid calls accidentally.
+        let policy_streams = rng.clone();
         let result = match self.store.world.observe(actor) {
             Ok(obs) => match self.policy.requests_with_streams(actor, &obs, &mut rng) {
                 Ok(specs) => {
@@ -302,11 +303,14 @@ where
             },
             Err(e) => Err(e),
         };
+        rng.checked_scope_progress(&policy_streams, &format!("agent/{}", actor.0))?;
         match result {
             Ok(action) => {
                 let mut staged = self.store.world.clone();
                 let before_apply = rng.clone();
-                if let Err(reason) = staged.apply_with_streams(actor, action.clone(), &mut rng) {
+                let apply = staged.apply_with_streams(actor, action.clone(), &mut rng);
+                rng.checked_scope_progress(&before_apply, "world")?;
+                if let Err(reason) = apply {
                     let entry = self.store.append(
                         actor,
                         Outcome::Rejected {
@@ -514,7 +518,9 @@ where
                 Ok(action) => {
                     let mut next = self.store.world.clone();
                     let before_apply = rng.clone();
-                    match next.apply_with_streams(plan.actor, action.clone(), &mut rng) {
+                    let apply = next.apply_with_streams(plan.actor, action.clone(), &mut rng);
+                    rng.checked_scope_progress(&before_apply, "world")?;
+                    match apply {
                         Err(reason) => {
                             let entry = self.store.append(
                                 plan.actor,
