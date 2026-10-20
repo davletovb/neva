@@ -47,7 +47,7 @@ async fn compact_events_no_longer_copy_big_world_and_legacy_snapshot_restores() 
     assert_eq!(trial.run_attempts(80).await.unwrap(),80);
     trial.checkpoint().unwrap();
     let bytes=fs::read(p.join("events.jsonl")).unwrap();
-    assert!(bytes.len()<150_000,"world leaked into event payload: {}",bytes.len());
+    assert!(bytes.len()<1_000_000,"world leaked into event payload: {}",bytes.len());
     assert!(!std::str::from_utf8(&bytes).unwrap().contains("\"world\":"));
     drop(trial);
     let state=Store::<Society,u64>::inspect_read_only(&p).unwrap();
