@@ -1119,8 +1119,8 @@ mod batch_regression_tests {
 #[cfg(test)]
 mod r3_replay_billing_regressions {
     use super::*;
-    use std::sync::atomic::{AtomicU64,Ordering};
-    static TEST_ID: AtomicU64=AtomicU64::new(0);
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TEST_ID: AtomicU64 = AtomicU64::new(0);
     struct Untrusted;
     impl Backend for Untrusted {
         fn resolve<'a>(&'a self, _: &'a EffectSpec) -> BoxResult<'a> {
@@ -1133,7 +1133,10 @@ mod r3_replay_billing_regressions {
     }
     fn dir() -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "hiyal-r3-ledger-{}-{}", std::process::id(),TEST_ID.fetch_add(1,Ordering::Relaxed)));
+            "hiyal-r3-ledger-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
