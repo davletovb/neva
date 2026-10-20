@@ -1409,6 +1409,28 @@ mod r6_interrupted_round_tests {
     }
 
     #[tokio::test]
+    async fn checkpoint_durability_round_syncs_before_deleting_plan() {
+        let dir = path();
+        let mut trial = Trial::create(&dir, "durable-round", 87, "shared.v1",
+            Shared { notes: 0 }, FrozenPolicy, Arc::new(ScriptedBackend),
+            vec![AgentId(0), AgentId(1)], Scheduling::RoundRobin).unwrap();
+        trial.store.set_durability(crate::storage::Durability::AtCheckpoint).unwrap();
+        let events = trial.run_round(2).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(!dir.join(ROUND_PLAN_FILE).exists());
+        // Deliberately NO checkpoint. The round itself must have fsynced
+        // all authoritative events before publishing plan removal.
+        drop(trial);
+        let resumed = Trial::resume(&dir, "shared.v1", FrozenPolicy,
+            Arc::new(ScriptedBackend), false).unwrap();
+        assert_eq!(resumed.store.sequence(), 2);
+        assert_eq!(resumed.store.world().notes, 2);
+        assert_eq!(resumed.effects.receipts().len(), 2);
+        drop(resumed);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn crash_after_paid_round_receipts_never_reissues_call() {
         let dir = path();
         let mut trial = Trial::create(
