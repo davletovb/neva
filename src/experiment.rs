@@ -19,11 +19,23 @@ pub trait EffectPolicy<W: World>: Send + Sync {
         obs: &W::Observation,
         effects: &[Receipt],
     ) -> Result<W::Action, String>;
+    fn requests_with_streams(&self, actor: AgentId, obs: &W::Observation,
+        _rng: &mut Streams) -> Result<Vec<EffectSpec>, String> {
+        self.requests(actor, obs)
+    }
+    fn decide_with_streams(&self, actor: AgentId, obs: &W::Observation,
+        effects: &[Receipt], _rng: &mut Streams) -> Result<W::Action, String> {
+        self.decide(actor, obs, effects)
+    }
 }
 pub struct Rules<P>(pub P);
 impl<W: World, P: crate::core::Policy<W> + Send + Sync> EffectPolicy<W> for Rules<P> {
     fn decide(&self, a: AgentId, o: &W::Observation, _: &[Receipt]) -> Result<W::Action, String> {
         self.0.propose(a, o)
+    }
+    fn decide_with_streams(&self, a: AgentId, o: &W::Observation,
+        _: &[Receipt], rng: &mut Streams) -> Result<W::Action, String> {
+        self.0.propose_with_streams(a, o, rng)
     }
 }
 pub trait Observer<W: World>: Send + Sync {
@@ -178,7 +190,7 @@ where
         // The attempt sequence, not only the accepted-world step, forms the
         // effect call key; failed attempts cannot reuse paid calls accidentally.
         let result = match self.store.world.observe(actor) {
-            Ok(obs) => match self.policy.requests(actor, &obs) {
+            Ok(obs) => match self.policy.requests_with_streams(actor, &obs, &mut rng) {
                 Ok(specs) => {
                     // Reject oversized *new* policies as a committed attempt
                     // rejection, but permit complete historic ledger replays.
@@ -240,7 +252,7 @@ where
                         }) {
                             Err("effect failed or capability unsupported".into())
                         } else {
-                            self.policy.decide(actor, &obs, &receipts)
+                            self.policy.decide_with_streams(actor, &obs, &receipts, &mut rng)
                         }
                     }
                 }
@@ -251,7 +263,8 @@ where
         match result {
             Ok(action) => {
                 let mut staged = self.store.world.clone();
-                if let Err(reason) = staged.apply(actor, action.clone()) {
+                let before_apply = rng.clone();
+                if let Err(reason) = staged.apply_with_streams(actor, action.clone(), &mut rng) {
                     let entry = self.store.append(
                         actor,
                         Outcome::Rejected {
@@ -270,6 +283,7 @@ where
                         action,
                         world: None,
                         state_hash,
+                        before_apply_streams: Some(before_apply),
                     },
                     sched.clone(),
                     rng.clone(),
