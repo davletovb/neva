@@ -184,7 +184,7 @@ where
         if store.genesis.world_kind != kind {
             return Err("wrong registered world kind".into());
         }
-        let mut effects = EffectJournal::open_existing(dir)?;
+        let mut effects = EffectJournal::open_existing(&dir)?;
         effects.bind_trial(&store.genesis.trial_id)?;
         backend.recover_admission(dir.as_ref(), effects.receipts())?;
         Ok(Self {
@@ -338,7 +338,7 @@ where
                     Err(AppendError::TooLarge) => {
                         // Admission failed before any append. Preserve effects
                         // but record a rejected attempt so replay can progress.
-                        let reason = error;
+                        let reason = crate::storage::EVENT_TOO_LARGE.to_string();
                         let entry = self.store.append(
                             actor,
                             Outcome::Rejected {
