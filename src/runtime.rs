@@ -562,15 +562,28 @@ impl EffectJournal {
                     effective_model: model,
                     content_hash: String::new(),
                 };
-                if stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
-                    // Do not discard potentially billable results: persist a
-                    // compact, keyed failed receipt and require reconciliation.
+                // Capture a bounded provider identity and reject unbounded
+                // model identity as an explicit failed receipt.
+                let oversized_identity = receipt.effective_provider.len() > 256
+                    || receipt.effective_model.as_ref().is_some_and(|id| id.len() > 256);
+                if receipt.effective_provider.len() > 256 {
+                    receipt.effective_provider = "provider-identity-too-long".into();
+                }
+                receipt.content_hash = receipt.compute_hash()?;
+                if oversized_identity || stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
+                    // Size includes the final 64-byte receipt hash before any
+                    // append. Preserve a compact keyed failure after a billed
+                    // response; never silently redeliver the same request.
                     receipt.result = EffectResult::Failed {
                         category: "response_too_large".into(),
-                        message: "response exceeded portable journal limit".into(),
+                        message: "response or identity exceeded portable journal limit".into(),
                     };
                     receipt.billing = BillingDisposition::Unknown;
                     receipt.effective_model = None;
+                    receipt.content_hash = receipt.compute_hash()?;
+                    if stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
+                        return Err("effect request left insufficient room for durable failure receipt".into());
+                    }
                 }
                 Ok::<_, String>(receipt)
             });
