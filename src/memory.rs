@@ -390,8 +390,13 @@ mod tests {
     #[test]
     fn prefix_recall_advances_clock_even_when_empty_or_zero_limit() {
         let mut m = MemoryBank::new(3, 32).unwrap();
-        m.put(AgentId(1), "expires", json!(1), 1, 1, Some(2)).unwrap();
-        assert!(m.recall_prefix(AgentId(1), "expires", 3, 1).unwrap().is_empty());
+        m.put(AgentId(1), "expires", json!(1), 1, 1, Some(2))
+            .unwrap();
+        assert!(
+            m.recall_prefix(AgentId(1), "expires", 3, 1)
+                .unwrap()
+                .is_empty()
+        );
         let prior = m.clone();
         assert!(m.get(AgentId(1), "expires", 2).is_err());
         assert_eq!(m, prior);
