@@ -620,48 +620,74 @@ mod tests {
 #[cfg(test)]
 mod r6_resume_quota_tests {
     use super::*;
-    use crate::{core::AgentId, runtime::{BillingDisposition, Receipt, ScriptedBackend, sample_request}};
+    use crate::{
+        core::AgentId,
+        runtime::{BillingDisposition, Receipt, ScriptedBackend, sample_request},
+    };
     use std::collections::BTreeMap;
 
     #[test]
     fn not_charged_rejections_do_not_exhaust_resumed_quota() {
         let dir = std::env::temp_dir().join(format!(
-            "hiyal-r6-spend-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            "hiyal-r6-spend-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let config = BudgetConfig {
-            maximum_micro_usd: 1_000_000, prompt_micro_usd_per_token: 1,
+            maximum_micro_usd: 1_000_000,
+            prompt_micro_usd_per_token: 1,
             output_micro_usd_per_token: 1,
-            max_input_bytes: 50_000, max_output_tokens: 2048
+            max_input_bytes: 50_000,
+            max_output_tokens: 2048,
         };
         let spec = sample_request("admission");
         let rejected = Receipt {
-            key: spec.key("quota",0,AgentId(0),0).unwrap(),
+            key: spec.key("quota", 0, AgentId(0), 0).unwrap(),
             spec: spec.clone(),
-            result: EffectResult::UnsupportedCapability{capability:"refused".into()},
+            result: EffectResult::UnsupportedCapability {
+                capability: "refused".into(),
+            },
             billing: BillingDisposition::NotCharged,
             effective_provider: "offline".into(),
-            effective_model: None, content_hash: String::new()
+            effective_model: None,
+            content_hash: String::new(),
         };
         let charged = Receipt {
-            key: spec.key("quota",1,AgentId(0),0).unwrap(),
-            billing: BillingDisposition::Unknown, ..rejected.clone()
+            key: spec.key("quota", 1, AgentId(0), 0).unwrap(),
+            billing: BillingDisposition::Unknown,
+            ..rejected.clone()
         };
         let mut receipts = BTreeMap::new();
         receipts.insert(rejected.key.clone(), rejected);
         receipts.insert(charged.key.clone(), charged);
         let guard = GovernedBackend::new(Arc::new(ScriptedBackend), 1).with_budget(config.clone());
         guard.recover_admission(&dir, &BTreeMap::new()).unwrap();
-        let resumed = GovernedBackend::new(Arc::new(ScriptedBackend),1).with_budget(config.clone());
+        let resumed =
+            GovernedBackend::new(Arc::new(ScriptedBackend), 1).with_budget(config.clone());
         resumed.recover_admission(&dir, &receipts).unwrap();
         assert_eq!(resumed.started.load(Ordering::SeqCst), 1);
-        assert_eq!(resumed.remaining_micro_usd(),
-                   Some(config.maximum_micro_usd - config.reserve_amount(
-                       match &spec { EffectSpec::Model(r) => r, _ => unreachable!() }
-                   ).unwrap()));
-        assert!(GovernedBackend::new(Arc::new(ScriptedBackend),0)
-            .with_budget(config).recover_admission(&dir,&receipts).is_err());
+        assert_eq!(
+            resumed.remaining_micro_usd(),
+            Some(
+                config.maximum_micro_usd
+                    - config
+                        .reserve_amount(match &spec {
+                            EffectSpec::Model(r) => r,
+                            _ => unreachable!(),
+                        })
+                        .unwrap()
+            )
+        );
+        assert!(
+            GovernedBackend::new(Arc::new(ScriptedBackend), 0)
+                .with_budget(config)
+                .recover_admission(&dir, &receipts)
+                .is_err()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
