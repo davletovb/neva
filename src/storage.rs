@@ -1,6 +1,6 @@
 //! Append-only committed transitions + rejected-attempt audit, verified replay,
-//! fsynced snapshots. The complete state is stored with each accepted event;
-//! reducers re-apply actions during restore to detect divergence.
+//! fsynced snapshots. Accepted events contain an action and world-state hash;
+//! legacy events with embedded worlds remain readable and verified.
 use crate::core::{AgentId, World, decimal_u64};
 use crate::rng::Streams;
 use crate::scheduler::Schedule;
@@ -8,11 +8,18 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Write, Seek, SeekFrom, Read},
     path::{Path, PathBuf},
 };
 
 pub const SCHEMA: u32 = 1;
+
+/// Durability of the authoritative event log. `EveryEvent` is the default;
+/// `AtCheckpoint` trades crash durability for throughput and must be opted
+/// into explicitly by the application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Durability { EveryEvent, AtCheckpoint }
+
 /// Per-record limit bounds corrupted or hostile files during streaming replay.
 pub const MAX_EVENT_RECORD_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
@@ -81,7 +88,10 @@ pub struct Genesis<W> {
 pub enum Outcome<W, A> {
     Accepted {
         action: A,
-        world: W,
+        /// Older schema-v1 events embed the world; modern events omit it.
+        /// `Some` retains byte-for-byte legacy hash serialization.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world: Option<W>,
         state_hash: String,
     },
     Rejected {
@@ -195,7 +205,8 @@ where
     pub(crate) chain_head: String,
     pub(crate) log_bytes: u64,
     poisoned: bool,
-    /// Exclusive single-writer lock, removed on clean close.
+    durability: Durability,
+    /// Exclusive OS-backed single-writer lease released by the kernel.
     _lock: WriterLock,
     _action: std::marker::PhantomData<A>,
 }
@@ -245,19 +256,11 @@ pub(crate) fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
-/// RAII lock: even a malformed manifest/snapshot never strands a lock.
+/// OS-backed lock survives stale marker paths and automatically releases
+/// on process death. The marker is deliberately *never removed* to avoid
+/// a race where an unlinked locked inode admits another writer.
 struct WriterLock {
-    file: Option<File>,
-    path: PathBuf,
-}
-impl Drop for WriterLock {
-    fn drop(&mut self) {
-        if let Some(file) = self.file.take() {
-            let _ = file.sync_all();
-            drop(file); // Windows cannot always unlink while a handle is live.
-        }
-        let _ = fs::remove_file(&self.path);
-    }
+    file: File,
 }
 pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
@@ -271,17 +274,10 @@ pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
 
 fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
     let path = dir.join(".writer.lock");
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| {
-            format!("trial already open or stale lock (remove ONLY after verifying no writer): {e}")
-        })?;
-    Ok(WriterLock {
-        file: Some(file),
-        path,
-    })
+    let file = OpenOptions::new().read(true).write(true).create(true)
+        .open(&path).map_err(|e| e.to_string())?;
+    file.try_lock().map_err(|e| format!("trial already has an active writer: {e}"))?;
+    Ok(WriterLock { file })
 }
 
 impl<W, A> Store<W, A>
@@ -324,6 +320,7 @@ where
             chain_head: initial_hash,
             log_bytes: 0,
             poisoned: false,
+            durability: Durability::EveryEvent,
             _lock: lock,
             genesis,
             _action: std::marker::PhantomData,
@@ -465,6 +462,7 @@ where
             chain_head: projected.chain_head,
             log_bytes: durable_length,
             poisoned: false,
+            durability: Durability::EveryEvent,
             _lock: lock,
             _action: std::marker::PhantomData,
         })
@@ -517,7 +515,9 @@ where
                 let mut next = state.world.clone();
                 next.apply(event.actor, action.clone())
                     .map_err(|e| format!("replay reducer failure: {e}"))?;
-                if digest(&next)? != *state_hash || digest(&next)? != digest(world)? {
+                if digest(&next)? != *state_hash
+                    || world.as_ref().is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
+                {
                     return Err("replayed world state differs from committed state".into());
                 }
                 state.world = next;
@@ -568,18 +568,20 @@ where
             .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
         let new_world = match &outcome {
-            Outcome::Accepted {
-                world, state_hash, ..
-            } => {
-                if digest(world)? != *state_hash {
+            Outcome::Accepted { action, world, state_hash } => {
+                let mut next = self.world.clone();
+                next.apply(actor, action.clone())?;
+                if digest(&next)? != *state_hash
+                    || world.as_ref().is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
+                {
                     return Err("staged state hash mismatch".into());
                 }
-                world.clone()
+                next
             }
             Outcome::Rejected { .. } | Outcome::Control { .. } => self.world.clone(),
         };
         let mut event = Entry {
-            schema: SCHEMA,
+            schema: self.genesis.schema,
             trial_id: self.genesis.trial_id.clone(),
             sequence: self.sequence,
             logical_step: self.logical_step,
@@ -601,7 +603,10 @@ where
                 .append(true)
                 .open(self.dir.join("events.jsonl"))?;
             file.write_all(&encoded)?;
-            file.sync_all()
+            if self.durability == Durability::EveryEvent {
+                file.sync_all()?;
+            }
+            Ok(())
         })();
         if let Err(error) = write_result {
             self.poisoned = true;
@@ -662,7 +667,24 @@ where
         self.set_paused_event(actor, paused).map(|_| ())
     }
 
+    /// Choose a durability tradeoff. The setting affects subsequent events.
+    /// Before changing modes, flush earlier writes to establish a boundary.
+    pub fn set_durability(&mut self, durability: Durability) -> Result<(), String> {
+        self.sync_log()?;
+        self.durability = durability;
+        Ok(())
+    }
+
+    pub fn durability(&self) -> Durability { self.durability }
+
+    /// Flush committed bytes, including when using checkpoint-only durability.
+    pub fn sync_log(&self) -> Result<(), String> {
+        File::open(self.dir.join("events.jsonl")).and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn snapshot(&self) -> Result<(), String> {
+        self.sync_log()?;
         let snapshot = Snapshot {
             schema: SCHEMA,
             trial_id: self.genesis.trial_id.clone(),
@@ -682,10 +704,29 @@ where
     }
 
     pub fn read_events(&self) -> Result<Vec<Entry<W, A>>, String> {
-        let raw = fs::read(self.dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        raw.split(|b| *b == b'\n')
-            .filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_slice(line).map_err(|e| e.to_string()))
-            .collect()
+        let mut result = Vec::new();
+        // Historical convenience method: reject huge outputs instead of
+        // unboundedly collecting the whole log into process memory.
+        if self.log_bytes > 64 * 1024 * 1024 {
+            return Err("read_events memory budget exceeded; use visit_events".into());
+        }
+        self.visit_events(|entry| { result.push(entry); Ok(()) })?;
+        Ok(result)
+    }
+
+    pub fn visit_events(&self, mut visitor: impl FnMut(Entry<W, A>) -> Result<(), String>) -> Result<(), String> {
+        let source = File::open(self.dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(source.take(self.log_bytes));
+        let mut line = Vec::new();
+        let mut consumed = 0u64;
+        loop {
+            let n = read_record_limited(&mut reader, &mut line)?;
+            if n == 0 { break; }
+            if !line.ends_with(b"\n") { return Err("incomplete bounded event".into()); }
+            consumed += n as u64;
+            visitor(serde_json::from_slice(&line).map_err(|e| e.to_string())?)?;
+        }
+        if consumed != self.log_bytes { return Err("event log shrank during read".into()); }
+        Ok(())
     }
 }
