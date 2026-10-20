@@ -264,7 +264,12 @@ async fn launch() -> Result<(), String> {
             }
             // Derived observability remains independently verifiable; it
             // reconstructs projections from all committed records.
-            trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
+            let observer = if trusted {
+                JsonlObserver::recover_trusted(&trial.store)?
+            } else {
+                JsonlObserver::recover(dir)?
+            };
+            trial.observe_with(Arc::new(observer));
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
             ensure_observer_health(&trial.diagnostics)?;
