@@ -19,21 +19,21 @@ rustc --version
 cargo --version
 python --version
 uname -a
-cargo build --release --locked --bins
+cargo build --release --locked --workspace --bins
 python benchmarks/reference_python.py --agents 20 --steps 100 500 1000 --repeat 5 --output benchmarks/results/python-20.json
 python benchmarks/reference_python.py --agents 100 --steps 100 500 1000 --repeat 5 --output benchmarks/results/python-100.json
 for agents in 20 100; do
   for steps in 100 500 1000; do
     for observed in on off; do
       for iteration in 1 2 3 4 5; do
-        target/release/hiyal-bench "$agents" "$steps" "$observed"
+        target/release/hiyal-native-bench "$agents" "$steps" "$observed"
       done
     done
   done
 done
 ```
 
-Rust's `hiyal-bench` uses a reproducible scripted counter, committed-event
+Rust's `hiyal-native-bench` uses a reproducible scripted counter, committed-event
 fsync on every step, and optional JSONL/CSV projections. Its JSON output
 reports observer state, wall latency distribution, throughput, committed log
 growth and Linux RSS checkpoints. The Python baseline measures an in-memory
