@@ -107,7 +107,8 @@ pub struct BuildProvenance {
     pub target: String,
     pub source_revision: Option<String>,
     /// SHA-256 of the engine checkout lockfile, not an external consumer's.
-    pub engine_lock_sha256: String,
+    #[serde(alias = "engine_lock_sha256")]
+    pub engine_checkout_lock_sha256: String,
 }
 impl BuildProvenance {
     pub fn current() -> Self {
@@ -116,7 +117,7 @@ impl BuildProvenance {
             rustc_version: Some(env!("HIYAL_RUSTC_VERSION").into()),
             target: env!("HIYAL_BUILD_TARGET").into(),
             source_revision: option_env!("HIYAL_SOURCE_REVISION").map(str::to_owned),
-            engine_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!(
+            engine_checkout_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!(
                 "../Cargo.lock"
             ))),
         }
@@ -887,7 +888,7 @@ where
 
     /// Flush committed bytes, including when using checkpoint-only durability.
     pub fn sync_log(&self) -> Result<(), String> {
-        File::open(self.dir.join("events.jsonl"))
+        OpenOptions::new().write(true).open(self.dir.join("events.jsonl"))
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())
     }
