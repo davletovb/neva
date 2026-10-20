@@ -472,7 +472,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(!path.join(".writer.lock").exists());
+        assert!(path.join(".writer.lock").exists()); // kernel releases lock, not path
         std::fs::write(&file, original).unwrap();
         let valid = Trial::resume(
             &path,
@@ -788,7 +788,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(!two.join(".writer.lock").exists());
+        assert!(two.join(".writer.lock").exists()); // marker inode is intentionally retained
         std::fs::remove_dir_all(one).unwrap();
         std::fs::remove_dir_all(two).unwrap();
     }
@@ -809,7 +809,7 @@ mod tests {
         assert_eq!(std::fs::read(path.join("events.jsonl")).unwrap(), original);
         assert!(path.join(".writer.lock").exists());
         drop(trial);
-        assert!(!path.join(".writer.lock").exists());
+        assert!(path.join(".writer.lock").exists()); // kernel releases lock, not path
         std::fs::remove_dir_all(path).unwrap();
     }
 
