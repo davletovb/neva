@@ -3,12 +3,12 @@
 use crate::{
     core::World,
     experiment::Observer,
-    storage::{Entry, Outcome, Store, atomic_write_with},
+    storage::{Entry, Outcome, Store, atomic_write_with, read_record_limited},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, Read, Write},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -68,10 +68,7 @@ where
     let mut line = Vec::new();
     let mut read_bytes = 0u64;
     loop {
-        line.clear();
-        let count = reader
-            .read_until(b'\n', &mut line)
-            .map_err(|e| e.to_string())?;
+        let count = read_record_limited(&mut reader, &mut line)?;
         if count == 0 {
             break;
         }
