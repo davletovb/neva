@@ -180,7 +180,7 @@ where
                                     input
                                         .read_exact(&mut delimiter)
                                         .map_err(|e| e.to_string())?;
-                                    if delimiter != [b'\n'] {
+                                    if delimiter != *b"\n" {
                                         return Err("projection offset not aligned".into());
                                     }
                                 }
