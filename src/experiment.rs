@@ -264,7 +264,7 @@ where
                     actor,
                     Outcome::Accepted {
                         action,
-                        world: staged,
+                        world: None,
                         state_hash,
                     },
                     sched.clone(),
