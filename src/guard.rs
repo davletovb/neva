@@ -223,7 +223,10 @@ impl GovernedBackend {
         }
         let reserved = match self.admit(key, spec) {
             Ok(held) => held,
-            Err(reason) => return Ok(EffectResult::UnsupportedCapability { capability: reason }),
+            Err(reason) => {
+                self.started.fetch_sub(1, Ordering::SeqCst);
+                return Ok(EffectResult::UnsupportedCapability { capability: reason });
+            },
         };
         match spec {
             EffectSpec::Model(_) => {
@@ -232,8 +235,9 @@ impl GovernedBackend {
                     (reserved, &result)
                 {
                     if self.backend.unsupported_is_pre_dispatch() {
-                        // Only explicitly trusted backends may certify no launch.
+                        // The model did not dispatch: undo budget and quota.
                         self.remaining.fetch_add(cost, Ordering::SeqCst);
+                        self.started.fetch_sub(1, Ordering::SeqCst);
                     }
                 }
                 result
@@ -249,10 +253,28 @@ impl GovernedBackend {
     }
 }
 impl Backend for GovernedBackend {
-    fn on_timeout<'a>(
-        &'a self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
-        self.backend.on_timeout()
+    fn on_timeout<'a>(&'a self, spec: &'a EffectSpec)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output=()>+Send+'a>> {
+        if matches!(spec,EffectSpec::Model(_)) {
+            self.backend.on_timeout(spec)
+        } else {
+            Box::pin(async {})
+        }
+    }
+    fn unsupported_is_pre_dispatch(&self)->bool {
+        self.backend.unsupported_is_pre_dispatch()
+    }
+    fn billing_disposition(&self,spec:&EffectSpec,result:&EffectResult)
+        -> crate::runtime::BillingDisposition {
+        if matches!(spec,EffectSpec::Model(_)) {
+            self.backend.billing_disposition(spec,result)
+        } else if matches!(result,EffectResult::UnsupportedCapability{..}) {
+            // Could be a purely local denial OR untrusted remote tool.
+            // Without a persisted per-call admission outcome, stay conservative.
+            crate::runtime::BillingDisposition::Unknown
+        } else {
+            crate::runtime::BillingDisposition::Unknown
+        }
     }
     fn permits_tools(&self) -> bool {
         true
@@ -392,6 +414,22 @@ mod tests {
             };
             assert!(cfg.reserve_amount(m).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn local_denials_do_not_consume_execution_slots() {
+        let guarded=GovernedBackend::new(Arc::new(ScriptedBackend),1);
+        let refused=EffectSpec::Tool{name:"not-authorized".into(),
+            input:serde_json::json!({"a":1})};
+        for _ in 0..3 {
+            assert!(matches!(guarded.resolve(&refused).await.unwrap(),
+                EffectResult::UnsupportedCapability {..}));
+        }
+        let model=sample_request("valid");
+        assert!(matches!(guarded.resolve(&model).await.unwrap(),
+            EffectResult::Model{..}));
+        assert!(matches!(guarded.resolve(&model).await.unwrap(),
+            EffectResult::UnsupportedCapability {..}));
     }
 
     #[tokio::test]

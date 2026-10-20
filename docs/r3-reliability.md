@@ -101,3 +101,13 @@ by local mocks. No Python benchmarks, legacy CI, or new CI matrix.
 - Intermediate retryable HTTP 429 statuses do not trip the circuit prematurely. A final/exhausted 429 counts as a failure. The regression tests the boundary with a threshold of one and a single allowed retry.
 
 - A timed-out journal call invokes a dedicated backend timeout hook *after dropping the call future*; the HTTP adapter records this as a circuit failure without retry/refund. The timeout receipt retains unknown billing. Both streamed and non-streamed responses treat `tool_calls: null` and an empty array as absent; populated tool calls remain unsupported until an approved executor is used.
+
+## Follow-up review corrections
+
+- Tool timeouts do not poison the model circuit breaker: timeout callbacks now carry the exact effect specification and only model effects update HTTP breaker state.
+- An untrusted backend reporting `UnsupportedCapability` can still have dispatched the work. The shared receipt policy records `billing=unknown` unless the backend explicitly guarantees pre-dispatch rejection. Scripted model billing is handled in `ScriptedBackend`, not by matching an arbitrary provider ID string.
+- Historical recorded batches larger than new limits replay unchanged. An oversized **new policy** becomes a committed rejected attempt without dispatch; direct journal callers still fail closed for pending batches above 32 effects or 8 tool operations.
+- Provider-generated SSE `error` frames and JSON 200 error bodies invalidate responses rather than accepting partial content. Malformed request preflight returns a definite unsupported result without billing or spend reservation.
+- Streaming usage options are disabled by default and can be explicitly enabled via `HttpReliability.include_stream_usage` for compatible providers.
+- The live CLI defaults to **100 effect admissions per process** unless `HIYAL_LIVE_MAX_EFFECTS` is set (1..=100000). Local denials do not consume admission slots. A partially accepted live run/resume returns a visible error after checkpoint rather than presenting an incomplete study as successful.
+- HTTP model payloads are serialized once and reused across explicit 429 retry attempts. Loopback hostname validation and proxy bypass use the same host classification, including IPv6.

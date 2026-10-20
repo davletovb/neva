@@ -34,7 +34,8 @@ fn help() -> &'static str {
      hiyal fork <parent-trial> <pair-root> <shock> <attempts>\n\
      Live mode requires --features live-http, OPENAI_COMPAT_URL and OPENAI_COMPAT_API_KEY.\n\
      Set HIYAL_LIVE_MAX_MICRO_USD, HIYAL_LIVE_INPUT_MICRO_USD_PER_TOKEN and\n\
-     HIYAL_LIVE_OUTPUT_MICRO_USD_PER_TOKEN for a fail-closed process budget.\n"
+     HIYAL_LIVE_OUTPUT_MICRO_USD_PER_TOKEN for a fail-closed process budget.\n\
+     HIYAL_LIVE_MAX_EFFECTS defaults to 100 per process (1..=100000).\n"
 }
 fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
     if live {
@@ -58,7 +59,13 @@ fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
                 return Err("live spend cap and declared token rates must be positive".into());
             }
             let http = Arc::new(hiyal::runtime::OpenAiCompatible::new(url, api)?);
-            let guard = hiyal::guard::GovernedBackend::new(http, 100).with_budget(
+            let max_effects=env::var("HIYAL_LIVE_MAX_EFFECTS")
+                .unwrap_or_else(|_|"100".into()).parse::<u64>()
+                .map_err(|_|"invalid HIYAL_LIVE_MAX_EFFECTS")?;
+            if !(1..=100_000).contains(&max_effects) {
+                return Err("HIYAL_LIVE_MAX_EFFECTS must be 1..=100000".into());
+            }
+            let guard = hiyal::guard::GovernedBackend::new(http, max_effects).with_budget(
                 hiyal::guard::BudgetConfig {
                     maximum_micro_usd: maximum,
                     prompt_micro_usd_per_token: input_price,
@@ -126,6 +133,9 @@ async fn launch() -> Result<(), String> {
             )?;
             let accepted = trial.run_attempts(cfg.attempts).await?;
             trial.checkpoint()?;
+            if live && accepted != cfg.attempts {
+                return Err(format!("live run incomplete: accepted {accepted}/{} requested attempts; inspect trial rejections and budget quota",cfg.attempts));
+            }
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
                 trial.store.sequence(),
@@ -158,6 +168,9 @@ async fn launch() -> Result<(), String> {
             let mut trial = Trial::resume(dir, &kind, policy, backend(live)?, false)?;
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
+            if live && accepted != attempts {
+                return Err(format!("live resume incomplete: accepted {accepted}/{attempts}; inspect trial rejections, spend and quota"));
+            }
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
                 trial.store.sequence(),

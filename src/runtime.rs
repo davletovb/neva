@@ -82,7 +82,7 @@ pub trait Backend: Send + Sync {
     /// Called *after* the timed-out future has been cancelled. The provider
     /// may have processed/billed the request, so this only updates breaker
     /// state; it never retries or refunds the uncertain transaction.
-    fn on_timeout<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn on_timeout<'a>(&'a self, _spec: &'a EffectSpec) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async {})
     }
     /// Explicit guarantee: UnsupportedCapability never follows a dispatch.
@@ -106,10 +106,12 @@ pub trait Backend: Send + Sync {
         spec: &EffectSpec,
         response: &EffectResult,
     ) -> BillingDisposition {
-        if matches!(response, EffectResult::UnsupportedCapability { .. })
-            || (self.backend_id() == "scripted" && matches!(spec, EffectSpec::Model(_)))
-        {
-            BillingDisposition::NotCharged
+        if matches!(response, EffectResult::UnsupportedCapability { .. }) {
+            if self.unsupported_is_pre_dispatch() {
+                BillingDisposition::NotCharged
+            } else {
+                BillingDisposition::Unknown
+            }
         } else if matches!(spec, EffectSpec::Tool { .. }) {
             BillingDisposition::Unknown
         } else if matches!(response, EffectResult::Model { .. }) {
@@ -135,6 +137,16 @@ pub trait Backend: Send + Sync {
 #[derive(Default)]
 pub struct ScriptedBackend;
 impl Backend for ScriptedBackend {
+    fn billing_disposition(&self, spec: &EffectSpec, response: &EffectResult) -> BillingDisposition {
+        match spec {
+            EffectSpec::Model(_) => BillingDisposition::NotCharged,
+            _ => if matches!(response, EffectResult::UnsupportedCapability { .. }) {
+                BillingDisposition::NotCharged
+            } else {
+                BillingDisposition::Unknown
+            },
+        }
+    }
     fn unsupported_is_pre_dispatch(&self) -> bool {
         true
     }
@@ -380,17 +392,6 @@ impl EffectJournal {
         if concurrency == 0 {
             return Err("concurrency limit must be positive".into());
         }
-        if specs.len() > 32 {
-            return Err("maximum 32 effects per step".into());
-        }
-        if specs
-            .iter()
-            .filter(|(_, spec)| matches!(spec, EffectSpec::Tool { .. }))
-            .count()
-            > 8
-        {
-            return Err("maximum 8 tool operations per step".into());
-        }
         // Complete validation comes BEFORE launching any billable request.
         let mut seen = std::collections::BTreeSet::new();
         let mut pending = Vec::new();
@@ -427,6 +428,12 @@ impl EffectJournal {
                 pending.push((key, spec));
             }
         }
+        // Historic receipts with >32 calls remain valid to replay. Only
+        // pending (newly billable) effects are subject to execution limits.
+        if pending.len() > 32
+            || pending.iter().filter(|(_,spec)|matches!(spec,EffectSpec::Tool{..})).count() > 8 {
+            return Err("new effect batch exceeds limit (32 effects / 8 tools)".into());
+        }
         // Replayed/previously recorded tool effects are inert and need no
         // live executor permission. Only validate pending executions.
         if pending
@@ -454,7 +461,7 @@ impl EffectJournal {
                         message: error,
                     },
                     Err(_) => {
-                        backend.on_timeout().await;
+                        backend.on_timeout(&spec).await;
                         EffectResult::Failed {
                             category: "timeout".into(),
                             message: "effect deadline exceeded".into(),
@@ -513,6 +520,8 @@ pub struct HttpReliability {
     /// Only an explicit HTTP 429 is retried; transport/timeouts and 5xx may
     /// already have incurred provider charges and are never auto-retried.
     pub retry_429: u8,
+    /// Not universally supported by OpenAI-compatible servers; opt in.
+    pub include_stream_usage: bool,
     pub retry_delay: Duration,
     pub circuit_threshold: u32,
     pub circuit_cooldown: Duration,
@@ -523,6 +532,7 @@ impl Default for HttpReliability {
         Self {
             max_response_bytes: 1024 * 1024,
             retry_429: 0,
+            include_stream_usage: false,
             retry_delay: Duration::from_millis(100),
             circuit_threshold: 3,
             circuit_cooldown: Duration::from_secs(30),
@@ -550,28 +560,20 @@ impl OpenAiCompatible {
         if !parsed.username().is_empty() || parsed.password().is_some() {
             return Err("userinfo in live URL is forbidden".into());
         }
-        let allowed = match parsed.scheme() {
-            "https" => true,
-            "http" => parsed.host_str().is_some_and(|host| {
-                host == "localhost"
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|address| address.is_loopback())
-            }),
-            _ => false,
-        };
+        // Endpoint admission and proxy bypass use one shared test, including IPv6.
+        let is_loopback = parsed.host_str().is_some_and(|host| {
+            let bare=host.strip_prefix('[').and_then(|v|v.strip_suffix(']')).unwrap_or(host);
+            bare == "localhost" || bare.parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+        });
+        let allowed = parsed.scheme()=="https"
+            || (parsed.scheme()=="http" && is_loopback);
         if !allowed {
             return Err("live model URL must be HTTPS or parsed loopback HTTP".into());
         }
         // Default environment HTTP_PROXY/HTTPS_PROXY discovery could tunnel
         // a localhost bearer request through an untrusted proxy, even though
         // the URL itself is parsed and validated. Force *direct* loopback.
-        let is_loopback = parsed.host_str().is_some_and(|host| {
-            host == "localhost"
-                || host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        });
         let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
         if is_loopback {
             builder = builder.no_proxy();
@@ -709,6 +711,9 @@ impl SseAccumulator {
         }
         let payload: serde_json::Value =
             serde_json::from_slice(frame).map_err(|e| format!("invalid SSE JSON: {e}"))?;
+        if payload.get("error").is_some_and(|v| !v.is_null()) {
+            return Err("provider returned SSE error frame".into());
+        }
         if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
             self.effective_model = Some(model.into());
         }
@@ -756,9 +761,9 @@ async fn bounded_bytes(mut response: reqwest::Response, cap: usize) -> Result<Ve
 }
 #[cfg(feature = "live-http")]
 impl Backend for OpenAiCompatible {
-    fn on_timeout<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn on_timeout<'a>(&'a self, spec: &'a EffectSpec) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
-            self.failure().await;
+            if matches!(spec,EffectSpec::Model(_)){self.failure().await;}
         })
     }
     fn unsupported_is_pre_dispatch(&self) -> bool {
@@ -793,11 +798,6 @@ impl Backend for OpenAiCompatible {
                     capability: "model and bounded max_output_tokens (1..=8192) required".into(),
                 });
             }
-            if !self.allowed().await {
-                return Ok(EffectResult::UnsupportedCapability {
-                    capability: "HTTP circuit open; no provider request launched".into(),
-                });
-            }
             let roles: Vec<_> = model
                 .messages
                 .iter()
@@ -818,7 +818,11 @@ impl Backend for OpenAiCompatible {
                     }
                     Ok::<_, String>(message)
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>();
+            let roles = match roles {
+                Ok(roles)=>roles,
+                Err(error)=>return Ok(EffectResult::UnsupportedCapability{capability:error}),
+            };
             let mut body = serde_json::json!({
                 "model":model.model,"messages":roles,"stream":model.streaming
             });
@@ -834,10 +838,16 @@ impl Backend for OpenAiCompatible {
             if let Some(max) = model.sampling.max_output_tokens {
                 body["max_tokens"] = serde_json::json!(max);
             }
-            if model.streaming {
+            if model.streaming && self.reliability.include_stream_usage {
                 body["stream_options"] = serde_json::json!({"include_usage":true});
             }
-            if serde_json::to_vec(&body).map_err(|e| e.to_string())?.len() > 512 * 1024 {
+            let body_bytes=match serde_json::to_vec(&body) {
+                Ok(bytes)=>bytes,
+                Err(error)=>return Ok(EffectResult::UnsupportedCapability {
+                    capability:format!("model payload could not be serialized: {error}")
+                }),
+            };
+            if body_bytes.len() > 512 * 1024 {
                 return Ok(EffectResult::UnsupportedCapability {
                     capability: "request exceeds 512 KiB".into(),
                 });
@@ -852,7 +862,8 @@ impl Backend for OpenAiCompatible {
                     .client
                     .post(&self.url)
                     .bearer_auth(&self.api_key)
-                    .json(&body)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body_bytes.clone())
                     .send()
                     .await;
                 let response = match response {
@@ -896,6 +907,9 @@ impl Backend for OpenAiCompatible {
                             bounded_bytes(response, self.reliability.max_response_bytes).await?;
                         let payload: serde_json::Value = serde_json::from_slice(&body)
                             .map_err(|e| format!("invalid JSON completion: {e}"))?;
+                        if payload.get("error").is_some_and(|v| !v.is_null()) {
+                            return Err("provider returned JSON error body".into());
+                        }
                         if has_tool_calls(payload.pointer("/choices/0/message/tool_calls")) {
                             return Err(
                                 "tool calls unsupported without an explicitly approved executor"
@@ -1077,6 +1091,61 @@ mod batch_regression_tests {
     }
 }
 
+
+#[cfg(test)]
+mod r3_replay_billing_regressions {
+    use super::*;
+    struct Untrusted;
+    impl Backend for Untrusted {
+        fn resolve<'a>(&'a self,_:&'a EffectSpec)->BoxResult<'a>{
+            Box::pin(async {Ok(EffectResult::UnsupportedCapability{
+                capability:"unsupported after uncertain dispatch".into()
+            })})
+        }
+    }
+    fn dir()->std::path::PathBuf {
+        let path=std::env::temp_dir().join(format!("hiyal-r3-ledger-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+    #[tokio::test]
+    async fn ambiguous_unsupported_results_remain_unknown_on_disk(){
+        let path=dir();
+        let mut ledger=EffectJournal::open(&path).unwrap();
+        ledger.bind_trial("test").unwrap();
+        let spec=sample_request("ambiguous");
+        let key=spec.key("test",0,AgentId(0),0).unwrap();
+        let record=ledger.resolve_all(vec![(key,spec)],
+            Arc::new(Untrusted),1,Duration::from_millis(500),false).await.unwrap();
+        assert_eq!(record[0].billing,BillingDisposition::Unknown);
+        drop(ledger);
+        assert_eq!(EffectJournal::inspect_read_only(&path,"test").unwrap(),1);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[tokio::test]
+    async fn historical_oversized_batches_replay_without_launch(){
+        let path=dir();
+        let mut ledger=EffectJournal::open(&path).unwrap();
+        ledger.bind_trial("historic").unwrap();
+        let mut items=vec![];
+        for i in 0..33 {
+            let spec=sample_request("historical");
+            let key=spec.key("historic",0,AgentId(0),i).unwrap();
+            ledger.resolve_all(vec![(key.clone(),spec.clone())],Arc::new(ScriptedBackend),
+                1,Duration::from_secs(1),false).await.unwrap();
+            items.push((key,spec));
+        }
+        assert_eq!(ledger.resolve_all(items.clone(),Arc::new(ScriptedBackend),
+            1,Duration::from_secs(1),true).await.unwrap().len(),33);
+        let other=items.iter().enumerate().map(|(i,(_,s))|(
+            s.key("historic",1,AgentId(0),i as u32).unwrap(),s.clone()
+        )).collect();
+        assert!(ledger.resolve_all(other,Arc::new(ScriptedBackend),
+            1,Duration::from_secs(1),false).await.is_err());
+        drop(ledger);std::fs::remove_dir_all(path).unwrap();
+    }
+}
 #[cfg(all(test, feature = "live-http"))]
 mod http_tests {
     use super::*;
@@ -1334,6 +1403,8 @@ mod http_tests {
             format!("http://127.0.0.1:{port}/v1/chat/completions"),
             "test".into(),
         )
+        .unwrap()
+        .with_reliability(HttpReliability{include_stream_usage:true,..HttpReliability::default()})
         .unwrap();
         let mut spec = sample_request("stream");
         if let EffectSpec::Model(ref mut m) = spec {
@@ -1355,6 +1426,37 @@ mod http_tests {
         let wire = server.join().unwrap();
         assert!(wire.contains("\"stream\":true"));
         assert!(wire.contains("stream_options"));
+    }
+
+    #[test]
+    fn provider_error_frame_invalidates_partial_stream() {
+        let mut parser=SseAccumulator::new(4096);
+        parser.feed(br#"data: {"choices":[{"delta":{"content":"partial"}}]}
+
+"#).unwrap();
+        assert!(parser.feed(br#"data: {"error":{"message":"overloaded"}}
+
+"#).is_err());
+        assert!(serde_json::json!({"error":{"message":"bad"},"choices":[{"message":{"content":"bad"}}]})
+            .get("error").is_some());
+    }
+
+    #[test]
+    fn simulated_timeout_is_scoped_to_model_calls() {
+        let http=OpenAiCompatible::new("http://127.0.0.1:1/chat".into(),"test".into()).unwrap()
+            .with_reliability(HttpReliability{circuit_threshold:1,..HttpReliability::default()}).unwrap();
+        let tool=EffectSpec::Tool{name:"slow".into(),input:serde_json::json!({})};
+        let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let guarded=crate::guard::GovernedBackend::new(Arc::new(http),5);
+            guarded.on_timeout(&tool).await;
+            let model=sample_request("check");
+            // The backend was never reached by the tool timeout.
+            // A still-healthy model backend tries transport, not circuit rejection.
+            let outcome=guarded.resolve(&model).await;
+            assert!(outcome.is_err() || !matches!(outcome.unwrap(),
+                EffectResult::UnsupportedCapability {capability} if capability.contains("circuit")));
+        });
     }
 
     #[tokio::test]
