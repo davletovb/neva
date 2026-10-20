@@ -254,9 +254,13 @@ pub const MAX_EFFECT_JOURNAL_BYTES: u64 = 1024 * 1024 * 1024;
 /// Reserve the worst-case portable record size for every *new* effect before
 /// any backend dispatch. Never bill a request we already know cannot journal.
 fn ensure_effect_capacity(current: u64, pending: usize) -> Result<(), String> {
-    let reserved = (pending as u64).checked_mul(MAX_EVENT_RECORD_BYTES as u64)
+    let reserved = (pending as u64)
+        .checked_mul(MAX_EVENT_RECORD_BYTES as u64)
         .ok_or("effect journal reservation overflow")?;
-    if current.checked_add(reserved).is_none_or(|bytes| bytes > MAX_EFFECT_JOURNAL_BYTES) {
+    if current
+        .checked_add(reserved)
+        .is_none_or(|bytes| bytes > MAX_EFFECT_JOURNAL_BYTES)
+    {
         return Err("effect journal has insufficient capacity for pending requests".into());
     }
     Ok(())
@@ -1800,8 +1804,17 @@ mod r5_journal_capacity_tests {
     fn capacity_is_reserved_for_all_pending_effects_before_dispatch() {
         assert!(ensure_effect_capacity(0, 32).is_ok());
         assert!(ensure_effect_capacity(1, 32).is_err());
-        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64, 1).is_ok());
-        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64 + 1, 1).is_err());
+        assert!(
+            ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64, 1)
+                .is_ok()
+        );
+        assert!(
+            ensure_effect_capacity(
+                MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64 + 1,
+                1
+            )
+            .is_err()
+        );
         assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES + 1, 0).is_err());
     }
 }
