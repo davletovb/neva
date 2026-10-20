@@ -390,13 +390,15 @@ mod tests {
     }
     #[tokio::test]
     async fn budgetless_pre_dispatch_refusals_do_not_exhaust_quota() {
-        let guard=GovernedBackend::new(Arc::new(PreflightRefusal),1);
-        let request=sample_request("no send");
+        let guard = GovernedBackend::new(Arc::new(PreflightRefusal), 1);
+        let request = sample_request("no send");
         for _ in 0..3 {
-            assert!(matches!(guard.resolve(&request).await.unwrap(),
-                EffectResult::UnsupportedCapability { .. }));
+            assert!(matches!(
+                guard.resolve(&request).await.unwrap(),
+                EffectResult::UnsupportedCapability { .. }
+            ));
         }
-        assert_eq!(guard.started.load(Ordering::SeqCst),0);
+        assert_eq!(guard.started.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
