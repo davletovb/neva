@@ -365,8 +365,9 @@ fn effect_reader_caps_single_record_without_unbounded_allocations() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// Deterministic property-style mutation matrix: every nonempty subset of
-/// structural bytes changes integrity or JSON validity, never a valid receipt.
+/// Deterministic mutation matrix. Invalid UTF-8 at sampled positions fails
+/// JSON parsing; valid-JSON mutations must fail the content hash or the
+/// request-identity check, never yield an accepted receipt.
 #[tokio::test]
 async fn effect_receipt_mutation_matrix_is_detected() {
     use hiyal::runtime::{EffectJournal, sample_request};
@@ -404,6 +405,68 @@ async fn effect_receipt_mutation_matrix_is_detected() {
         fs::write(&path, &mutated).unwrap();
         assert!(EffectJournal::inspect_read_only(&dir, "mutations").is_err());
     }
+
+    let receipt: hiyal::runtime::Receipt = serde_json::from_slice(&original).unwrap();
+    let write_receipt = |receipt: &hiyal::runtime::Receipt| {
+        let mut bytes = serde_json::to_vec(receipt).unwrap();
+        bytes.push(b'\n');
+        fs::write(&path, bytes).unwrap();
+    };
+    let rehash = |receipt: &mut hiyal::runtime::Receipt| {
+        receipt.content_hash = hiyal::storage::digest(&(
+            &receipt.key,
+            &receipt.spec,
+            &receipt.result,
+            &receipt.billing,
+            &receipt.effective_provider,
+            &receipt.effective_model,
+        ))
+        .unwrap();
+    };
+    // Re-encoding (and rehashing) an unmodified receipt stays valid, so each
+    // rejection below comes from the mutation itself.
+    let mut control = receipt.clone();
+    rehash(&mut control);
+    assert_eq!(control.content_hash, receipt.content_hash);
+    write_receipt(&control);
+    assert_eq!(
+        EffectJournal::inspect_read_only(&dir, "mutations").unwrap(),
+        1
+    );
+
+    let mut flipped_hash = receipt.clone();
+    let first = flipped_hash.content_hash.remove(0);
+    flipped_hash
+        .content_hash
+        .insert(0, if first == '0' { '1' } else { '0' });
+    let mut changed_result = receipt.clone();
+    changed_result.result = hiyal::effects::EffectResult::Failed {
+        category: "tampered".into(),
+        message: "tampered".into(),
+    };
+    let mut changed_billing = receipt.clone();
+    changed_billing.billing = hiyal::runtime::BillingDisposition::Charged;
+    for (name, mutated) in [
+        ("content hash", flipped_hash),
+        ("result", changed_result),
+        ("billing", changed_billing),
+    ] {
+        write_receipt(&mutated);
+        let error = EffectJournal::inspect_read_only(&dir, "mutations").unwrap_err();
+        assert!(error.contains("hash"), "{name}: {error}");
+    }
+    // A consistent hash over a request that no longer matches its key's
+    // request hash must still be rejected by the request-identity check.
+    let mut swapped_request = receipt.clone();
+    match &mut swapped_request.spec {
+        hiyal::runtime::EffectSpec::Model(request) => request.model.push_str("-tampered"),
+        other => panic!("unexpected spec {other:?}"),
+    }
+    rehash(&mut swapped_request);
+    write_receipt(&swapped_request);
+    let error = EffectJournal::inspect_read_only(&dir, "mutations").unwrap_err();
+    assert!(error.contains("identity"), "{error}");
+
     fs::write(&path, &original).unwrap();
     fs::remove_dir_all(dir).unwrap();
 }

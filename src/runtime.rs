@@ -245,18 +245,33 @@ pub struct EffectJournal {
     pub(crate) receipts: BTreeMap<EffectCallKey, Receipt>,
     poisoned: bool,
     owning_trial: Option<String>,
+    /// Committed journal length; the writer lock gives exclusive ownership.
+    len: u64,
 }
 
 /// Per-record cap for receipts (same bound as durable events). Total file
 /// bound also caps aggregate replay indexing and avoids unbounded history.
 pub const MAX_EFFECT_JOURNAL_BYTES: u64 = 1024 * 1024 * 1024;
 
-/// Reserve the worst-case portable record size for every *new* effect before
-/// any backend dispatch. Never bill a request we already know cannot journal.
-fn ensure_effect_capacity(current: u64, pending: usize) -> Result<(), String> {
-    let reserved = (pending as u64)
-        .checked_mul(MAX_EVENT_RECORD_BYTES as u64)
-        .ok_or("effect journal reservation overflow")?;
+/// Bytes reserved for each new effect on top of its serialized key and
+/// request: room for billing status, identities, a compact failure result
+/// and the hash.
+const COMPACT_RECEIPT_ENVELOPE_BYTES: u64 = 8 * 1024;
+/// Longest provider or model identity recorded verbatim in a receipt.
+const MAX_IDENTITY_BYTES: usize = 256;
+
+/// Journal space a new effect needs so that, once dispatched, it can always
+/// be recorded at least as a compact keyed failure receipt.
+fn compact_reservation(key: &EffectCallKey, spec: &EffectSpec) -> Result<u64, String> {
+    Ok(
+        (stable_bytes(key)?.len() + stable_bytes(spec)?.len()) as u64
+            + COMPACT_RECEIPT_ENVELOPE_BYTES,
+    )
+}
+
+/// Reserve room for every *new* effect before any backend dispatch. Never
+/// bill a request we already know cannot journal.
+fn ensure_effect_capacity(current: u64, reserved: u64) -> Result<(), String> {
     if current
         .checked_add(reserved)
         .is_none_or(|bytes| bytes > MAX_EFFECT_JOURNAL_BYTES)
@@ -264,6 +279,36 @@ fn ensure_effect_capacity(current: u64, pending: usize) -> Result<(), String> {
         return Err("effect journal has insufficient capacity for pending requests".into());
     }
     Ok(())
+}
+
+fn encode_receipt(mut receipt: Receipt) -> Result<(Receipt, Vec<u8>), String> {
+    receipt.content_hash = receipt.compute_hash()?;
+    let mut bytes = stable_bytes(&receipt)?;
+    bytes.push(b'\n');
+    Ok((receipt, bytes))
+}
+
+/// Replace a result that cannot be journaled with a compact keyed failure, so
+/// the same request is never silently redelivered. Billing status is kept (a
+/// charged response stays charged) and small reported usage is preserved.
+fn compact_receipt(mut receipt: Receipt, reason: &str) -> Result<(Receipt, Vec<u8>), String> {
+    let mut message = reason.to_owned();
+    if let EffectResult::Model {
+        usage: Some(usage), ..
+    } = &receipt.result
+    {
+        let usage = serde_json::to_string(usage).map_err(|e| e.to_string())?;
+        if usage.len() <= 1024 {
+            message.push_str("; reported usage: ");
+            message.push_str(&usage);
+        }
+    }
+    receipt.result = EffectResult::Failed {
+        category: "response_too_large".into(),
+        message,
+    };
+    receipt.effective_model = None;
+    encode_receipt(receipt)
 }
 
 /// Iterate independently verified lines; writer mode tolerates only a final
@@ -363,6 +408,7 @@ impl EffectJournal {
             receipts,
             poisoned: false,
             owning_trial: None,
+            len: length,
         })
     }
 
@@ -401,7 +447,9 @@ impl EffectJournal {
         &self.receipts
     }
 
-    fn append(&mut self, mut receipt: Receipt) -> Result<Receipt, String> {
+    /// Append a receipt already encoded by `encode_receipt` (hash populated,
+    /// trailing newline included).
+    fn append(&mut self, receipt: Receipt, bytes: Vec<u8>) -> Result<Receipt, String> {
         if self.poisoned {
             return Err("effect ledger poisoned, reopen to recover".into());
         }
@@ -415,19 +463,14 @@ impl EffectJournal {
         {
             return Err("attempt to write effect receipt for another trial".into());
         }
-        receipt.content_hash = receipt.compute_hash()?;
-        let mut bytes = stable_bytes(&receipt)?;
-        bytes.push(b'\n');
         if bytes.len() > MAX_EVENT_RECORD_BYTES {
             return Err("effect receipt exceeds portable record size limit".into());
         }
-        let total = fs::metadata(&self.path).map_err(|e| e.to_string())?.len();
-        if total
+        let total = self
+            .len
             .checked_add(bytes.len() as u64)
-            .is_none_or(|n| n > MAX_EFFECT_JOURNAL_BYTES)
-        {
-            return Err("effect journal exceeds portable total size limit".into());
-        }
+            .filter(|n| *n <= MAX_EFFECT_JOURNAL_BYTES)
+            .ok_or("effect journal exceeds portable total size limit")?;
         if let Err(e) = (|| -> std::io::Result<()> {
             let mut f = OpenOptions::new().append(true).open(&self.path)?;
             f.write_all(&bytes)?;
@@ -436,6 +479,7 @@ impl EffectJournal {
             self.poisoned = true;
             return Err(format!("effect receipt fsync failure: {e}"));
         }
+        self.len = total;
         self.receipts.insert(receipt.key.clone(), receipt.clone());
         Ok(receipt)
     }
@@ -512,17 +556,22 @@ impl EffectJournal {
         if self.poisoned && !pending.is_empty() {
             return Err("effect ledger poisoned; reopen/recover before generating".into());
         }
-        if !pending.is_empty() {
-            let existing = fs::metadata(&self.path).map_err(|e| e.to_string())?.len();
-            ensure_effect_capacity(existing, pending.len())?;
-            // Leave room for the billing status and even a compact failure
-            // receipt. An oversized request cannot be dispatched safely.
-            for (_, spec) in &pending {
-                if stable_bytes(spec)?.len() >= MAX_EVENT_RECORD_BYTES - 4096 {
-                    return Err("effect request too large to journal safely".into());
-                }
+        // Each pending effect reserves room for at least a compact failure
+        // receipt. An oversized request or identity cannot be dispatched
+        // safely, and the provider identity is known before dispatch.
+        let mut reservations = BTreeMap::new();
+        for (key, spec) in &pending {
+            if backend.effective_provider(spec).len() > MAX_IDENTITY_BYTES {
+                return Err("effect provider identity too long to journal".into());
             }
+            let reserve = compact_reservation(key, spec)?;
+            if reserve > MAX_EVENT_RECORD_BYTES as u64 {
+                return Err("effect request too large to journal safely".into());
+            }
+            reservations.insert(key.clone(), reserve);
         }
+        let mut outstanding: u64 = reservations.values().sum();
+        ensure_effect_capacity(self.len, outstanding)?;
         let sem = Arc::new(Semaphore::new(concurrency));
         let mut jobs = JoinSet::new();
         for (key, spec) in pending {
@@ -553,7 +602,7 @@ impl EffectJournal {
                 };
                 let billing = backend.billing_disposition(&spec, &response);
                 let provider = backend.effective_provider(&spec);
-                let mut receipt = Receipt {
+                let receipt = Receipt {
                     key,
                     spec,
                     result: response,
@@ -562,37 +611,28 @@ impl EffectJournal {
                     effective_model: model,
                     content_hash: String::new(),
                 };
-                // Capture a bounded provider identity and reject unbounded
-                // model identity as an explicit failed receipt.
-                let oversized_identity = receipt.effective_provider.len() > 256
-                    || receipt
-                        .effective_model
-                        .as_ref()
-                        .is_some_and(|id| id.len() > 256);
-                if receipt.effective_provider.len() > 256 {
-                    receipt.effective_provider = "provider-identity-too-long".into();
-                }
-                receipt.content_hash = receipt.compute_hash()?;
-                if oversized_identity || stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES
-                {
-                    // Size includes the final 64-byte receipt hash before any
-                    // append. Preserve a compact keyed failure after a billed
-                    // response; never silently redeliver the same request.
-                    receipt.result = EffectResult::Failed {
-                        category: "response_too_large".into(),
-                        message: "response or identity exceeded portable journal limit".into(),
-                    };
-                    receipt.billing = BillingDisposition::Unknown;
-                    receipt.effective_model = None;
-                    receipt.content_hash = receipt.compute_hash()?;
-                    if stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
+                // An unbounded model identity or a result too large for one
+                // record becomes a compact keyed failure. The size includes the
+                // final 64-byte receipt hash.
+                let oversized_identity = receipt
+                    .effective_model
+                    .as_ref()
+                    .is_some_and(|id| id.len() > MAX_IDENTITY_BYTES);
+                let (receipt, bytes) = encode_receipt(receipt)?;
+                if oversized_identity || bytes.len() > MAX_EVENT_RECORD_BYTES {
+                    let (receipt, bytes) = compact_receipt(
+                        receipt,
+                        "response or identity exceeded portable journal limit",
+                    )?;
+                    if bytes.len() > MAX_EVENT_RECORD_BYTES {
                         return Err(
                             "effect request left insufficient room for durable failure receipt"
                                 .into(),
                         );
                     }
+                    return Ok((receipt, bytes));
                 }
-                Ok::<_, String>(receipt)
+                Ok::<_, String>((receipt, bytes))
             });
         }
         // Always join all requests, even if one receipt append fails.
@@ -600,10 +640,26 @@ impl EffectJournal {
         let mut failures = Vec::new();
         while let Some(result) = jobs.join_next().await {
             match result {
-                Ok(Ok(receipt)) => match self.append(receipt) {
-                    Ok(recorded) => finished.push(recorded),
-                    Err(error) => failures.push(error),
-                },
+                Ok(Ok((receipt, bytes))) => {
+                    // A receipt may only use space not reserved by effects
+                    // still in flight; otherwise it is recorded compactly.
+                    outstanding -= reservations.remove(&receipt.key).unwrap_or(0);
+                    let available = MAX_EFFECT_JOURNAL_BYTES
+                        .saturating_sub(self.len)
+                        .saturating_sub(outstanding);
+                    let encoded = if bytes.len() as u64 > available {
+                        compact_receipt(
+                            receipt,
+                            "response exceeded remaining effect journal capacity",
+                        )
+                    } else {
+                        Ok((receipt, bytes))
+                    };
+                    match encoded.and_then(|(receipt, bytes)| self.append(receipt, bytes)) {
+                        Ok(recorded) => finished.push(recorded),
+                        Err(error) => failures.push(error),
+                    }
+                }
                 Ok(Err(error)) => failures.push(format!("effect task failed: {error}")),
                 Err(error) => failures.push(format!("effect task panicked/cancelled: {error}")),
             }
@@ -1326,6 +1382,80 @@ mod r3_replay_billing_regressions {
         drop(ledger);
         std::fs::remove_dir_all(path).unwrap();
     }
+
+    #[tokio::test]
+    async fn full_batches_fit_after_journal_has_receipts() {
+        let path = dir();
+        let mut ledger = EffectJournal::open(&path).unwrap();
+        for step in 0..3u64 {
+            let batch = (0..32u32)
+                .map(|i| {
+                    let spec = sample_request("batch");
+                    (spec.key("batches", step, AgentId(0), i).unwrap(), spec)
+                })
+                .collect();
+            let receipts = ledger
+                .resolve_all(
+                    batch,
+                    Arc::new(ScriptedBackend),
+                    4,
+                    Duration::from_secs(1),
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(receipts.len(), 32);
+        }
+        assert_eq!(ledger.receipt_count(), 96);
+        drop(ledger);
+        assert_eq!(
+            EffectJournal::inspect_read_only(&path, "batches").unwrap(),
+            96
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    struct CountingTools(std::sync::atomic::AtomicUsize);
+    impl Backend for CountingTools {
+        fn permits_tools(&self) -> bool {
+            true
+        }
+        fn resolve<'a>(&'a self, _: &'a EffectSpec) -> BoxResult<'a> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(EffectResult::Tool {
+                    output: serde_json::json!("ran"),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn long_provider_identity_is_rejected_before_dispatch() {
+        let path = dir();
+        let mut ledger = EffectJournal::open(&path).unwrap();
+        let backend = Arc::new(CountingTools(Default::default()));
+        let spec = EffectSpec::Tool {
+            name: "t".repeat(MAX_IDENTITY_BYTES),
+            input: serde_json::json!({}),
+        };
+        let key = spec.key("identity", 0, AgentId(0), 0).unwrap();
+        let error = ledger
+            .resolve_all(
+                vec![(key, spec)],
+                backend.clone(),
+                1,
+                Duration::from_secs(1),
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("identity"), "{error}");
+        assert_eq!(backend.0.load(Ordering::SeqCst), 0);
+        assert_eq!(ledger.receipt_count(), 0);
+        drop(ledger);
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }
 #[cfg(all(test, feature = "live-http"))]
 mod http_tests {
@@ -1822,19 +1952,50 @@ mod r5_journal_capacity_tests {
 
     #[test]
     fn capacity_is_reserved_for_all_pending_effects_before_dispatch() {
-        assert!(ensure_effect_capacity(0, 32).is_ok());
-        assert!(ensure_effect_capacity(1, 32).is_err());
-        assert!(
-            ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64, 1)
-                .is_ok()
-        );
-        assert!(
-            ensure_effect_capacity(
-                MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64 + 1,
-                1
-            )
-            .is_err()
-        );
+        let spec = sample_request("capacity");
+        let key = spec.key("capacity-trial", 0, AgentId(0), 0).unwrap();
+        let reserve = compact_reservation(&key, &spec).unwrap();
+        assert!(reserve < 64 * 1024);
+        // A full 32-effect batch fits once the journal already holds receipts.
+        assert!(ensure_effect_capacity(1, 32 * reserve).is_ok());
+        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - reserve, reserve).is_ok());
+        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - reserve + 1, reserve).is_err());
         assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES + 1, 0).is_err());
+    }
+
+    #[test]
+    fn compact_receipt_keeps_billing_and_usage() {
+        let spec = sample_request("compact");
+        let key = spec.key("compact-trial", 0, AgentId(0), 0).unwrap();
+        let receipt = Receipt {
+            key,
+            spec,
+            result: EffectResult::Model {
+                content: "Z".repeat(1024),
+                effective_model: "fixed-v1".into(),
+                usage: Some(Usage {
+                    input_tokens: Some(3),
+                    output_tokens: Some(5),
+                    billed_cost: Some("0.01".into()),
+                    currency: Some("USD".into()),
+                }),
+            },
+            billing: BillingDisposition::Charged,
+            effective_provider: "openai-compatible".into(),
+            effective_model: Some("fixed-v1".into()),
+            content_hash: String::new(),
+        };
+        let (compact, bytes) = compact_receipt(receipt, "too large").unwrap();
+        assert_eq!(compact.billing, BillingDisposition::Charged);
+        assert_eq!(compact.effective_model, None);
+        assert_eq!(compact.content_hash, compact.compute_hash().unwrap());
+        assert!(bytes.ends_with(b"\n"));
+        match compact.result {
+            EffectResult::Failed { category, message } => {
+                assert_eq!(category, "response_too_large");
+                assert!(message.contains("\"billed_cost\":\"0.01\""), "{message}");
+            }
+            other => panic!("unexpected result {other:?}"),
+        }
     }
 }

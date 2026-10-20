@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """R0 archived-Python reference: scripted turns, observers ON versus OFF.
 
-This runs only the preserved hiyal-python/ implementation. It is not part
-of the new Rust package and requires the legacy requests dependency.
+This runs only the archived hiyal-python/ implementation, taken from an
+archive-branch checkout named by HIYAL_LEGACY_SOURCE. It is not part of the
+new Rust package and requires the legacy requests dependency.
 All measurements are machine-specific and *not* Rust performance claims.
 """
 from __future__ import annotations
@@ -19,7 +20,20 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY = Path(os.environ.get("HIYAL_LEGACY_SOURCE", str(ROOT / "hiyal-python"))).resolve()
+# No in-tree default: hiyal-python/ is removed from main, and leftover
+# untracked files there would silently run stale code with wrong provenance.
+_LEGACY_ENV = os.environ.get("HIYAL_LEGACY_SOURCE")
+LEGACY = Path(_LEGACY_ENV).resolve() if _LEGACY_ENV else None
+_LEGACY_MISSING = (
+    "Archived Python source missing; set HIYAL_LEGACY_SOURCE to the hiyal-python/ "
+    "directory in an archive-branch checkout"
+)
+
+
+def _require_legacy() -> Path:
+    if LEGACY is None or not LEGACY.is_dir():
+        raise SystemExit(_LEGACY_MISSING)
+    return LEGACY
 
 
 def _git_revision(root: Path = ROOT) -> str:
@@ -80,10 +94,9 @@ def _percentile(values: list[float], quantile: float) -> float:
 
 
 def _worker(agents: int, steps: int, observer_on: bool) -> dict:
-    if not LEGACY.is_dir():
-        raise RuntimeError("Archived Python source missing; set HIYAL_LEGACY_SOURCE to the hiyal-python/ directory in an archive-branch checkout")
+    legacy = _require_legacy()
     # Import inside the subprocess, so every sample has independent allocations.
-    sys.path.insert(0, str(LEGACY))
+    sys.path.insert(0, str(legacy))
     started_import = time.perf_counter_ns()
     from hiyal.agents import AgentManager
     from hiyal.environments import BasicEnvironment
@@ -166,13 +179,14 @@ def _main() -> int:
             parser.error("worker requires one --steps and --observer")
         print(json.dumps(_worker(args.agents, args.steps[0], args.observer == "on")))
         return 0
+    legacy = _require_legacy()
 
     result = {
         "schema_version": 1,
         "baseline": "archived_python",
-        "source": str(LEGACY),
-        "archive_git_revision": _git_revision(LEGACY.parent),
-        "archive_worktree_dirty": _git_dirty(LEGACY.parent),
+        "source": str(legacy),
+        "archive_git_revision": _git_revision(legacy.parent),
+        "archive_worktree_dirty": _git_dirty(legacy.parent),
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "machine": platform.machine(),

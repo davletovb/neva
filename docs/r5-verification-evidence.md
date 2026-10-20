@@ -32,8 +32,9 @@ latest release candidate before public publication.
   bounded streamed authoritative replay, no automatic corrupt committed
   record repair, deterministic torn-tail truncation under a writer lease.
 - Effect receipt replay: bounded streamed reader, keyed identity/hashes,
-  32 MiB per record, 1 GiB total cap, pre-dispatch worst-case capacity
-  reservation and compact failure receipts when oversized results occur.
+  32 MiB per record, 1 GiB total cap, pre-dispatch reservation of a compact
+  failure receipt per new effect, and compact receipts (billing status kept)
+  when oversized results occur.
 - Rust unit/integration tests: integrity mutation matrix, malformed metadata,
   versioned snapshots, crash recovery, fork ancestry and branch isolation,
   writer lease concurrency, deterministic RNG ordering and memory invariants.

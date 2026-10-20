@@ -57,8 +57,10 @@ hash claim. No automatic publishing or registry secrets in CI.
   memory. These are explicit portable storage limits; a previously unbounded
   custom world larger than this requires conversion or a separately reviewed
   new contract. The effect journal now validates its entries with a streaming 32 MiB
-  per-record cap and a 1 GiB total cap, and reserves worst-case capacity
-  before launching new provider effects. Deployment retention and backups
+  per-record cap and a 1 GiB total cap. Before launching new provider
+  effects it reserves room for each one's compact keyed failure receipt; a
+  result that does not fit is recorded in that compact form, keeping its
+  billing status, so a dispatched request is never silently redelivered. Deployment retention and backups
   remain external quota responsibilities.
 - `effects.jsonl` contains potentially sensitive request/response receipts
   and still requires restricted filesystem access, retention policy and an

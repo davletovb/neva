@@ -1,7 +1,8 @@
 # GitHub Actions: low-spend policy for Hiyal
 
 **Effective:** 2026-10-19. Applies only to the Rust rewrite. The historical
-multi-job Python workflow is archived under `hiyal-python/.github/workflows/`
+multi-job Python workflow is preserved only on
+[archive/hiyal-python-pre-r5](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5)
 and remains inactive; the archived Dependabot file is not active. Do not
 restore those jobs just to verify Rust changes.
 

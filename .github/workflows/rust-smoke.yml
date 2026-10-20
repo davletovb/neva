@@ -1,4 +1,4 @@
-# Deliberately separate from archived hiyal-python/.github/workflows/ci.yml.
+# Deliberately separate from the Python CI kept on archive/hiyal-python-pre-r5.
 # One Linux smoke job, NO per-commit synchronize or main push triggers.
 name: Rust smoke (cost controlled)
 

@@ -386,18 +386,37 @@ fn file_sha256(path: &Path) -> Result<String, String> {
     Ok(crate::core::hex_digest(&sha.finalize()))
 }
 
+/// fs::copy keeps the source's permissions, so a copy of read-only evidence
+/// is read-only too. A read handle is enough to fsync on Unix.
+#[cfg(not(windows))]
+fn sync_copied_file(path: &Path) -> Result<(), String> {
+    File::open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())
+}
+
+/// FlushFileBuffers on Windows requires a writable handle, so the read-only
+/// attribute copied from the source is cleared on our own copy first.
+#[cfg(windows)]
+fn sync_copied_file(path: &Path) -> Result<(), String> {
+    let mut permissions = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions).map_err(|e| e.to_string())?;
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())
+}
+
 fn copy_evidence(source: &Path, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     for name in ["manifest.json", "events.jsonl"] {
         let to = dest.join(name);
         fs::copy(source.join(name), &to).map_err(|e| e.to_string())?;
-        // FlushFileBuffers on Windows requires a writable handle. Opening
-        // the copied file read-only works on Unix but fails with ERROR_ACCESS_DENIED.
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&to)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        sync_copied_file(&to)?;
     }
     crate::storage::sync_trial_directory(dest)
 }
@@ -706,6 +725,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hiyal-r2-{label}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_evidence_accepts_read_only_parent_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let source = directory("read-only-parent");
+        let dest = directory("read-only-copy");
+        fs::create_dir_all(&source).unwrap();
+        for name in ["manifest.json", "events.jsonl"] {
+            let path = source.join(name);
+            fs::write(&path, b"{}\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        copy_evidence(&source, &dest).unwrap();
+        assert_eq!(fs::read(dest.join("events.jsonl")).unwrap(), b"{}\n");
+        fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(dest).unwrap();
     }
 
     fn sweep(parallel: usize) -> Sweep {

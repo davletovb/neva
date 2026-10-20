@@ -3,7 +3,8 @@
 Status: **R0 implementation and decision artifacts prepared; execution evidence pending**. This is a new Rust engine informed by the archived
 Python implementation, *not* a line-by-line translation. No Python bindings,
 embedded Python runtime, or required Python analysis stack. The old package
-lives under `hiyal-python/` for benchmarks and fixtures only.
+is preserved on [archive/hiyal-python-pre-r5](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5) for reference benchmarks only
+(see `HIYAL_LEGACY_SOURCE` in `benchmarks/README.md`).
 
 ## Naming and scope
 
