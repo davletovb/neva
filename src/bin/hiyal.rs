@@ -570,3 +570,28 @@ mod export_tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+mod partial_fork_lease_tests {
+    use super::*;
+
+    #[test]
+    fn both_leases_stay_exclusive_through_cleanup_scope() {
+        let dir = std::env::temp_dir().join(format!(
+            "hiyal-fork-lease-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        {
+            let _held = lock_partial_fork_for_cleanup(&dir).unwrap();
+            for marker in [".writer.lock", ".effects-writer.lock"] {
+                let contender = fs::OpenOptions::new().read(true).write(true)
+                    .open(dir.join(marker)).unwrap();
+                assert!(contender.try_lock().is_err(), "must retain {marker} until deletion");
+            }
+        }
+        let again = lock_partial_fork_for_cleanup(&dir).unwrap();
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
