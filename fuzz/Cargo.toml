@@ -26,4 +26,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "compact_events"
+path = "fuzz_targets/compact_events.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
