@@ -959,3 +959,30 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod r6_legacy_world_compatibility {
+    use super::*;
+    #[test]
+    fn historic_null_and_compact_absent_worlds_are_distinct() {
+        // Serde's Option<W> loses this distinction for W whose wire value
+        // is JSON null, breaking schema-v1 committed hashes on old worlds.
+        let historic = r#"{"outcome":"accepted","action":1,"world":null,"state_hash":"abc"}"#;
+        let parsed: Outcome<serde_json::Value, u64> =
+            serde_json::from_str(historic).unwrap();
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert!(encoded.as_object().unwrap().contains_key("world"));
+        assert!(encoded["world"].is_null());
+
+        let compact = r#"{"outcome":"accepted","action":1,"state_hash":"abc"}"#;
+        let parsed: Outcome<serde_json::Value, u64> =
+            serde_json::from_str(compact).unwrap();
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert!(!encoded.as_object().unwrap().contains_key("world"));
+
+        let typed: Outcome<Option<u64>, u64> =
+            serde_json::from_str(historic).unwrap();
+        let encoded = serde_json::to_value(typed).unwrap();
+        assert!(encoded.as_object().unwrap().contains_key("world"));
+    }
+}
