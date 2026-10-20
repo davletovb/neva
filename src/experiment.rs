@@ -1370,7 +1370,7 @@ mod r6_interrupted_round_tests {
         .unwrap();
         trial.observe_with(Arc::new(CrashAfterFirst));
         let task = tokio::spawn(async move { trial.run_round(2).await });
-        assert!(task.await.unwrap_err().is_panic());
+        assert!(task.await.err().is_some_and(|error| error.is_panic()));
         assert!(dir.join(ROUND_PLAN_FILE).exists());
         let mut resumed = Trial::resume(
             &dir,
