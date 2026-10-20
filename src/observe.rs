@@ -31,7 +31,11 @@ pub struct EventSummary {
     pub state_hash: Option<String>,
     /// End offset in authoritative events.jsonl, when emitted by a newer
     /// recorder. This is *derived metadata*, not a substitute for the hash.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::core::decimal_u64::option")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::core::decimal_u64::option"
+    )]
     pub source_log_bytes: Option<u64>,
 }
 
@@ -85,8 +89,7 @@ where
             serde_json::from_slice(&line).map_err(|e| e.to_string())?;
         let mut summary = EventSummary::from_entry(&entry);
         summary.source_log_bytes = Some(read_bytes);
-        serde_json::to_writer(&mut *out, &summary)
-            .map_err(|e| e.to_string())?;
+        serde_json::to_writer(&mut *out, &summary).map_err(|e| e.to_string())?;
         out.write_all(b"\n").map_err(|e| e.to_string())?;
     }
     if read_bytes != verified.log_bytes {
@@ -120,19 +123,26 @@ where
             let len = file.metadata().map_err(|e| e.to_string())?.len();
             if len == 0 && store.sequence() == 0 {
                 return Ok(Self {
-                    file: Mutex::new(OpenOptions::new().append(true).open(&path)
-                        .map_err(|e| e.to_string())?),
+                    file: Mutex::new(
+                        OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .map_err(|e| e.to_string())?,
+                    ),
                     _world: PhantomData,
                 });
             }
             if len > 0 && store.sequence() > 0 {
                 let count = len.min(4096);
-                file.seek(SeekFrom::Start(len - count)).map_err(|e| e.to_string())?;
+                file.seek(SeekFrom::Start(len - count))
+                    .map_err(|e| e.to_string())?;
                 let mut tail = vec![0u8; count as usize];
                 file.read_exact(&mut tail).map_err(|e| e.to_string())?;
                 if tail.last() == Some(&b'\n') {
-                    let records: Vec<_> = tail.split(|b| *b == b'\n')
-                        .filter(|part| !part.is_empty()).collect();
+                    let records: Vec<_> = tail
+                        .split(|b| *b == b'\n')
+                        .filter(|part| !part.is_empty())
+                        .collect();
                     if let Some(last) = records.last()
                         && let Ok(summary) = serde_json::from_slice::<EventSummary>(last)
                         && summary.trial_id == store.genesis().trial_id
@@ -142,8 +152,12 @@ where
                             && summary.event_hash == store.chain_head()
                         {
                             return Ok(Self {
-                                file: Mutex::new(OpenOptions::new().append(true).open(&path)
-                                    .map_err(|e| e.to_string())?),
+                                file: Mutex::new(
+                                    OpenOptions::new()
+                                        .append(true)
+                                        .open(&path)
+                                        .map_err(|e| e.to_string())?,
+                                ),
                                 _world: PhantomData,
                             });
                         }
@@ -159,17 +173,25 @@ where
                                 let mut input = File::open(store.dir.join("events.jsonl"))
                                     .map_err(|e| e.to_string())?;
                                 if offset > 0 {
-                                    input.seek(SeekFrom::Start(offset - 1))
+                                    input
+                                        .seek(SeekFrom::Start(offset - 1))
                                         .map_err(|e| e.to_string())?;
                                     let mut delimiter = [0u8];
-                                    input.read_exact(&mut delimiter).map_err(|e| e.to_string())?;
+                                    input
+                                        .read_exact(&mut delimiter)
+                                        .map_err(|e| e.to_string())?;
                                     if delimiter != [b'\n'] {
                                         return Err("projection offset not aligned".into());
                                     }
                                 }
-                                input.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
-                                let mut input = BufReader::new(input.take(store.log_bytes() - offset));
-                                let mut output = OpenOptions::new().append(true).open(&path)
+                                input
+                                    .seek(SeekFrom::Start(offset))
+                                    .map_err(|e| e.to_string())?;
+                                let mut input =
+                                    BufReader::new(input.take(store.log_bytes() - offset));
+                                let mut output = OpenOptions::new()
+                                    .append(true)
+                                    .open(&path)
                                     .map_err(|e| e.to_string())?;
                                 let mut line = Vec::new();
                                 let mut cursor = offset;
@@ -177,13 +199,15 @@ where
                                 let mut sequence = summary.sequence;
                                 loop {
                                     let n = read_record_limited(&mut input, &mut line)?;
-                                    if n == 0 { break; }
+                                    if n == 0 {
+                                        break;
+                                    }
                                     if !line.ends_with(b"\n") {
                                         return Err("incomplete projection source suffix".into());
                                     }
                                     cursor += n as u64;
-                                    let event: Entry<W,W::Action> = serde_json::from_slice(&line)
-                                        .map_err(|e| e.to_string())?;
+                                    let event: Entry<W, W::Action> =
+                                        serde_json::from_slice(&line).map_err(|e| e.to_string())?;
                                     if event.previous_hash != previous
                                         || event.sequence != sequence + 1
                                     {
@@ -197,13 +221,17 @@ where
                                     previous = event.hash;
                                     sequence += 1;
                                 }
-                                if cursor != store.log_bytes() || sequence + 1 != store.sequence()
+                                if cursor != store.log_bytes()
+                                    || sequence + 1 != store.sequence()
                                     || previous != store.chain_head()
                                 {
                                     return Err("projection suffix ended at different head".into());
                                 }
                                 output.flush().map_err(|e| e.to_string())?;
-                                Ok(Self { file: Mutex::new(output), _world: PhantomData })
+                                Ok(Self {
+                                    file: Mutex::new(output),
+                                    _world: PhantomData,
+                                })
                             })();
                             if let Ok(observer) = suffix {
                                 return Ok(observer);
@@ -233,11 +261,17 @@ where
         })
     }
     fn write_one(&self, entry: &Entry<W, W::Action>, offset: Option<u64>) -> Result<(), String> {
-        let mut output = self.file.lock().map_err(|_| "observability lock poisoned")?;
+        let mut output = self
+            .file
+            .lock()
+            .map_err(|_| "observability lock poisoned")?;
         let mut summary = EventSummary::from_entry(entry);
         summary.source_log_bytes = offset;
         serde_json::to_writer(&mut *output, &summary).map_err(|e| e.to_string())?;
-        output.write_all(b"\n").and_then(|_| output.flush()).map_err(|e| e.to_string())
+        output
+            .write_all(b"\n")
+            .and_then(|_| output.flush())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -249,7 +283,11 @@ where
     fn committed(&self, entry: &Entry<W, W::Action>) -> Result<(), String> {
         self.write_one(entry, None)
     }
-    fn committed_with_log_offset(&self, entry: &Entry<W, W::Action>, end: u64) -> Result<(), String> {
+    fn committed_with_log_offset(
+        &self,
+        entry: &Entry<W, W::Action>,
+        end: u64,
+    ) -> Result<(), String> {
         self.write_one(entry, Some(end))
     }
 }
