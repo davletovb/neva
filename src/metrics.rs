@@ -5,12 +5,12 @@
 use crate::{
     core::World,
     experiment::Observer,
-    storage::{Entry, Outcome, Store, atomic_write_with},
+    storage::{Entry, Outcome, Store, atomic_write_with, read_record_limited},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufReader, Read, Write},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -85,21 +85,29 @@ where
     /// Caller holds the parent trial's exclusive writer lease.
     pub fn recover(dir: impl AsRef<Path>, projector: M) -> Result<Self, String> {
         let dir = dir.as_ref();
-        let _: crate::storage::ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(dir)?;
+        let verified = Store::<W, W::Action>::inspect_read_only(dir)?;
         let target = dir.join("metrics.csv");
         atomic_write_with(&target, |output| {
             output
                 .write_all(HEADER.as_bytes())
                 .map_err(|e| e.to_string())?;
             let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-            for line in BufReader::new(input).lines() {
-                let line = line.map_err(|e| e.to_string())?;
-                if line.is_empty() {
-                    return Err("empty event line".into());
+            let mut reader = BufReader::new(input.take(verified.log_bytes));
+            let mut line = Vec::new();
+            let mut read_bytes = 0u64;
+            loop {
+                let count = read_record_limited(&mut reader, &mut line)?;
+                if count == 0 { break; }
+                if !line.ends_with(b"\n") {
+                    return Err("incomplete event record during metrics recovery".into());
                 }
+                read_bytes += count as u64;
                 let event: Entry<W, W::Action> =
-                    serde_json::from_str(&line).map_err(|e| e.to_string())?;
+                    serde_json::from_slice(&line).map_err(|e| e.to_string())?;
                 Self::write_event(output, &event, &projector)?;
+            }
+            if read_bytes != verified.log_bytes {
+                return Err("event prefix changed during metrics recovery".into());
             }
             Ok(())
         })?;
