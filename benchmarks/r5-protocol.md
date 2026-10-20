@@ -15,7 +15,8 @@ dependencies installed. Fetch the frozen archive branch into a separate
 worktree first; the archived source is intentionally absent from Rust main:
 
 ```sh
-git worktree add --detach ../hiyal-python-reference archive/hiyal-python-pre-r5
+git fetch origin archive/hiyal-python-pre-r5
+git worktree add --detach ../hiyal-python-reference FETCH_HEAD
 export HIYAL_LEGACY_SOURCE="$(cd ../hiyal-python-reference/hiyal-python && pwd)"
 ```
 
