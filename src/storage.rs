@@ -341,6 +341,7 @@ fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&path)
         .map_err(|e| e.to_string())?;
     file.try_lock()
@@ -430,8 +431,7 @@ where
         // Explicit trusted-checkpoint mode is faster, but it does NOT
         // independently verify events before the snapshot. Normal open() and
         // read-only validate() still independently verify the full history.
-        if trust_snapshot {
-            if let Some(ref s) = snapshot {
+        if trust_snapshot && let Some(ref s) = snapshot {
                 let file_len = input.metadata().map_err(|e| e.to_string())?.len();
                 if s.schema != genesis.schema
                     || s.trial_id != genesis.trial_id
@@ -452,7 +452,7 @@ where
                     input
                         .read_exact(&mut delimiter)
                         .map_err(|e| e.to_string())?;
-                    if delimiter != [b'\n'] {
+                    if delimiter != *b"\n" {
                         return Err("trusted snapshot offset is not an event boundary".into());
                     }
                 }
@@ -469,7 +469,6 @@ where
                 };
                 offset = s.log_bytes;
                 matched = Some(state.clone());
-            }
         }
         let mut reader = BufReader::new(input);
         let mut line = Vec::new();
