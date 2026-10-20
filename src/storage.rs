@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write, Seek, SeekFrom, Read},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -17,12 +17,16 @@ pub const SCHEMA: u32 = 1;
 /// Durability of the authoritative event log. `EveryEvent` is the default;
 /// `AtCheckpoint` trades crash durability for throughput and must be opted
 /// into explicitly by the application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Durability { EveryEvent, AtCheckpoint }
+pub enum Durability {
+    EveryEvent,
+    AtCheckpoint,
+}
 impl Default for Durability {
-    fn default() -> Self { Self::EveryEvent }
+    fn default() -> Self {
+        Self::EveryEvent
+    }
 }
 
 /// Per-record limit bounds corrupted or hostile files during streaming replay.
@@ -45,12 +49,15 @@ impl std::fmt::Display for AppendError {
     }
 }
 impl From<String> for AppendError {
-    fn from(value: String) -> Self { Self::Other(value) }
+    fn from(value: String) -> Self {
+        Self::Other(value)
+    }
 }
 impl From<&'static str> for AppendError {
-    fn from(value: &'static str) -> Self { Self::Other(value.into()) }
+    fn from(value: &'static str) -> Self {
+        Self::Other(value.into())
+    }
 }
-
 
 /// Single, bounded metadata read for library, CLI and research consumers.
 pub fn read_metadata_limited(path: &Path) -> Result<Vec<u8>, String> {
@@ -113,7 +120,9 @@ impl BuildProvenance {
             rustc_version: option_env!("HIYAL_RUSTC_VERSION").map(str::to_owned),
             target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
             source_revision: option_env!("GITHUB_SHA").map(str::to_owned),
-            engine_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!("../Cargo.lock"))),
+            engine_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!(
+                "../Cargo.lock"
+            ))),
         }
     }
 }
@@ -328,9 +337,14 @@ pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
 
 fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
     let path = dir.join(".writer.lock");
-    let file = OpenOptions::new().read(true).write(true).create(true)
-        .open(&path).map_err(|e| e.to_string())?;
-    file.try_lock().map_err(|e| format!("trial already has an active writer: {e}"))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.try_lock()
+        .map_err(|e| format!("trial already has an active writer: {e}"))?;
     Ok(WriterLock { _file: file })
 }
 
@@ -431,19 +445,27 @@ where
                 }
                 s.schedule.validate()?;
                 if s.log_bytes > 0 {
-                    input.seek(SeekFrom::Start(s.log_bytes - 1))
+                    input
+                        .seek(SeekFrom::Start(s.log_bytes - 1))
                         .map_err(|e| e.to_string())?;
                     let mut delimiter = [0u8; 1];
-                    input.read_exact(&mut delimiter).map_err(|e| e.to_string())?;
+                    input
+                        .read_exact(&mut delimiter)
+                        .map_err(|e| e.to_string())?;
                     if delimiter != [b'\n'] {
                         return Err("trusted snapshot offset is not an event boundary".into());
                     }
                 }
-                input.seek(SeekFrom::Start(s.log_bytes)).map_err(|e| e.to_string())?;
+                input
+                    .seek(SeekFrom::Start(s.log_bytes))
+                    .map_err(|e| e.to_string())?;
                 state = Projection {
-                    world: s.world.clone(), schedule: s.schedule.clone(),
-                    streams: s.streams.clone(), sequence: s.sequence,
-                    logical_step: s.logical_step, chain_head: s.chain_head.clone(),
+                    world: s.world.clone(),
+                    schedule: s.schedule.clone(),
+                    streams: s.streams.clone(),
+                    sequence: s.sequence,
+                    logical_step: s.logical_step,
+                    chain_head: s.chain_head.clone(),
                 };
                 offset = s.log_bytes;
                 matched = Some(state.clone());
@@ -542,7 +564,8 @@ where
             return Err("unsupported manifest/trial schema".into());
         }
         genesis.initial_schedule.validate()?;
-        let (projected, durable_length, file_length) = Self::replay_history(dir, &genesis, true, trust_snapshot)?;
+        let (projected, durable_length, file_length) =
+            Self::replay_history(dir, &genesis, true, trust_snapshot)?;
         if durable_length < file_length {
             let f = OpenOptions::new()
                 .write(true)
@@ -609,7 +632,8 @@ where
             Outcome::Accepted {
                 action,
                 world,
-                state_hash, before_apply_streams,
+                state_hash,
+                before_apply_streams,
             } => {
                 let mut next = state.world.clone();
                 if let Some(before) = before_apply_streams {
@@ -629,7 +653,9 @@ where
                         .map_err(|e| format!("replay reducer failure: {e}"))?;
                 }
                 if digest(&next)? != *state_hash
-                    || world.as_ref().is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
+                    || world
+                        .as_ref()
+                        .is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
                 {
                     return Err("replayed world state differs from committed state".into());
                 }
@@ -650,15 +676,22 @@ where
     /// On failure, the writer is poisoned to prevent appending after a torn tail.
     /// Internal staged append: replay independently re-applies actions during restore.
     pub(crate) fn append(
-        &mut self, actor: AgentId, outcome: Outcome<W, A>,
-        schedule: Schedule, streams: Streams,
+        &mut self,
+        actor: AgentId,
+        outcome: Outcome<W, A>,
+        schedule: Schedule,
+        streams: Streams,
     ) -> Result<Entry<W, A>, String> {
-        self.append_typed(actor, outcome, schedule, streams).map_err(|e| e.to_string())
+        self.append_typed(actor, outcome, schedule, streams)
+            .map_err(|e| e.to_string())
     }
 
     pub(crate) fn append_typed(
-        &mut self, actor: AgentId, outcome: Outcome<W, A>,
-        schedule: Schedule, streams: Streams,
+        &mut self,
+        actor: AgentId,
+        outcome: Outcome<W, A>,
+        schedule: Schedule,
+        streams: Streams,
     ) -> Result<Entry<W, A>, AppendError> {
         if self.poisoned {
             return Err("writer poisoned; reopen/recover".into());
@@ -686,7 +719,12 @@ where
             .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
         let new_world = match &outcome {
-            Outcome::Accepted { action, world, state_hash, before_apply_streams } => {
+            Outcome::Accepted {
+                action,
+                world,
+                state_hash,
+                before_apply_streams,
+            } => {
                 let mut next = self.world.clone();
                 if let Some(before) = before_apply_streams {
                     before.checked_progress(&expected_streams)?;
@@ -696,11 +734,15 @@ where
                         return Err("staged world RNG divergence".into());
                     }
                 } else {
-                    if streams != expected_streams { return Err("legacy RNG divergence".into()); }
+                    if streams != expected_streams {
+                        return Err("legacy RNG divergence".into());
+                    }
                     next.apply(actor, action.clone())?;
                 }
                 if digest(&next)? != *state_hash
-                    || world.as_ref().is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
+                    || world
+                        .as_ref()
+                        .is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
                 {
                     return Err("staged state hash mismatch".into());
                 }
@@ -738,7 +780,9 @@ where
         })();
         if let Err(error) = write_result {
             self.poisoned = true;
-            return Err(AppendError::Other(format!("event append/fsync failed: {error}")));
+            return Err(AppendError::Other(format!(
+                "event append/fsync failed: {error}"
+            )));
         }
         self.log_bytes += encoded.len() as u64;
         self.sequence = next_sequence;
@@ -803,11 +847,14 @@ where
         Ok(())
     }
 
-    pub fn durability(&self) -> Durability { self.durability }
+    pub fn durability(&self) -> Durability {
+        self.durability
+    }
 
     /// Flush committed bytes, including when using checkpoint-only durability.
     pub fn sync_log(&self) -> Result<(), String> {
-        File::open(self.dir.join("events.jsonl")).and_then(|f| f.sync_all())
+        File::open(self.dir.join("events.jsonl"))
+            .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())
     }
 
@@ -838,23 +885,35 @@ where
         if self.log_bytes > 64 * 1024 * 1024 {
             return Err("read_events memory budget exceeded; use visit_events".into());
         }
-        self.visit_events(|entry| { result.push(entry); Ok(()) })?;
+        self.visit_events(|entry| {
+            result.push(entry);
+            Ok(())
+        })?;
         Ok(result)
     }
 
-    pub fn visit_events(&self, mut visitor: impl FnMut(Entry<W, A>) -> Result<(), String>) -> Result<(), String> {
+    pub fn visit_events(
+        &self,
+        mut visitor: impl FnMut(Entry<W, A>) -> Result<(), String>,
+    ) -> Result<(), String> {
         let source = File::open(self.dir.join("events.jsonl")).map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(source.take(self.log_bytes));
         let mut line = Vec::new();
         let mut consumed = 0u64;
         loop {
             let n = read_record_limited(&mut reader, &mut line)?;
-            if n == 0 { break; }
-            if !line.ends_with(b"\n") { return Err("incomplete bounded event".into()); }
+            if n == 0 {
+                break;
+            }
+            if !line.ends_with(b"\n") {
+                return Err("incomplete bounded event".into());
+            }
             consumed += n as u64;
             visitor(serde_json::from_slice(&line).map_err(|e| e.to_string())?)?;
         }
-        if consumed != self.log_bytes { return Err("event log shrank during read".into()); }
+        if consumed != self.log_bytes {
+            return Err("event log shrank during read".into());
+        }
         Ok(())
     }
 }
