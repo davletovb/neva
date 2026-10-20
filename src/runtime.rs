@@ -225,18 +225,9 @@ impl ReplayBackend {
 }
 
 /// Single-writer file lease for standalone effect journals.
+/// Kernel-backed single-writer lease. Keep marker inode stable; never unlink.
 struct EffectWriterLock {
-    path: PathBuf,
-    file: Option<std::fs::File>,
-}
-impl Drop for EffectWriterLock {
-    fn drop(&mut self) {
-        if let Some(file) = self.file.take() {
-            let _ = file.sync_all();
-            drop(file);
-        }
-        let _ = fs::remove_file(&self.path);
-    }
+    _file: std::fs::File,
 }
 
 pub struct EffectJournal {
@@ -364,14 +355,10 @@ impl EffectJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let lock_path = dir.as_ref().join(".effects-writer.lock");
         let lock_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-            .map_err(|e| format!("effect journal already open or stale lock: {e}"))?;
-        let lock = EffectWriterLock {
-            path: lock_path,
-            file: Some(lock_file),
-        };
+            .read(true).write(true).create(true)
+            .open(&lock_path).map_err(|e| e.to_string())?;
+        lock_file.try_lock().map_err(|e| format!("effect journal already has an active writer: {e}"))?;
+        let lock = EffectWriterLock { _file: lock_file };
         let path = dir.as_ref().join("effects.jsonl");
         if !path.exists() {
             OpenOptions::new()
