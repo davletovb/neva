@@ -529,6 +529,7 @@ where
         initial_schedule: parent.schedule.clone(),
         initial_streams: streams,
         world_kind: parent.genesis.world_kind.clone(),
+        build: Some(crate::storage::BuildProvenance::current()),
     };
     // Build an entire branch in a unique sibling directory. The public child
     // path appears only after ancestry, attribution and both ledgers verify.
