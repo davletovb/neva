@@ -260,7 +260,7 @@ pub(crate) fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// on process death. The marker is deliberately *never removed* to avoid
 /// a race where an unlinked locked inode admits another writer.
 struct WriterLock {
-    file: File,
+    _file: File,
 }
 pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
@@ -277,7 +277,7 @@ fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
     let file = OpenOptions::new().read(true).write(true).create(true)
         .open(&path).map_err(|e| e.to_string())?;
     file.try_lock().map_err(|e| format!("trial already has an active writer: {e}"))?;
-    Ok(WriterLock { file })
+    Ok(WriterLock { _file: file })
 }
 
 impl<W, A> Store<W, A>
