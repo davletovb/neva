@@ -1200,7 +1200,7 @@ mod batch_regression_tests {
         assert!(EffectJournal::open(&path).is_err());
         assert!(path.join(".effects-writer.lock").exists());
         drop(first);
-        assert!(!path.join(".effects-writer.lock").exists());
+        assert!(path.join(".effects-writer.lock").exists()); // persistent marker; OS lock released
         let second = EffectJournal::open_existing(&path).unwrap();
         drop(second);
         fs::remove_dir_all(&path).unwrap();
