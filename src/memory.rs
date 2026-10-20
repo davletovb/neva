@@ -37,7 +37,9 @@ pub struct MemoryBank {
 fn valid_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 128
-        && key.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/'))
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/'))
 }
 
 fn record_id(agent: AgentId, key: &str) -> String {
@@ -73,8 +75,12 @@ impl MemoryBank {
                 || id != &record_id(record.agent, &record.key)
                 || record.importance > 1000
                 || record.accessed_step < record.created_step
-                || record.expires_at.is_some_and(|expiry| expiry <= record.created_step)
-                || serde_json::to_vec(&record.payload).map_err(|e| e.to_string())?.len()
+                || record
+                    .expires_at
+                    .is_some_and(|expiry| expiry <= record.created_step)
+                || serde_json::to_vec(&record.payload)
+                    .map_err(|e| e.to_string())?
+                    .len()
                     > self.max_payload_bytes
             {
                 return Err("invalid memory record".into());
@@ -155,7 +161,12 @@ impl MemoryBank {
     }
 
     /// Exact-key recall; expired memories are not returned or reinforced.
-    pub fn get(&mut self, agent: AgentId, key: &str, now: u64) -> Result<Option<MemoryRecord>, String> {
+    pub fn get(
+        &mut self,
+        agent: AgentId,
+        key: &str,
+        now: u64,
+    ) -> Result<Option<MemoryRecord>, String> {
         if !valid_key(key) {
             return Err("invalid memory key".into());
         }
@@ -183,13 +194,19 @@ impl MemoryBank {
         if limit > self.capacity || prefix.len() > 128 {
             return Err("invalid recall limit or prefix".into());
         }
-        let mut matches: Vec<_> = self.records.values()
-            .filter(|r| r.agent == agent && r.key.starts_with(prefix)
-                && r.expires_at.is_none_or(|expiry| now < expiry))
+        let mut matches: Vec<_> = self
+            .records
+            .values()
+            .filter(|r| {
+                r.agent == agent
+                    && r.key.starts_with(prefix)
+                    && r.expires_at.is_none_or(|expiry| now < expiry)
+            })
             .cloned()
             .collect();
         matches.sort_by(|a, b| {
-            b.importance.cmp(&a.importance)
+            b.importance
+                .cmp(&a.importance)
                 .then_with(|| b.accesses.cmp(&a.accesses))
                 .then_with(|| b.accessed_step.cmp(&a.accessed_step))
                 .then_with(|| a.key.cmp(&b.key))
@@ -199,7 +216,13 @@ impl MemoryBank {
     }
 
     /// Explicit, deterministic adaptive salience adjustment (0..=1000).
-    pub fn reinforce(&mut self, agent: AgentId, key: &str, now: u64, increment: u16) -> Result<bool, String> {
+    pub fn reinforce(
+        &mut self,
+        agent: AgentId,
+        key: &str,
+        now: u64,
+        increment: u16,
+    ) -> Result<bool, String> {
         if increment > 1000 || !valid_key(key) {
             return Err("invalid reinforcement".into());
         }
@@ -225,14 +248,24 @@ mod tests {
     #[test]
     fn deterministic_order_expiry_and_agent_separation() {
         let mut m = MemoryBank::new(3, 1024).unwrap();
-        m.put(AgentId(1), "belief/a", json!({"v": 1}), 0, 10, Some(2)).unwrap();
-        m.put(AgentId(2), "belief/a", json!({"v": 2}), 0, 10, None).unwrap();
-        m.put(AgentId(1), "belief/b", json!({"v": 3}), 1, 11, None).unwrap();
-        assert_eq!(m.recall_prefix(AgentId(1), "belief/", 1, 3).unwrap()[0].key, "belief/b");
+        m.put(AgentId(1), "belief/a", json!({"v": 1}), 0, 10, Some(2))
+            .unwrap();
+        m.put(AgentId(2), "belief/a", json!({"v": 2}), 0, 10, None)
+            .unwrap();
+        m.put(AgentId(1), "belief/b", json!({"v": 3}), 1, 11, None)
+            .unwrap();
+        assert_eq!(
+            m.recall_prefix(AgentId(1), "belief/", 1, 3).unwrap()[0].key,
+            "belief/b"
+        );
         assert!(m.get(AgentId(1), "belief/a", 2).unwrap().is_none());
-        assert_eq!(m.get(AgentId(2), "belief/a", 2).unwrap().unwrap().payload, json!({"v":2}));
+        assert_eq!(
+            m.get(AgentId(2), "belief/a", 2).unwrap().unwrap().payload,
+            json!({"v":2})
+        );
         m.validate().unwrap();
-        let restored: MemoryBank = serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
+        let restored: MemoryBank =
+            serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
         assert_eq!(restored, m);
     }
 
@@ -252,7 +285,10 @@ mod tests {
         let mut m = MemoryBank::new(1, 4).unwrap();
         m.put(AgentId(0), "a", json!(1), 2, 1, None).unwrap();
         let original = m.clone();
-        assert!(m.put(AgentId(0), "b", json!("oversized"), 4, 1, None).is_err());
+        assert!(
+            m.put(AgentId(0), "b", json!("oversized"), 4, 1, None)
+                .is_err()
+        );
         assert!(m.put(AgentId(0), "a", json!(2), 1, 1, None).is_err());
         assert!(m.put(AgentId(0), "a", json!(2), 4, 1, Some(0)).is_err());
         assert_eq!(m, original);
