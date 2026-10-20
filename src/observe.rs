@@ -8,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -100,6 +100,48 @@ where
 {
     pub fn path(dir: impl AsRef<Path>) -> PathBuf {
         dir.as_ref().join("observations.jsonl")
+    }
+
+    /// Opt-in projection fast path: if the final already-written summary has
+    /// the exact trusted Store head, keep it without scanning the full log.
+    /// If the projection is incomplete, missing or corrupt, rebuild via the
+    /// normal independently verified recovery path instead. The caller must
+    /// have explicitly accepted trusted-snapshot semantics.
+    pub fn recover_trusted(store: &Store<W, W::Action>) -> Result<Self, String> {
+        let path = Self::path(&store.dir);
+        if let Ok(mut file) = File::open(&path) {
+            let len = file.metadata().map_err(|e| e.to_string())?.len();
+            if len == 0 && store.sequence() == 0 {
+                return Ok(Self {
+                    file: Mutex::new(OpenOptions::new().append(true).open(&path)
+                        .map_err(|e| e.to_string())?),
+                    _world: PhantomData,
+                });
+            }
+            if len > 0 && store.sequence() > 0 {
+                let count = len.min(4096);
+                file.seek(SeekFrom::Start(len - count)).map_err(|e| e.to_string())?;
+                let mut tail = vec![0u8; count as usize];
+                file.read_exact(&mut tail).map_err(|e| e.to_string())?;
+                if tail.last() == Some(&b'\n') {
+                    let records: Vec<_> = tail.split(|b| *b == b'\n')
+                        .filter(|part| !part.is_empty()).collect();
+                    if let Some(last) = records.last()
+                        && let Ok(summary) = serde_json::from_slice::<EventSummary>(last)
+                        && summary.trial_id == store.genesis().trial_id
+                        && summary.sequence.checked_add(1) == Some(store.sequence())
+                        && summary.event_hash == store.chain_head()
+                    {
+                        return Ok(Self {
+                            file: Mutex::new(OpenOptions::new().append(true).open(&path)
+                                .map_err(|e| e.to_string())?),
+                            _world: PhantomData,
+                        });
+                    }
+                }
+            }
+        }
+        Self::recover(&store.dir)
     }
 
     /// Rebuild a derived projection from fully verified authoritative events.
