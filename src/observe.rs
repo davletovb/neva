@@ -29,6 +29,10 @@ pub struct EventSummary {
     pub kind: String,
     pub event_hash: String,
     pub state_hash: Option<String>,
+    /// End offset in authoritative events.jsonl, when emitted by a newer
+    /// recorder. This is *derived metadata*, not a substitute for the hash.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::core::decimal_u64::option")]
+    pub source_log_bytes: Option<u64>,
 }
 
 impl EventSummary {
@@ -47,6 +51,7 @@ impl EventSummary {
             kind: kind.to_owned(),
             event_hash: entry.hash.clone(),
             state_hash,
+            source_log_bytes: None,
         }
     }
 }
@@ -78,7 +83,9 @@ where
         }
         let entry: Entry<W, W::Action> =
             serde_json::from_slice(&line).map_err(|e| e.to_string())?;
-        serde_json::to_writer(&mut *out, &EventSummary::from_entry(&entry))
+        let mut summary = EventSummary::from_entry(&entry);
+        summary.source_log_bytes = Some(read_bytes);
+        serde_json::to_writer(&mut *out, &summary)
             .map_err(|e| e.to_string())?;
         out.write_all(b"\n").map_err(|e| e.to_string())?;
     }
@@ -129,14 +136,79 @@ where
                     if let Some(last) = records.last()
                         && let Ok(summary) = serde_json::from_slice::<EventSummary>(last)
                         && summary.trial_id == store.genesis().trial_id
-                        && summary.sequence.checked_add(1) == Some(store.sequence())
-                        && summary.event_hash == store.chain_head()
+                        && summary.sequence < store.sequence()
                     {
-                        return Ok(Self {
-                            file: Mutex::new(OpenOptions::new().append(true).open(&path)
-                                .map_err(|e| e.to_string())?),
-                            _world: PhantomData,
-                        });
+                        if summary.sequence.checked_add(1) == Some(store.sequence())
+                            && summary.event_hash == store.chain_head()
+                        {
+                            return Ok(Self {
+                                file: Mutex::new(OpenOptions::new().append(true).open(&path)
+                                    .map_err(|e| e.to_string())?),
+                                _world: PhantomData,
+                            });
+                        }
+
+                        // Old projections without byte offsets are rebuilt.
+                        // New projections append ONLY the committed source
+                        // suffix, validating the chain link to the last
+                        // projected hash. Prefix trust is explicit here.
+                        if let Some(offset) = summary.source_log_bytes
+                            && offset < store.log_bytes()
+                        {
+                            let suffix = (|| -> Result<Self, String> {
+                                let mut input = File::open(store.dir.join("events.jsonl"))
+                                    .map_err(|e| e.to_string())?;
+                                if offset > 0 {
+                                    input.seek(SeekFrom::Start(offset - 1))
+                                        .map_err(|e| e.to_string())?;
+                                    let mut delimiter = [0u8];
+                                    input.read_exact(&mut delimiter).map_err(|e| e.to_string())?;
+                                    if delimiter != [b'\n'] {
+                                        return Err("projection offset not aligned".into());
+                                    }
+                                }
+                                input.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+                                let mut input = BufReader::new(input.take(store.log_bytes() - offset));
+                                let mut output = OpenOptions::new().append(true).open(&path)
+                                    .map_err(|e| e.to_string())?;
+                                let mut line = Vec::new();
+                                let mut cursor = offset;
+                                let mut previous = summary.event_hash;
+                                let mut sequence = summary.sequence;
+                                loop {
+                                    let n = read_record_limited(&mut input, &mut line)?;
+                                    if n == 0 { break; }
+                                    if !line.ends_with(b"\n") {
+                                        return Err("incomplete projection source suffix".into());
+                                    }
+                                    cursor += n as u64;
+                                    let event: Entry<W,W::Action> = serde_json::from_slice(&line)
+                                        .map_err(|e| e.to_string())?;
+                                    if event.previous_hash != previous
+                                        || event.sequence != sequence + 1
+                                    {
+                                        return Err("projection suffix chain mismatch".into());
+                                    }
+                                    let mut item = EventSummary::from_entry(&event);
+                                    item.source_log_bytes = Some(cursor);
+                                    serde_json::to_writer(&mut output, &item)
+                                        .map_err(|e| e.to_string())?;
+                                    output.write_all(b"\n").map_err(|e| e.to_string())?;
+                                    previous = event.hash;
+                                    sequence += 1;
+                                }
+                                if cursor != store.log_bytes() || sequence + 1 != store.sequence()
+                                    || previous != store.chain_head()
+                                {
+                                    return Err("projection suffix ended at different head".into());
+                                }
+                                output.flush().map_err(|e| e.to_string())?;
+                                Ok(Self { file: Mutex::new(output), _world: PhantomData })
+                            })();
+                            if let Ok(observer) = suffix {
+                                return Ok(observer);
+                            }
+                        }
                     }
                 }
             }
@@ -160,6 +232,13 @@ where
             _world: PhantomData,
         })
     }
+    fn write_one(&self, entry: &Entry<W, W::Action>, offset: Option<u64>) -> Result<(), String> {
+        let mut output = self.file.lock().map_err(|_| "observability lock poisoned")?;
+        let mut summary = EventSummary::from_entry(entry);
+        summary.source_log_bytes = offset;
+        serde_json::to_writer(&mut *output, &summary).map_err(|e| e.to_string())?;
+        output.write_all(b"\n").and_then(|_| output.flush()).map_err(|e| e.to_string())
+    }
 }
 
 impl<W> Observer<W> for JsonlObserver<W>
@@ -168,16 +247,10 @@ where
     W::Action: Serialize + DeserializeOwned + Clone,
 {
     fn committed(&self, entry: &Entry<W, W::Action>) -> Result<(), String> {
-        let mut output = self
-            .file
-            .lock()
-            .map_err(|_| "observability lock poisoned")?;
-        serde_json::to_writer(&mut *output, &EventSummary::from_entry(entry))
-            .map_err(|e| e.to_string())?;
-        output
-            .write_all(b"\n")
-            .and_then(|_| output.flush())
-            .map_err(|e| e.to_string())
+        self.write_one(entry, None)
+    }
+    fn committed_with_log_offset(&self, entry: &Entry<W, W::Action>, end: u64) -> Result<(), String> {
+        self.write_one(entry, Some(end))
     }
 }
 
