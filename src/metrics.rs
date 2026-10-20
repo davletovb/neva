@@ -154,7 +154,7 @@ where
 }
 impl<W, M> Observer<W> for CsvMetrics<W, M>
 where
-    W: World + Serialize + DeserializeOwned,
+    W: World + Serialize + DeserializeOwned + Send,
     W::Action: Serialize + DeserializeOwned + Clone,
     M: MetricProjector<W>,
 {
