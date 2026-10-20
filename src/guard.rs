@@ -314,9 +314,10 @@ impl Backend for GovernedBackend {
         // Unsupported/pre-dispatch denials release their admission slot; a
         // NotCharged receipt is evidence of that decision. Charged/Unknown
         // effects consume one slot and are conservatively restored.
-        let admitted = receipts.values().filter(|r|
-            r.billing != crate::runtime::BillingDisposition::NotCharged
-        ).count() as u64;
+        let admitted = receipts
+            .values()
+            .filter(|r| r.billing != crate::runtime::BillingDisposition::NotCharged)
+            .count() as u64;
         if admitted > self.max_total_effects {
             return Err("past dispatched/uncertain effect count exceeds cap".into());
         }
