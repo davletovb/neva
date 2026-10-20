@@ -23,7 +23,7 @@ See [Rust SDK and CLI guide](docs/r5-guide.md),
 ```sh
 cargo test --workspace --locked
 cargo run --locked -p hiyal-custom-model-example
-cargo run --locked --release -p hiyal --bin hiyal-bench -- 20 100 off
+cargo run --locked --release -p hiyal-native-bench -- 20 100 off
 ```
 
 ## Native memory and redacted observation (R4)
