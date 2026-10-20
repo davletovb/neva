@@ -887,7 +887,10 @@ impl Backend for OpenAiCompatible {
                     // An earlier 429 already reached the provider. Another
                     // concurrent call may open the circuit during backoff.
                     // Never report this as a purely local, refundable denial.
-                    return Err("circuit opened during retry after provider dispatch; charge unknown".into());
+                    return Err(
+                        "circuit opened during retry after provider dispatch; charge unknown"
+                            .into(),
+                    );
                 }
                 let response = self
                     .client
@@ -1328,8 +1331,7 @@ mod http_tests {
         );
         let request = sample_request("mid-retry circuit");
         let key = request.key("retry-trial", 0, AgentId(0), 0).unwrap();
-        let dir = std::env::temp_dir()
-            .join(format!("hiyal-r3-mid-retry-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hiyal-r3-mid-retry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut journal = EffectJournal::open(&dir).unwrap();
@@ -1338,13 +1340,15 @@ mod http_tests {
             let governed = governed.clone();
             let request = request.clone();
             tokio::spawn(async move {
-                journal.resolve_all(
-                    vec![(key, request)],
-                    governed,
-                    1,
-                    Duration::from_secs(3),
-                    false,
-                ).await
+                journal
+                    .resolve_all(
+                        vec![(key, request)],
+                        governed,
+                        1,
+                        Duration::from_secs(3),
+                        false,
+                    )
+                    .await
             })
         };
         received.await.unwrap();
