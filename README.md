@@ -5,7 +5,8 @@ and automata. It is being built as a reproducible, extensible **Rust-native
 agent-based simulation engine** for research and experimentation.
 
 The project is a new engine informed by the historical Python library, **not
-a feature-parity Python port**. Hiyal's Rust library and eventual CLI execute
+a feature-parity Python port**. The old Python runtime/tests/CI are preserved
+only on the frozen [historical archive branch](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5), not in Rust main. Hiyal's Rust library and eventual CLI execute
 models; JSONL and later open-data exports let Python, R, Julia, Rust and DuckDB
 analyze the results independently. No Python runtime or bindings are required
 by the Rust engine.
