@@ -281,6 +281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hiyal-native-bench"
+version = "0.1.0"
+dependencies = [
+ "hiyal",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hiyal-custom-model-example"
 version = "0.1.0"
 dependencies = [
