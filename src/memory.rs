@@ -364,15 +364,8 @@ mod tests {
         assert!(m.put(AgentId(3), "new", json!(3), 9, 1, None).is_err());
         assert!(m.prune(9).is_err());
         assert!(
-            m.put(
-                AgentId(1),
-                "b",
-                json!("oversized ".repeat(6)),
-                12,
-                1,
-                None
-            )
-            .is_err()
+            m.put(AgentId(1), "b", json!("oversized ".repeat(6)), 12, 1, None)
+                .is_err()
         );
         assert_eq!(m, prior);
         assert_eq!(m.get(AgentId(1), "expires", 12).unwrap(), None);
