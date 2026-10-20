@@ -589,6 +589,9 @@ where
         };
         let completed = self.validate_round_prefix(&plan)?;
         if completed == plan.actors.len() {
+            // A checkpoint-durability round cannot drop its durable plan
+            // before the accepted/rejected event bytes themselves are synced.
+            self.store.sync_log()?;
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
             crate::storage::sync_trial_directory(&self.store.dir)?;
             return Ok(Vec::new());
@@ -740,6 +743,7 @@ where
         }
         // If cleanup fails, the next run validates the complete prefix and
         // removes the plan without launching any backend calls.
+        self.store.sync_log()?;
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         crate::storage::sync_trial_directory(&self.store.dir)?;
         Ok(events)
