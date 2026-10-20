@@ -8,6 +8,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'benchmarks/native/**'
       - 'src/**'
       - 'examples/**'
       - 'tests/**'
@@ -136,6 +137,13 @@ jobs:
         run: |
           cargo run --locked --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
           test "$(wc -l </tmp/hiyal-events.jsonl)" -eq 6
+      - name: Independent offline custom-model smoke
+        run: cargo run --locked --quiet -p hiyal-custom-model-example
+      - name: Benchmark provenance smoke (3 native offline steps)
+        run: |
+          cargo run --locked --quiet -p hiyal-native-bench -- 2 3 off > /tmp/hiyal-r5-bench.jsonl
+          grep -E '"rust_version":"rustc [0-9]+' /tmp/hiyal-r5-bench.jsonl
+
 
       - name: Additional release/manual lint
         if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.extended) }}

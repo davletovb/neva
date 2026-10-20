@@ -87,7 +87,7 @@ fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
     Ok(Arc::new(ScriptedBackend))
 }
 fn read_kind(path: &Path) -> Result<String, String> {
-    let raw = fs::read(path.join("manifest.json")).map_err(|e| e.to_string())?;
+    let raw = hiyal::storage::read_metadata_limited(&path.join("manifest.json"))?;
     let json: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
     json.get("world_kind")
         .and_then(|v| v.as_str())

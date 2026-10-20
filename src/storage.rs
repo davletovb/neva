@@ -13,6 +13,40 @@ use std::{
 };
 
 pub const SCHEMA: u32 = 1;
+/// Per-record limit bounds corrupted or hostile files during streaming replay.
+pub const MAX_EVENT_RECORD_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
+/// A size admission failure occurs before any append or in-memory state change.
+pub(crate) const EVENT_TOO_LARGE: &str = "event record exceeds portable size limit";
+
+/// Single, bounded metadata read for library, CLI and research consumers.
+pub fn read_metadata_limited(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_METADATA_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err("manifest or snapshot exceeds portable size limit".into());
+    }
+    Ok(bytes)
+}
+
+/// Read a single bounded newline-delimited log record. Never allocate beyond
+/// MAX_EVENT_RECORD_BYTES + 1, including if the source grows concurrently.
+pub fn read_record_limited(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Result<usize, String> {
+    use std::io::Read;
+    line.clear();
+    let count = reader
+        .take(MAX_EVENT_RECORD_BYTES as u64 + 1)
+        .read_until(b'\n', line)
+        .map_err(|e| e.to_string())?;
+    if count > MAX_EVENT_RECORD_BYTES {
+        return Err(EVENT_TOO_LARGE.into());
+    }
+    Ok(count)
+}
 
 /// Stable UTF-8 JSON with lexically sorted keys, including nested maps. This is
 /// a documented interim profile, NOT a claim of full RFC 8785 compliance.
@@ -254,8 +288,7 @@ where
         if dir.exists() {
             return Err("trial path already exists".into());
         }
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        let lock = lock_dir(dir)?;
+        // Preflight all fallible pure checks before allocating a trial path.
         if genesis.schema != SCHEMA {
             return Err("unsupported manifest schema".into());
         }
@@ -264,6 +297,12 @@ where
         }
         genesis.initial_schedule.validate()?;
         let raw = stable_bytes(&genesis)?;
+        if raw.len() > MAX_METADATA_BYTES {
+            return Err("manifest exceeds portable size limit".into());
+        }
+        let initial_hash = digest(&genesis)?;
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let lock = lock_dir(dir)?;
         save_atomic(&dir.join("manifest.json"), &raw)?;
         File::create(dir.join("events.jsonl"))
             .and_then(|f| f.sync_all())
@@ -276,7 +315,7 @@ where
             streams: genesis.initial_streams.clone(),
             sequence: 0,
             logical_step: 0,
-            chain_head: digest(&genesis)?,
+            chain_head: initial_hash,
             log_bytes: 0,
             poisoned: false,
             _lock: lock,
@@ -285,27 +324,17 @@ where
         })
     }
 
-    /// Inspect the committed trial without a lock, repair, or filesystem writes.
-    /// A concurrent incomplete append returns an error rather than truncating it.
-    pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
-        let dir = dir.as_ref();
-        let genesis: Genesis<W> = serde_json::from_slice(
-            &fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-        if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
-            return Err("invalid read-only manifest".into());
-        }
-        genesis.initial_schedule.validate()?;
-        // Verify the authoritative log one committed record at a time.
-        // This keeps read-only inspection and CSV recovery bounded by the
-        // largest event/state, rather than the entire history's byte size.
-        let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        let mut reader = BufReader::new(input);
+    /// Both mutating recovery and read-only inspection must validate exactly
+    /// the same history, snapshot boundary, hashes and world transitions.
+    fn replay_history(
+        dir: &Path,
+        genesis: &Genesis<W>,
+        allow_torn_tail: bool,
+    ) -> Result<(Projection<W>, u64, u64), String> {
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
             Some(
-                serde_json::from_slice(&fs::read(snap_path).map_err(|e| e.to_string())?)
+                serde_json::from_slice(&read_metadata_limited(&snap_path)?)
                     .map_err(|e| e.to_string())?,
             )
         } else {
@@ -317,47 +346,70 @@ where
             streams: genesis.initial_streams.clone(),
             sequence: 0,
             logical_step: 0,
-            chain_head: digest(&genesis)?,
+            chain_head: digest(genesis)?,
         };
-        let mut snapshot_state = if snapshot.as_ref().is_some_and(|s| s.log_bytes == 0) {
+        let mut matched = if snapshot.as_ref().is_some_and(|s| s.log_bytes == 0) {
             Some(state.clone())
         } else {
             None
         };
+        let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(input);
         let mut offset = 0u64;
         let mut line = Vec::new();
         loop {
-            line.clear();
-            let count = reader
-                .read_until(b'\n', &mut line)
-                .map_err(|e| e.to_string())?;
+            let count = read_record_limited(&mut reader, &mut line)?;
             if count == 0 {
                 break;
             }
             if !line.ends_with(b"\n") {
+                if allow_torn_tail {
+                    break;
+                }
                 return Err("uncommitted final event record; retry inspection".into());
             }
-            let event: Entry<W, A> = serde_json::from_slice(&line).map_err(|e| e.to_string())?;
-            Self::validate_entry(&genesis, &mut state, &event)?;
+            let event: Entry<W, A> =
+                serde_json::from_slice(&line).map_err(|e| format!("corrupt committed log: {e}"))?;
+            Self::validate_entry(genesis, &mut state, &event)?;
             offset = offset.checked_add(count as u64).ok_or("offset overflow")?;
             if snapshot.as_ref().is_some_and(|s| s.log_bytes == offset) {
-                snapshot_state = Some(state.clone());
+                matched = Some(state.clone());
             }
         }
+        let physical_len = reader
+            .get_ref()
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .len();
         if let Some(snapshot) = snapshot {
-            let prior = snapshot_state.ok_or("snapshot offset not on event boundary")?;
+            let expected = matched.ok_or("snapshot offset not on a committed event boundary")?;
             if snapshot.schema != SCHEMA
                 || snapshot.trial_id != genesis.trial_id
-                || snapshot.sequence != prior.sequence
-                || snapshot.logical_step != prior.logical_step
-                || snapshot.chain_head != prior.chain_head
-                || digest(&snapshot.world)? != digest(&prior.world)?
-                || snapshot.schedule != prior.schedule
-                || snapshot.streams != prior.streams
+                || snapshot.sequence != expected.sequence
+                || snapshot.logical_step != expected.logical_step
+                || snapshot.chain_head != expected.chain_head
+                || digest(&snapshot.world)? != digest(&expected.world)?
+                || snapshot.schedule != expected.schedule
+                || snapshot.streams != expected.streams
             {
-                return Err("read-only snapshot validation failed".into());
+                return Err("snapshot failed independent log validation".into());
             }
         }
+        Ok((state, offset, physical_len))
+    }
+
+    /// Inspect without a lock, repair, or filesystem writes. A concurrent
+    /// unfinished append is not silently promoted to a committed event.
+    pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
+        let dir = dir.as_ref();
+        let genesis: Genesis<W> =
+            serde_json::from_slice(&read_metadata_limited(&dir.join("manifest.json"))?)
+                .map_err(|e| e.to_string())?;
+        if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
+            return Err("invalid read-only manifest".into());
+        }
+        genesis.initial_schedule.validate()?;
+        let (state, offset, _) = Self::replay_history(dir, &genesis, false)?;
         Ok(ReadOnly {
             genesis,
             world: state.world,
@@ -373,84 +425,26 @@ where
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let dir = dir.as_ref();
         let lock = lock_dir(dir)?;
-        // A crashed atomic snapshot writer may leave this uncommitted file.
-        // The existing writer lock guarantees there is no concurrent writer.
+        // The exclusive writer lease allows discarding an abandoned
+        // temporary snapshot, not rewriting a corrupt committed record.
         let uncommitted = dir.join("snapshot.tmp");
         if uncommitted.exists() {
             fs::remove_file(&uncommitted).map_err(|e| e.to_string())?;
         }
-        let raw = fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?;
-        let genesis: Genesis<W> = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+        let genesis: Genesis<W> =
+            serde_json::from_slice(&read_metadata_limited(&dir.join("manifest.json"))?)
+                .map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
             return Err("unsupported manifest/trial schema".into());
         }
         genesis.initial_schedule.validate()?;
-        let mut projected = Projection {
-            world: genesis.initial_world.clone(),
-            schedule: genesis.initial_schedule.clone(),
-            streams: genesis.initial_streams.clone(),
-            sequence: 0,
-            logical_step: 0,
-            chain_head: digest(&genesis)?,
-        };
-        let data = fs::read(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        let durable_length = data
-            .iter()
-            .rposition(|b| *b == b'\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        // Read the one snapshot *before* replay. Keep at most one matching projection,
-        // never a clone of every event's entire world.
-        let snap_path = dir.join("snapshot.json");
-        let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
-            Some(
-                serde_json::from_slice(&fs::read(&snap_path).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?,
-            )
-        } else {
-            None
-        };
-        let initial_projection = projected.clone();
-        let mut matched = if snapshot.as_ref().is_some_and(|s| s.log_bytes == 0) {
-            Some(initial_projection)
-        } else {
-            None
-        };
-        let mut cursor = 0usize;
-        for raw_line in data[..durable_length].split_inclusive(|b| *b == b'\n') {
-            let entry: Entry<W, A> = serde_json::from_slice(raw_line)
-                .map_err(|e| format!("corrupt committed log: {e}"))?;
-            Self::validate_entry(&genesis, &mut projected, &entry)?;
-            cursor += raw_line.len();
-            if snapshot
-                .as_ref()
-                .is_some_and(|s| s.log_bytes == cursor as u64)
-            {
-                matched = Some(projected.clone());
-            }
-        }
-        if let Some(snapshot) = snapshot {
-            let expected = matched.ok_or("snapshot offset not on a committed boundary")?;
-            if snapshot.schema != SCHEMA
-                || snapshot.trial_id != genesis.trial_id
-                || snapshot.sequence != expected.sequence
-                || snapshot.logical_step != expected.logical_step
-                || snapshot.chain_head != expected.chain_head
-                || digest(&snapshot.world)? != digest(&expected.world)?
-                || snapshot.schedule != expected.schedule
-                || snapshot.streams != expected.streams
-            {
-                return Err("snapshot failed independent log validation".into());
-            }
-        }
-        if durable_length < data.len() {
-            // Drop only an uncommitted final fragment; all newline-terminated
-            // entries have been fully validated before modifying any file.
+        let (projected, durable_length, file_length) = Self::replay_history(dir, &genesis, true)?;
+        if durable_length < file_length {
             let f = OpenOptions::new()
                 .write(true)
                 .open(dir.join("events.jsonl"))
                 .map_err(|e| e.to_string())?;
-            f.set_len(durable_length as u64)
+            f.set_len(durable_length)
                 .and_then(|_| f.sync_all())
                 .map_err(|e| e.to_string())?;
         }
@@ -463,7 +457,7 @@ where
             sequence: projected.sequence,
             logical_step: projected.logical_step,
             chain_head: projected.chain_head,
-            log_bytes: durable_length as u64,
+            log_bytes: durable_length,
             poisoned: false,
             _lock: lock,
             _action: std::marker::PhantomData,
@@ -593,6 +587,9 @@ where
         event.hash = event.compute_hash()?;
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
+        if encoded.len() > MAX_EVENT_RECORD_BYTES {
+            return Err(EVENT_TOO_LARGE.into());
+        }
         let write_result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .append(true)
@@ -671,7 +668,11 @@ where
             schedule: self.schedule.clone(),
             streams: self.streams.clone(),
         };
-        save_atomic(&self.dir.join("snapshot.json"), &stable_bytes(&snapshot)?)
+        let bytes = stable_bytes(&snapshot)?;
+        if bytes.len() > MAX_METADATA_BYTES {
+            return Err("snapshot exceeds portable size limit".into());
+        }
+        save_atomic(&self.dir.join("snapshot.json"), &bytes)
     }
 
     pub fn read_events(&self) -> Result<Vec<Entry<W, A>>, String> {
