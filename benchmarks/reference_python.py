@@ -19,14 +19,14 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY = ROOT / "hiyal-python"
+LEGACY = Path(os.environ.get("HIYAL_LEGACY_SOURCE", str(ROOT / "hiyal-python"))).resolve()
 
 
-def _git_revision() -> str:
+def _git_revision(root: Path = ROOT) -> str:
     """Fail closed on missing source provenance for independent R0 runs."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD"],
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
             text=True,
             capture_output=True,
             check=True,
@@ -42,10 +42,10 @@ def _git_revision() -> str:
     raise RuntimeError("Cannot determine git revision; run from a Git checkout")
 
 
-def _git_dirty() -> bool | None:
+def _git_dirty(root: Path = ROOT) -> bool | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
             text=True,
             capture_output=True,
             check=True,
@@ -81,7 +81,7 @@ def _percentile(values: list[float], quantile: float) -> float:
 
 def _worker(agents: int, steps: int, observer_on: bool) -> dict:
     if not LEGACY.is_dir():
-        raise RuntimeError("Archived Python implementation not found at hiyal-python/")
+        raise RuntimeError("Archived Python source missing; set HIYAL_LEGACY_SOURCE to the hiyal-python/ directory in an archive-branch checkout")
     # Import inside the subprocess, so every sample has independent allocations.
     sys.path.insert(0, str(LEGACY))
     started_import = time.perf_counter_ns()
@@ -170,7 +170,9 @@ def _main() -> int:
     result = {
         "schema_version": 1,
         "baseline": "archived_python",
-        "source": "hiyal-python/",
+        "source": str(LEGACY),
+        "archive_git_revision": _git_revision(LEGACY.parent),
+        "archive_worktree_dirty": _git_dirty(LEGACY.parent),
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "machine": platform.machine(),
