@@ -879,9 +879,15 @@ impl Backend for OpenAiCompatible {
             }
             for attempt in 0..=self.reliability.retry_429 {
                 if !self.allowed().await {
-                    return Ok(EffectResult::UnsupportedCapability {
-                        capability: "HTTP circuit open; no provider request launched".into(),
-                    });
+                    if attempt == 0 {
+                        return Ok(EffectResult::UnsupportedCapability {
+                            capability: "HTTP circuit open; no provider request launched".into(),
+                        });
+                    }
+                    // An earlier 429 already reached the provider. Another
+                    // concurrent call may open the circuit during backoff.
+                    // Never report this as a purely local, refundable denial.
+                    return Err("circuit opened during retry after provider dispatch; charge unknown".into());
                 }
                 let response = self
                     .client
@@ -1276,6 +1282,93 @@ mod http_tests {
         assert!(truncated.finish("fallback").is_err());
         let mut oversized = SseAccumulator::new(3);
         assert!(oversized.feed(b"data: content\\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn circuit_opened_during_retry_preserves_unknown_billing_and_reservation() {
+        use crate::guard::{BudgetConfig, GovernedBackend};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).unwrap();
+            write!(
+                socket,
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let _ = sent.send(());
+        });
+        let http = Arc::new(
+            OpenAiCompatible::new(format!("http://{addr}/chat"), "secret".into())
+                .unwrap()
+                .with_reliability(HttpReliability {
+                    retry_429: 1,
+                    retry_delay: Duration::from_millis(500),
+                    circuit_threshold: 1,
+                    circuit_cooldown: Duration::from_secs(10),
+                    ..HttpReliability::default()
+                })
+                .unwrap(),
+        );
+        let governed = Arc::new(
+            GovernedBackend::new(http.clone(), 1).with_budget(BudgetConfig {
+                maximum_micro_usd: 1_000_000,
+                prompt_micro_usd_per_token: 1,
+                output_micro_usd_per_token: 1,
+                max_input_bytes: 4096,
+                max_output_tokens: 2048,
+            }),
+        );
+        let request = sample_request("mid-retry circuit");
+        let key = request.key("retry-trial", 0, AgentId(0), 0).unwrap();
+        let dir = std::env::temp_dir()
+            .join(format!("hiyal-r3-mid-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut journal = EffectJournal::open(&dir).unwrap();
+        journal.bind_trial("retry-trial").unwrap();
+        let worker = {
+            let governed = governed.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                journal.resolve_all(
+                    vec![(key, request)],
+                    governed,
+                    1,
+                    Duration::from_secs(3),
+                    false,
+                ).await
+            })
+        };
+        received.await.unwrap();
+        // Model a different in-flight request tripping the shared breaker.
+        // The first call has received 429 and is still in its retry backoff.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        http.failure().await;
+
+        let receipts = worker.await.unwrap().unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].billing, BillingDisposition::Unknown);
+        assert!(matches!(
+            &receipts[0].result,
+            EffectResult::Failed { category, message }
+                if category == "backend" && message.contains("after provider dispatch")
+        ));
+        assert!(governed.remaining_micro_usd().unwrap() < 1_000_000);
+        assert!(matches!(
+            governed.resolve(&request).await.unwrap(),
+            EffectResult::UnsupportedCapability { capability }
+                if capability.contains("quota")
+        ));
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

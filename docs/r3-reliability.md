@@ -111,3 +111,5 @@ by local mocks. No Python benchmarks, legacy CI, or new CI matrix.
 - Streaming usage options are disabled by default and can be explicitly enabled via `HttpReliability.include_stream_usage` for compatible providers.
 - The live CLI defaults to **100 effect admissions per process** unless `HIYAL_LIVE_MAX_EFFECTS` is set (1..=100000). Local denials do not consume admission slots. A partially accepted live run/resume returns a visible error after checkpoint rather than presenting an incomplete study as successful.
 - HTTP model payloads are serialized once and reused across explicit 429 retry attempts. Loopback hostname validation and proxy bypass use the same host classification, including IPv6.
+
+- A concurrent circuit opening **after** an HTTP 429 has already reached a provider is treated as an uncertain post-dispatch error, not a new pre-dispatch `UnsupportedCapability` denial. The effect receipt retains `billing=unknown`, and the guarded spend and effect-count reservations are not refunded. A loopback regression verifies the mid-retry race.
