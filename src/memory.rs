@@ -167,7 +167,9 @@ impl MemoryBank {
         if !valid_key(key) || importance > 1000 {
             return Err("invalid memory key or importance".into());
         }
-        if serde_json::to_vec(&payload).map_err(|e| e.to_string())?.len()
+        if serde_json::to_vec(&payload)
+            .map_err(|e| e.to_string())?
+            .len()
             > self.max_payload_bytes
         {
             return Err("memory payload exceeds configured limit".into());
@@ -200,16 +202,19 @@ impl MemoryBank {
         }
         let created_step = self.records.get(&id).map_or(now, |r| r.created_step);
         let accesses = self.records.get(&id).map_or(0, |r| r.accesses);
-        self.records.insert(id, MemoryRecord {
-            agent,
-            key: key.to_owned(),
-            payload,
-            created_step,
-            accessed_step: now,
-            importance,
-            accesses,
-            expires_at,
-        });
+        self.records.insert(
+            id,
+            MemoryRecord {
+                agent,
+                key: key.to_owned(),
+                payload,
+                created_step,
+                accessed_step: now,
+                importance,
+                accesses,
+                expires_at,
+            },
+        );
         self.last_step = now;
         Ok(())
     }
@@ -259,14 +264,16 @@ impl MemoryBank {
             return Ok(Vec::new());
         }
         let seek = record_id(agent, prefix);
-        let mut matches: Vec<_> = self.records
+        let mut matches: Vec<_> = self
+            .records
             .range(seek.clone()..)
             .take_while(|(id, _)| id.starts_with(&seek))
             .map(|(_, record)| record)
             .filter(|r| r.expires_at.is_none_or(|expiry| now < expiry))
             .collect();
         matches.sort_by(|a, b| {
-            b.importance.cmp(&a.importance)
+            b.importance
+                .cmp(&a.importance)
                 .then_with(|| b.accesses.cmp(&a.accesses))
                 .then_with(|| b.accessed_step.cmp(&a.accessed_step))
                 .then_with(|| a.key.cmp(&b.key))
@@ -313,14 +320,24 @@ mod tests {
     #[test]
     fn deterministic_order_expiry_and_agent_separation() {
         let mut m = MemoryBank::new(3, 1024).unwrap();
-        m.put(AgentId(1), "belief/a", json!({"v": 1}), 0, 10, Some(2)).unwrap();
-        m.put(AgentId(2), "belief/a", json!({"v": 2}), 0, 10, None).unwrap();
-        m.put(AgentId(1), "belief/b", json!({"v": 3}), 1, 11, None).unwrap();
-        assert_eq!(m.recall_prefix(AgentId(1), "belief/", 1, 3).unwrap()[0].key, "belief/b");
+        m.put(AgentId(1), "belief/a", json!({"v": 1}), 0, 10, Some(2))
+            .unwrap();
+        m.put(AgentId(2), "belief/a", json!({"v": 2}), 0, 10, None)
+            .unwrap();
+        m.put(AgentId(1), "belief/b", json!({"v": 3}), 1, 11, None)
+            .unwrap();
+        assert_eq!(
+            m.recall_prefix(AgentId(1), "belief/", 1, 3).unwrap()[0].key,
+            "belief/b"
+        );
         assert!(m.get(AgentId(1), "belief/a", 2).unwrap().is_none());
-        assert_eq!(m.get(AgentId(2), "belief/a", 2).unwrap().unwrap().payload, json!({"v":2}));
+        assert_eq!(
+            m.get(AgentId(2), "belief/a", 2).unwrap().unwrap().payload,
+            json!({"v":2})
+        );
         m.validate().unwrap();
-        let restored: MemoryBank = serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
+        let restored: MemoryBank =
+            serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
         assert_eq!(restored, m);
     }
 
@@ -338,14 +355,25 @@ mod tests {
     #[test]
     fn invalid_calls_leave_bank_unchanged_and_clock_is_global() {
         let mut m = MemoryBank::new(3, 32).unwrap();
-        m.put(AgentId(1), "expires", json!(1), 10, 1, Some(2)).unwrap();
+        m.put(AgentId(1), "expires", json!(1), 10, 1, Some(2))
+            .unwrap();
         m.put(AgentId(2), "new", json!(2), 10, 1, None).unwrap();
         let prior = m.clone();
         assert!(m.get(AgentId(1), "expires", 9).is_err());
         assert!(m.reinforce(AgentId(1), "expires", 9, 2).is_err());
         assert!(m.put(AgentId(3), "new", json!(3), 9, 1, None).is_err());
         assert!(m.prune(9).is_err());
-        assert!(m.put(AgentId(1), "b", json!("oversized oversized oversized"), 12, 1, None).is_err());
+        assert!(
+            m.put(
+                AgentId(1),
+                "b",
+                json!("oversized oversized oversized"),
+                12,
+                1,
+                None
+            )
+            .is_err()
+        );
         assert_eq!(m, prior);
         assert_eq!(m.get(AgentId(1), "expires", 12).unwrap(), None);
     }
@@ -369,7 +397,10 @@ mod tests {
         m.put(AgentId(1), "p/a", json!(1), 0, 1, None).unwrap();
         m.put(AgentId(11), "p/b", json!(2), 0, 100, None).unwrap();
         m.put(AgentId(1), "p/c", json!(3), 0, 2, None).unwrap();
-        assert_eq!(m.recall_prefix(AgentId(1), "p/", 0, 1).unwrap()[0].key, "p/c");
+        assert_eq!(
+            m.recall_prefix(AgentId(1), "p/", 0, 1).unwrap()[0].key,
+            "p/c"
+        );
         assert!(m.recall_prefix(AgentId(1), "p/b", 0, 1).unwrap().is_empty());
     }
 }
