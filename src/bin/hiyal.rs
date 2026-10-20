@@ -100,8 +100,13 @@ fn read_kind(path: &Path) -> Result<String, String> {
 /// destination directory and publish by hard-linking (create-new semantics),
 /// so a failure or concurrent exporter cannot leave a partial public file.
 fn marker_actively_locked(path: &Path) -> Result<bool, String> {
-    if !path.exists() { return Ok(false); }
-    let file = fs::OpenOptions::new().read(true).write(true).open(path)
+    if !path.exists() {
+        return Ok(false);
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
         .map_err(|e| e.to_string())?;
     // Marker files survive crashes. Only OS lock contention is evidence of
     // an active writer; the OS releases locks on SIGKILL/process exit.
