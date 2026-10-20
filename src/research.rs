@@ -683,9 +683,9 @@ where
     P: EffectPolicy<W>,
 {
     verify_fork::<W>(&dir)?;
-    let genesis: Genesis<W> = serde_json::from_slice(
-        &crate::storage::read_metadata_limited(&dir.as_ref().join("manifest.json"))?,
-    )
+    let genesis: Genesis<W> = serde_json::from_slice(&crate::storage::read_metadata_limited(
+        &dir.as_ref().join("manifest.json"),
+    )?)
     .map_err(|e| e.to_string())?;
     Trial::resume(dir, &genesis.world_kind, policy, backend, replay_only)
 }
