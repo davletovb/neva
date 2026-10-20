@@ -1,6 +1,6 @@
 //! Privacy-safe structured event projection. This non-authoritative JSONL
 //! stream contains no actions, world snapshots, messages or prompt bodies.
-use crate::{core::World, experiment::Observer, storage::{Entry, Outcome, SCHEMA, Store, atomic_write_with}};
+use crate::{core::World, experiment::Observer, storage::{Entry, Outcome, Store, atomic_write_with}};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{fs::{File, OpenOptions}, io::{BufRead, BufReader, Write}, marker::PhantomData, path::{Path, PathBuf}, sync::Mutex};
 
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn schema_remains_versioned() {
-        assert_eq!(SCHEMA, 1);
+        assert_eq!(crate::storage::SCHEMA, 1);
         assert_eq!(OBSERVATION_SCHEMA, 1);
     }
 }
