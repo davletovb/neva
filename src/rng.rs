@@ -118,7 +118,9 @@ impl Streams {
         self.checked_progress(before)?;
         for (name, position) in &self.positions {
             let allowed = name == family
-                || name.strip_prefix(family).is_some_and(|s| s.starts_with('/'));
+                || name
+                    .strip_prefix(family)
+                    .is_some_and(|s| s.starts_with('/'));
             if !allowed && before.positions.get(name) != Some(position) {
                 return Err(format!("unauthorized RNG stream draw: {name}"));
             }
