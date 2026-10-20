@@ -1198,3 +1198,69 @@ mod tests {
         std::fs::remove_dir_all(path).unwrap();
     }
 }
+
+#[cfg(test)]
+mod r6_interrupted_round_tests {
+    use super::*;
+    use crate::{runtime::{ScriptedBackend, sample_request}, storage::Store};
+    use serde::{Serialize, Deserialize};
+    use std::{fs, sync::{Arc, atomic::{AtomicU64, Ordering}}};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    fn path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("hiyal-r6-interrupted-round-{}-{}",
+            std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
+    }
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Shared { notes: u64 }
+    impl World for Shared {
+        type Action = u64;
+        type Observation = u64;
+        fn observe(&self, _actor: AgentId) -> Result<u64, String> { Ok(self.notes) }
+        fn apply(&mut self, _actor: AgentId, action: u64) -> Result<(), String> {
+            self.notes += action; Ok(())
+        }
+    }
+    struct FrozenPolicy;
+    impl EffectPolicy<Shared> for FrozenPolicy {
+        fn requests(&self, a: AgentId, obs: &u64) -> Result<Vec<EffectSpec>, String> {
+            Ok(vec![sample_request(&format!("agent {} sees {obs} notes", a.0))])
+        }
+        fn decide(&self, _: AgentId, _: &u64, _: &[Receipt]) -> Result<u64, String> {
+            Ok(1)
+        }
+    }
+    struct CrashAfterFirst;
+    impl Observer<Shared> for CrashAfterFirst {
+        fn committed(&self, _: &Entry<Shared, u64>) -> Result<(), String> {
+            panic!("simulate process interruption after durable first event")
+        }
+    }
+
+    #[tokio::test]
+    async fn crash_after_paid_round_receipts_never_reissues_call() {
+        let dir = path();
+        let mut trial = Trial::create(&dir, "crashed-round", 71, "shared.v1",
+            Shared { notes: 0 }, FrozenPolicy, Arc::new(ScriptedBackend),
+            vec![AgentId(0),AgentId(1)], Scheduling::RoundRobin).unwrap();
+        trial.observe_with(Arc::new(CrashAfterFirst));
+        let task = tokio::spawn(async move { trial.run_round(2).await });
+        assert!(task.await.unwrap_err().is_panic());
+        assert!(dir.join(ROUND_PLAN_FILE).exists());
+        let mut resumed = Trial::resume(&dir, "shared.v1", FrozenPolicy,
+            Arc::new(ScriptedBackend), false).unwrap();
+        assert_eq!(resumed.store.sequence(), 1);
+        assert_eq!(resumed.effects.receipts().len(), 2);
+        assert!(resumed.step().await.is_err(), "cannot re-plan before completing frozen round");
+        let remainder = resumed.run_round(2).await.unwrap();
+        assert_eq!(remainder.len(), 1);
+        assert_eq!(resumed.effects.receipts().len(), 2, "paid call was re-dispatched");
+        assert_eq!(resumed.store.world().notes, 2);
+        assert!(!dir.join(ROUND_PLAN_FILE).exists());
+        resumed.checkpoint().unwrap();
+        drop(resumed);
+        let verified=Store::<Shared,u64>::inspect_read_only(&dir).unwrap();
+        assert_eq!(verified.sequence,2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
