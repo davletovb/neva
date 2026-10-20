@@ -106,6 +106,9 @@ pub struct BuildProvenance {
     pub rustc_version: Option<String>,
     pub target: String,
     pub source_revision: Option<String>,
+    /// Whether the own source checkout had tracked changes at compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dirty: Option<bool>,
     /// SHA-256 of the engine checkout lockfile, not an external consumer's.
     #[serde(alias = "engine_lock_sha256")]
     pub engine_checkout_lock_sha256: String,
@@ -117,6 +120,7 @@ impl BuildProvenance {
             rustc_version: Some(env!("HIYAL_RUSTC_VERSION").into()),
             target: env!("HIYAL_BUILD_TARGET").into(),
             source_revision: option_env!("HIYAL_SOURCE_REVISION").map(str::to_owned),
+            source_dirty: option_env!("HIYAL_SOURCE_DIRTY").map(|s| s == "true"),
             engine_checkout_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!(
                 "../Cargo.lock"
             ))),
