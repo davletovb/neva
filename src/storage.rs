@@ -117,9 +117,9 @@ impl BuildProvenance {
     pub fn current() -> Self {
         Self {
             engine_version: env!("CARGO_PKG_VERSION").into(),
-            rustc_version: option_env!("HIYAL_RUSTC_VERSION").map(str::to_owned),
-            target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-            source_revision: option_env!("GITHUB_SHA").map(str::to_owned),
+            rustc_version: Some(env!("HIYAL_RUSTC_VERSION").into()),
+            target: env!("HIYAL_BUILD_TARGET").into(),
+            source_revision: option_env!("HIYAL_SOURCE_REVISION").map(str::to_owned),
             engine_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!(
                 "../Cargo.lock"
             ))),
