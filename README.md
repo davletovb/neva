@@ -10,6 +10,22 @@ models; JSONL and later open-data exports let Python, R, Julia, Rust and DuckDB
 analyze the results independently. No Python runtime or bindings are required
 by the Rust engine.
 
+## R5 verification and release preparation
+
+R5 adds bounded/streamed event-log restore, hostile/corrupt-input restart tests,
+an independent custom local-model/allowlisted-tool executable, offline Rust
+measurements, and cross-platform **opt-in** release qualification.
+The release and comparable Python performance gates are **not yet certified**.
+See [Rust SDK and CLI guide](docs/r5-guide.md),
+[release and rollback](docs/r5-release.md), and
+[benchmark protocol](benchmarks/r5-protocol.md).
+
+```sh
+cargo test --workspace --locked
+cargo run --locked -p hiyal-custom-model-example
+cargo run --locked --release -p hiyal --bin hiyal-bench -- 20 100 off
+```
+
 ## Native memory and redacted observation (R4)
 
 R4 introduces bounded, deterministic structured memory with TTL and adaptive
