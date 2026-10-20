@@ -143,17 +143,30 @@ pub struct Genesis<W> {
 /// Preserve the distinction between omitted world (compact events) and
 /// an explicit JSON null world in historical full-world records.
 #[derive(Clone, Debug)]
-pub enum LegacyWorld<W> { Missing, Present(W) }
+pub enum LegacyWorld<W> {
+    Missing,
+    Present(W),
+}
 impl<W> Default for LegacyWorld<W> {
-    fn default() -> Self { Self::Missing }
+    fn default() -> Self {
+        Self::Missing
+    }
 }
 impl<W> LegacyWorld<W> {
-    fn is_missing(&self) -> bool { matches!(self, Self::Missing) }
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
     pub fn as_ref(&self) -> Option<&W> {
-        match self { Self::Present(world) => Some(world), Self::Missing => None }
+        match self {
+            Self::Present(world) => Some(world),
+            Self::Missing => None,
+        }
     }
     fn deserialize_present<'de, D>(d: D) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de>, W: serde::Deserialize<'de> {
+    where
+        D: serde::Deserializer<'de>,
+        W: serde::Deserialize<'de>,
+    {
         Ok(Self::Present(W::deserialize(d)?))
     }
 }
@@ -177,8 +190,11 @@ pub enum Outcome<W, A> {
         action: A,
         /// Older schema-v1 events embed the world; modern events omit it.
         /// `Some` retains byte-for-byte legacy hash serialization.
-        #[serde(default, skip_serializing_if = "LegacyWorld::is_missing",
-                deserialize_with = "LegacyWorld::<W>::deserialize_present")]
+        #[serde(
+            default,
+            skip_serializing_if = "LegacyWorld::is_missing",
+            deserialize_with = "LegacyWorld::<W>::deserialize_present"
+        )]
         world: LegacyWorld<W>,
         state_hash: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -459,43 +475,43 @@ where
         // independently verify events before the snapshot. Normal open() and
         // read-only validate() still independently verify the full history.
         if trust_snapshot && let Some(ref s) = snapshot {
-                let file_len = input.metadata().map_err(|e| e.to_string())?.len();
-                if s.schema != genesis.schema
-                    || s.trial_id != genesis.trial_id
-                    || s.streams.trial != genesis.trial_id
-                    || s.sequence < s.logical_step
-                    || s.log_bytes > file_len
-                    || s.chain_head.len() != 64
-                    || !s.chain_head.bytes().all(|b| b.is_ascii_hexdigit())
-                {
-                    return Err("invalid trusted snapshot identity/bounds".into());
-                }
-                s.schedule.validate()?;
-                if s.log_bytes > 0 {
-                    input
-                        .seek(SeekFrom::Start(s.log_bytes - 1))
-                        .map_err(|e| e.to_string())?;
-                    let mut delimiter = [0u8; 1];
-                    input
-                        .read_exact(&mut delimiter)
-                        .map_err(|e| e.to_string())?;
-                    if delimiter != *b"\n" {
-                        return Err("trusted snapshot offset is not an event boundary".into());
-                    }
-                }
+            let file_len = input.metadata().map_err(|e| e.to_string())?.len();
+            if s.schema != genesis.schema
+                || s.trial_id != genesis.trial_id
+                || s.streams.trial != genesis.trial_id
+                || s.sequence < s.logical_step
+                || s.log_bytes > file_len
+                || s.chain_head.len() != 64
+                || !s.chain_head.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("invalid trusted snapshot identity/bounds".into());
+            }
+            s.schedule.validate()?;
+            if s.log_bytes > 0 {
                 input
-                    .seek(SeekFrom::Start(s.log_bytes))
+                    .seek(SeekFrom::Start(s.log_bytes - 1))
                     .map_err(|e| e.to_string())?;
-                state = Projection {
-                    world: s.world.clone(),
-                    schedule: s.schedule.clone(),
-                    streams: s.streams.clone(),
-                    sequence: s.sequence,
-                    logical_step: s.logical_step,
-                    chain_head: s.chain_head.clone(),
-                };
-                offset = s.log_bytes;
-                matched = Some(state.clone());
+                let mut delimiter = [0u8; 1];
+                input
+                    .read_exact(&mut delimiter)
+                    .map_err(|e| e.to_string())?;
+                if delimiter != *b"\n" {
+                    return Err("trusted snapshot offset is not an event boundary".into());
+                }
+            }
+            input
+                .seek(SeekFrom::Start(s.log_bytes))
+                .map_err(|e| e.to_string())?;
+            state = Projection {
+                world: s.world.clone(),
+                schedule: s.schedule.clone(),
+                streams: s.streams.clone(),
+                sequence: s.sequence,
+                logical_step: s.logical_step,
+                chain_head: s.chain_head.clone(),
+            };
+            offset = s.log_bytes;
+            matched = Some(state.clone());
         }
         let mut reader = BufReader::new(input);
         let mut line = Vec::new();
