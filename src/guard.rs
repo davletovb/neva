@@ -231,14 +231,16 @@ impl GovernedBackend {
         match spec {
             EffectSpec::Model(_) => {
                 let result = self.backend.resolve(spec).await;
-                if let (Some(cost), Ok(EffectResult::UnsupportedCapability { .. })) =
-                    (reserved, &result)
+                if matches!(&result, Ok(EffectResult::UnsupportedCapability { .. }))
+                    && self.backend.unsupported_is_pre_dispatch()
                 {
-                    if self.backend.unsupported_is_pre_dispatch() {
-                        // The model did not dispatch: undo budget and quota.
+                    // A locally refused call consumes neither effect quota nor
+                    // the optional monetary reservation. Do not require a
+                    // budget for the slot refund.
+                    if let Some(cost) = reserved {
                         self.remaining.fetch_add(cost, Ordering::SeqCst);
-                        self.started.fetch_sub(1, Ordering::SeqCst);
                     }
+                    self.started.fetch_sub(1, Ordering::SeqCst);
                 }
                 result
             }
@@ -386,6 +388,17 @@ mod tests {
             })
         }
     }
+    #[tokio::test]
+    async fn budgetless_pre_dispatch_refusals_do_not_exhaust_quota() {
+        let guard=GovernedBackend::new(Arc::new(PreflightRefusal),1);
+        let request=sample_request("no send");
+        for _ in 0..3 {
+            assert!(matches!(guard.resolve(&request).await.unwrap(),
+                EffectResult::UnsupportedCapability { .. }));
+        }
+        assert_eq!(guard.started.load(Ordering::SeqCst),0);
+    }
+
     #[tokio::test]
     async fn rejected_pre_dispatch_requests_refund_only_admission_reservations() {
         let cfg = BudgetConfig {
