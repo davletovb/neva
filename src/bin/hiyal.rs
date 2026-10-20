@@ -99,18 +99,19 @@ fn read_kind(path: &Path) -> Result<String, String> {
 /// Export exactly one read-only verified event-log prefix. Stage in the same
 /// destination directory and publish by hard-linking (create-new semantics),
 /// so a failure or concurrent exporter cannot leave a partial public file.
-fn marker_actively_locked(path: &Path) -> Result<bool, String> {
-    if !path.exists() {
-        return Ok(false);
+/// Acquire BOTH permanent writer marker leases and keep their OS locks held
+/// throughout verification and removal. A transient try_lock boolean opens
+/// a time-of-check/time-of-use race with a newly resumed fork writer.
+fn lock_partial_fork_for_cleanup(dir: &Path) -> Result<[fs::File; 2], String> {
+    fn lock_marker(path: &Path) -> Result<fs::File, String> {
+        let file = fs::OpenOptions::new().read(true).write(true)
+            .create(true).truncate(false).open(path).map_err(|e| e.to_string())?;
+        file.try_lock().map_err(|e| format!("partial fork has active writer: {e}"))?;
+        Ok(file)
     }
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    // Marker files survive crashes. Only OS lock contention is evidence of
-    // an active writer; the OS releases locks on SIGKILL/process exit.
-    Ok(file.try_lock().is_err())
+    let event = lock_marker(&dir.join(".writer.lock"))?;
+    let effect = lock_marker(&dir.join(".effects-writer.lock"))?;
+    Ok([event, effect])
 }
 
 fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
@@ -328,6 +329,9 @@ async fn launch() -> Result<(), String> {
                         serde_json::json!({"added":shock}),
                     )
                 };
+                // Retain both leases until after the recursive removal has
+                // completed. A competing resume cannot enter the trial.
+                let _leases = lock_partial_fork_for_cleanup(existing)?;
                 let meta = verify_fork::<Counter>(existing)?;
                 let prior = Store::<Counter, u64>::inspect_read_only(existing)?;
                 if meta.parent_id != source.genesis.trial_id
@@ -337,8 +341,6 @@ async fn launch() -> Result<(), String> {
                     || meta.intervention != "counter-shock"
                     || meta.parameters != expected_parameters
                     || prior.sequence != 0
-                    || marker_actively_locked(&existing.join(".writer.lock"))?
-                    || marker_actively_locked(&existing.join(".effects-writer.lock"))?
                 {
                     return Err("partial fork cannot be safely recreated".into());
                 }
