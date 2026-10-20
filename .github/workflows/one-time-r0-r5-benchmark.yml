@@ -1,0 +1,62 @@
+# One-off user-authorized R0/R5 measurement. Never triggers on main/push.
+# Only the named benchmark PR runs; no Python CI is activated.
+name: One-time R0 R5 benchmark — 20 Oct 2026
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+    paths:
+      - '.github/workflows/one-time-r0-r5-benchmark.yml'
+      - 'benchmarks/runs/benchmark_20261020.py'
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    if: github.head_ref == 'bench/r0-r5-evidence-20261020' && !github.event.pull_request.draft
+    name: Archived Python and native Rust same-host measurements
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout Hiyal benchmark source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout frozen archived Python source
+        uses: actions/checkout@v7
+        with:
+          repository: davletovb/hiyal
+          ref: d056e228dab3d42162f1568d91b2595b17b8e8a7
+          path: archived
+          persist-credentials: false
+
+      - name: Hide temporary benchmark files from dirty-source detection
+        run: |
+          printf '/archived/\n/benchmark-results/\n' >> .git/info/exclude
+
+      - name: Python baseline dependency
+        run: |
+          python3 --version
+          python3 -m pip install --disable-pip-version-check 'requests==2.32.5'
+
+      - name: Build Rust native benchmark in release mode
+        run: |
+          rustc --version
+          cargo --version
+          cargo build -p hiyal-native-bench --release --locked
+
+      - name: Run benchmarks with 5 repetitions and checkpoint baseline
+        run: python3 benchmarks/runs/benchmark_20261020.py
+
+      - name: Upload raw result files regardless of benchmark failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hiyal-r0-r5-benchmarks-20261020
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
