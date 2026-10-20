@@ -676,10 +676,11 @@ where
             } => {
                 let mut next = state.world.clone();
                 if let Some(before) = before_apply_streams {
-                    before.checked_progress(&rng)?;
+                    before.checked_scope_progress(&rng, &format!("agent/{}", event.actor.0))?;
                     let mut reducer_rng = before.clone();
                     next.apply_with_streams(event.actor, action.clone(), &mut reducer_rng)
                         .map_err(|e| format!("replay reducer failure: {e}"))?;
+                    reducer_rng.checked_scope_progress(before, "world")?;
                     if reducer_rng != event.after_streams {
                         return Err("replayed world RNG diverges".into());
                     }
@@ -766,9 +767,10 @@ where
             } => {
                 let mut next = self.world.clone();
                 if let Some(before) = before_apply_streams {
-                    before.checked_progress(&expected_streams)?;
+                    before.checked_scope_progress(&expected_streams, &format!("agent/{}", actor.0))?;
                     let mut reducer_rng = before.clone();
                     next.apply_with_streams(actor, action.clone(), &mut reducer_rng)?;
+                    reducer_rng.checked_scope_progress(before, "world")?;
                     if reducer_rng != streams {
                         return Err("staged world RNG divergence".into());
                     }
