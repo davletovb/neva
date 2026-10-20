@@ -111,13 +111,20 @@ fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
     if destination_root.starts_with(&trial_root) || output.exists() {
         return Err("export destination exists or is inside the trial root".into());
     }
-    let temporary = output.with_extension("hiyal-tmp");
+    // A process-unique staging name prevents two independent exports from
+    // interfering; create_new refuses stale files rather than deleting them.
+    static EXPORT_NONCE: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let nonce = EXPORT_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = output.with_extension(format!("hiyal-{}-{nonce}.tmp", std::process::id()));
+    let mut created = false;
     let result = (|| -> Result<(), String> {
         let mut staging = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)
             .map_err(|e| e.to_string())?;
+        created = true;
         hiyal::observe::write_summaries::<Counter>(dir, &verified, &mut staging)?;
         staging
             .flush()
@@ -134,7 +141,7 @@ fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         Ok(())
     })();
-    if result.is_err() {
+    if result.is_err() && created {
         let _ = fs::remove_file(&temporary);
     }
     result
