@@ -391,7 +391,11 @@ fn copy_evidence(source: &Path, dest: &Path) -> Result<(), String> {
     for name in ["manifest.json", "events.jsonl"] {
         let to = dest.join(name);
         fs::copy(source.join(name), &to).map_err(|e| e.to_string())?;
-        File::open(&to)
+        // FlushFileBuffers on Windows requires a writable handle. Opening
+        // the copied file read-only works on Unix but fails with ERROR_ACCESS_DENIED.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&to)
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())?;
     }
