@@ -5,6 +5,7 @@ use hiyal::{
     core::AgentId,
     experiment::Trial,
     metrics::CsvMetrics,
+    observe::JsonlObserver,
     research::{CounterMetrics, Sweep, ensure_observer_health, paired_forks, verify_fork},
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
@@ -30,6 +31,7 @@ fn help() -> &'static str {
      hiyal resume <trial-dir> <attempts> [--live]\n\
      hiyal inspect <trial-dir>\n\
      hiyal validate <trial-dir>\n\
+     hiyal export <trial-dir> <output.jsonl>\n\
      hiyal sweep <sweep.toml> <output-root>\n\
      hiyal fork <parent-trial> <pair-root> <shock> <attempts>\n\
      Live mode requires --features live-http, OPENAI_COMPAT_URL and OPENAI_COMPAT_API_KEY.\n\
@@ -132,6 +134,7 @@ async fn launch() -> Result<(), String> {
                 agents,
                 cfg.scheduler,
             )?;
+            trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(cfg.attempts).await?;
             trial.checkpoint()?;
             if live && accepted != cfg.attempts {
@@ -170,6 +173,7 @@ async fn launch() -> Result<(), String> {
                 return Err("resume backend differs from saved trial provider".into());
             }
             let mut trial = Trial::resume(dir, &kind, policy, backend(live)?, false)?;
+            trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
             if live && accepted != attempts {
@@ -295,6 +299,8 @@ async fn launch() -> Result<(), String> {
             if control.store.sequence() > attempts || treatment.store.sequence() > attempts {
                 return Err("fork already passed requested attempt count".into());
             }
+            control.observe_with(Arc::new(JsonlObserver::recover(&control_dir)?));
+            treatment.observe_with(Arc::new(JsonlObserver::recover(&treatment_dir)?));
             control.observe_with(Arc::new(CsvMetrics::recover(&control_dir, CounterMetrics)?));
             treatment.observe_with(Arc::new(CsvMetrics::recover(
                 &treatment_dir,
@@ -317,6 +323,36 @@ async fn launch() -> Result<(), String> {
                 control.store.chain_head(),
                 treatment.store.chain_head()
             );
+        }
+        "export" => {
+            if args.len() != 3 {
+                return Err(help().into());
+            }
+            let dir = Path::new(&args[1]);
+            let output = Path::new(&args[2]);
+            // Validate the source first; never treat a projection as authoritative.
+            let source = Store::<Counter, u64>::inspect_read_only(dir)?;
+            hiyal::runtime::EffectJournal::inspect_read_only(dir, &source.genesis.trial_id)?;
+            // Do not modify an existing output or write inside the trial root.
+            if output.exists() || output.parent().is_some_and(|p| {
+                std::fs::canonicalize(p).ok() == std::fs::canonicalize(dir).ok()
+            }) {
+                return Err("export destination exists or is inside the trial root".into());
+            }
+            let mut output_file = std::fs::OpenOptions::new()
+                .write(true).create_new(true).open(output).map_err(|e| e.to_string())?;
+            let source_file = std::fs::File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+            use std::io::{BufRead, BufReader, Write};
+            for line in BufReader::new(source_file).lines() {
+                let line = line.map_err(|e| e.to_string())?;
+                let event: hiyal::storage::Entry<Counter, u64> =
+                    serde_json::from_str(&line).map_err(|e| e.to_string())?;
+                let summary = hiyal::observe::EventSummary::from_entry(&event);
+                serde_json::to_writer(&mut output_file, &summary).map_err(|e| e.to_string())?;
+                output_file.write_all(b"\\n").map_err(|e| e.to_string())?;
+            }
+            output_file.sync_all().map_err(|e| e.to_string())?;
+            println!("exported redacted event summaries to {}", output.display());
         }
         "inspect" | "validate" => {
             let dir = Path::new(args.get(1).ok_or(help())?);
