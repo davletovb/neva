@@ -181,14 +181,12 @@ impl Sweep {
             match result {
                 Ok((job, Ok(value))) => {
                     finished.push((job, value));
-                    if errors.is_empty() {
-                        if let Some(next) = iterator.next() {
-                            let fun = action.clone();
-                            active.spawn(async move {
-                                let value = fun(next.clone()).await;
-                                (next, value)
-                            });
-                        }
+                    if errors.is_empty() && let Some(next) = iterator.next() {
+                        let fun = action.clone();
+                        active.spawn(async move {
+                            let value = fun(next.clone()).await;
+                            (next, value)
+                        });
                     }
                 }
                 Ok((job, Err(error))) => errors.push(format!("job {}: {error}", job.id)),
