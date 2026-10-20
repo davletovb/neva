@@ -69,7 +69,9 @@ where
     let mut read_bytes = 0u64;
     loop {
         line.clear();
-        let count = reader.read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+        let count = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
         if count == 0 {
             break;
         }
@@ -192,19 +194,29 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
-
     #[tokio::test]
     async fn rejected_and_control_records_are_projected_live_and_on_recovery() {
-        let dir = std::env::temp_dir().join(format!("hiyal-r4-all-outcomes-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("hiyal-r4-all-outcomes-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         {
             let mut trial = Trial::create(
-                &dir, "all-outcomes", 44,
+                &dir,
+                "all-outcomes",
+                44,
                 &kind(1, false, "fixed-v1", "scripted").unwrap(),
                 Counter { total: u64::MAX },
-                Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
-                Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin,
-            ).unwrap();
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             trial.observe_with(Arc::new(JsonlObserver::recover(&dir).unwrap()));
             trial.pause_actor(AgentId(0)).unwrap();
             trial.resume_actor(AgentId(0)).unwrap();
@@ -213,12 +225,17 @@ mod tests {
             trial.checkpoint().unwrap();
         }
         let live = fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap();
-        let kinds: Vec<String> = String::from_utf8(live.clone()).unwrap().lines().map(|line| {
-            serde_json::from_str::<EventSummary>(line).unwrap().kind
-        }).collect();
+        let kinds: Vec<String> = String::from_utf8(live.clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<EventSummary>(line).unwrap().kind)
+            .collect();
         assert_eq!(kinds, ["control", "control", "rejected"]);
         let _: JsonlObserver<Counter> = JsonlObserver::recover(&dir).unwrap();
-        assert_eq!(fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(), live);
+        assert_eq!(
+            fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(),
+            live
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -228,12 +245,22 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         {
             let trial = Trial::create(
-                &dir, "truncated", 2,
+                &dir,
+                "truncated",
+                2,
                 &kind(1, false, "fixed-v1", "scripted").unwrap(),
                 Counter { total: 0 },
-                Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
-                Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin,
-            ).unwrap();
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             let verified = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
             let mut output = Vec::new();
             write_summaries(&dir, &verified, &mut output).unwrap();
