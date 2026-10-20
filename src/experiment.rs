@@ -19,12 +19,21 @@ pub trait EffectPolicy<W: World>: Send + Sync {
         obs: &W::Observation,
         effects: &[Receipt],
     ) -> Result<W::Action, String>;
-    fn requests_with_streams(&self, actor: AgentId, obs: &W::Observation,
-        _rng: &mut Streams) -> Result<Vec<EffectSpec>, String> {
+    fn requests_with_streams(
+        &self,
+        actor: AgentId,
+        obs: &W::Observation,
+        _rng: &mut Streams,
+    ) -> Result<Vec<EffectSpec>, String> {
         self.requests(actor, obs)
     }
-    fn decide_with_streams(&self, actor: AgentId, obs: &W::Observation,
-        effects: &[Receipt], _rng: &mut Streams) -> Result<W::Action, String> {
+    fn decide_with_streams(
+        &self,
+        actor: AgentId,
+        obs: &W::Observation,
+        effects: &[Receipt],
+        _rng: &mut Streams,
+    ) -> Result<W::Action, String> {
         self.decide(actor, obs, effects)
     }
 }
@@ -33,8 +42,13 @@ impl<W: World, P: crate::core::Policy<W> + Send + Sync> EffectPolicy<W> for Rule
     fn decide(&self, a: AgentId, o: &W::Observation, _: &[Receipt]) -> Result<W::Action, String> {
         self.0.propose(a, o)
     }
-    fn decide_with_streams(&self, a: AgentId, o: &W::Observation,
-        _: &[Receipt], rng: &mut Streams) -> Result<W::Action, String> {
+    fn decide_with_streams(
+        &self,
+        a: AgentId,
+        o: &W::Observation,
+        _: &[Receipt],
+        rng: &mut Streams,
+    ) -> Result<W::Action, String> {
         self.0.propose_with_streams(a, o, rng)
     }
 }
@@ -145,16 +159,28 @@ where
     /// Bypasses historical prefix replay by trusting the latest snapshot.
     /// Run `Store::inspect_read_only` for full independent integrity checks.
     pub fn resume_trusted(
-        dir: impl AsRef<Path>, kind: &str, policy: P,
-        backend: Arc<dyn Backend>, replay_only: bool,
+        dir: impl AsRef<Path>,
+        kind: &str,
+        policy: P,
+        backend: Arc<dyn Backend>,
+        replay_only: bool,
     ) -> Result<Self, String> {
         Self::resume_mode(dir, kind, policy, backend, replay_only, true)
     }
 
-    fn resume_mode(dir: impl AsRef<Path>, kind: &str, policy: P,
-                   backend: Arc<dyn Backend>, replay_only: bool, trust_snapshot: bool)
-        -> Result<Self, String> {
-        let store = if trust_snapshot { Store::open_trusted(&dir)? } else { Store::open(&dir)? };
+    fn resume_mode(
+        dir: impl AsRef<Path>,
+        kind: &str,
+        policy: P,
+        backend: Arc<dyn Backend>,
+        replay_only: bool,
+        trust_snapshot: bool,
+    ) -> Result<Self, String> {
+        let store = if trust_snapshot {
+            Store::open_trusted(&dir)?
+        } else {
+            Store::open(&dir)?
+        };
         if store.genesis.world_kind != kind {
             return Err("wrong registered world kind".into());
         }
@@ -267,7 +293,8 @@ where
                         }) {
                             Err("effect failed or capability unsupported".into())
                         } else {
-                            self.policy.decide_with_streams(actor, &obs, &receipts, &mut rng)
+                            self.policy
+                                .decide_with_streams(actor, &obs, &receipts, &mut rng)
                         }
                     }
                 }
@@ -355,32 +382,61 @@ where
             reason: Option<String>,
             specs: Vec<(crate::effects::EffectCallKey, EffectSpec)>,
         }
-        let available = self.store.schedule.agents.len()
+        let available = self
+            .store
+            .schedule
+            .agents
+            .len()
             .saturating_sub(self.store.schedule.paused.len());
-        if max_actors == 0 || available == 0 { return Ok(Vec::new()); }
-        if max_actors > 10_000 { return Err("round exceeds 10,000 actors".into()); }
+        if max_actors == 0 || available == 0 {
+            return Ok(Vec::new());
+        }
+        if max_actors > 10_000 {
+            return Err("round exceeds 10,000 actors".into());
+        }
         let limit = max_actors.min(available);
         let mut schedule = self.store.schedule.clone();
         let mut streams = self.store.streams.clone();
         let mut plans = Vec::with_capacity(limit);
         let mut all_specs = Vec::new();
         for i in 0..limit {
-            let Some(actor) = schedule.select(&mut streams)? else { break; };
-            let sequence = self.store.sequence.checked_add(i as u64).ok_or("round sequence overflow")?;
-            let mut plan = Plan { actor, observation: None, reason: None, specs: Vec::new() };
+            let Some(actor) = schedule.select(&mut streams)? else {
+                break;
+            };
+            let sequence = self
+                .store
+                .sequence
+                .checked_add(i as u64)
+                .ok_or("round sequence overflow")?;
+            let mut plan = Plan {
+                actor,
+                observation: None,
+                reason: None,
+                specs: Vec::new(),
+            };
             match self.store.world.observe(actor) {
                 Err(e) => plan.reason = Some(e),
                 Ok(obs) => {
                     match self.policy.requests(actor, &obs) {
                         Err(e) => plan.reason = Some(e),
                         Ok(specs) => {
-                            if specs.len() > 32 ||
-                                specs.iter().filter(|s| matches!(s, EffectSpec::Tool{..})).count() > 8 {
-                                plan.reason = Some("round policy exceeds per-actor effect limits".into());
+                            if specs.len() > 32
+                                || specs
+                                    .iter()
+                                    .filter(|s| matches!(s, EffectSpec::Tool { .. }))
+                                    .count()
+                                    > 8
+                            {
+                                plan.reason =
+                                    Some("round policy exceeds per-actor effect limits".into());
                             } else {
                                 for (index, spec) in specs.into_iter().enumerate() {
-                                    let key = spec.key(&self.store.genesis.trial_id,
-                                        sequence, actor, index as u32)?;
+                                    let key = spec.key(
+                                        &self.store.genesis.trial_id,
+                                        sequence,
+                                        actor,
+                                        index as u32,
+                                    )?;
                                     all_specs.push((key.clone(), spec.clone()));
                                     plan.specs.push((key, spec));
                                 }
@@ -400,14 +456,24 @@ where
             let mut end = cursor;
             let mut tools = 0;
             while end < all_specs.len() && end - cursor < 32 {
-                let is_tool = matches!(&all_specs[end].1, EffectSpec::Tool{..});
-                if is_tool && tools == 8 { break; }
+                let is_tool = matches!(&all_specs[end].1, EffectSpec::Tool { .. });
+                if is_tool && tools == 8 {
+                    break;
+                }
                 tools += usize::from(is_tool);
                 end += 1;
             }
             let chunk = all_specs[cursor..end].to_vec();
-            let resolved = self.effects.resolve_all(chunk, self.backend.clone(),
-                self.concurrency, self.timeout, self.replay_only).await?;
+            let resolved = self
+                .effects
+                .resolve_all(
+                    chunk,
+                    self.backend.clone(),
+                    self.concurrency,
+                    self.timeout,
+                    self.replay_only,
+                )
+                .await?;
             for receipt in resolved {
                 receipts.insert(receipt.key.clone(), receipt);
             }
@@ -430,9 +496,13 @@ where
                         let receipt = receipts.get(&key).ok_or("missing round effect receipt")?;
                         ordered.push(receipt.clone());
                     }
-                    if ordered.iter().any(|r| matches!(&r.result,
-                        crate::effects::EffectResult::Failed{..} |
-                        crate::effects::EffectResult::UnsupportedCapability{..})) {
+                    if ordered.iter().any(|r| {
+                        matches!(
+                            &r.result,
+                            crate::effects::EffectResult::Failed { .. }
+                                | crate::effects::EffectResult::UnsupportedCapability { .. }
+                        )
+                    }) {
                         Err("round effect failed or unsupported".into())
                     } else {
                         self.policy.decide(plan.actor, &obs, &ordered)
@@ -446,27 +516,52 @@ where
                     let before_apply = rng.clone();
                     match next.apply_with_streams(plan.actor, action.clone(), &mut rng) {
                         Err(reason) => {
-                            let entry = self.store.append(plan.actor, Outcome::Rejected {
-                                reason: reason.clone() }, scheduled, rng)?;
+                            let entry = self.store.append(
+                                plan.actor,
+                                Outcome::Rejected {
+                                    reason: reason.clone(),
+                                },
+                                scheduled,
+                                rng,
+                            )?;
                             self.emit(&entry);
-                            Step::Rejected { actor: plan.actor, reason }
+                            Step::Rejected {
+                                actor: plan.actor,
+                                reason,
+                            }
                         }
                         Ok(()) => {
                             let state_hash = crate::storage::digest(&next)?;
-                            let entry = self.store.append(plan.actor, Outcome::Accepted {
-                                action, world: None, state_hash,
-                                before_apply_streams: Some(before_apply),
-                            }, scheduled, rng)?;
+                            let entry = self.store.append(
+                                plan.actor,
+                                Outcome::Accepted {
+                                    action,
+                                    world: None,
+                                    state_hash,
+                                    before_apply_streams: Some(before_apply),
+                                },
+                                scheduled,
+                                rng,
+                            )?;
                             self.emit(&entry);
                             Step::Accepted(Box::new(entry))
                         }
                     }
                 }
                 Err(reason) => {
-                    let entry = self.store.append(plan.actor, Outcome::Rejected {
-                        reason: reason.clone() }, scheduled, rng)?;
+                    let entry = self.store.append(
+                        plan.actor,
+                        Outcome::Rejected {
+                            reason: reason.clone(),
+                        },
+                        scheduled,
+                        rng,
+                    )?;
                     self.emit(&entry);
-                    Step::Rejected { actor: plan.actor, reason }
+                    Step::Rejected {
+                        actor: plan.actor,
+                        reason,
+                    }
                 }
             };
             events.push(event);
