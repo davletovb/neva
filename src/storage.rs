@@ -119,6 +119,8 @@ pub enum Outcome<W, A> {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         world: Option<W>,
         state_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_apply_streams: Option<Streams>,
     },
     Rejected {
         reason: String,
@@ -573,21 +575,33 @@ where
             return Ok(());
         }
         let selected = sched.select(&mut rng)?;
-        if selected != Some(event.actor)
-            || sched != event.after_schedule
-            || rng != event.after_streams
-        {
+        if selected != Some(event.actor) || sched != event.after_schedule {
             return Err("log selection/RNG divergence".into());
         }
+        event.after_streams.checked_progress(&rng)?;
         match &event.outcome {
             Outcome::Accepted {
                 action,
                 world,
-                state_hash,
+                state_hash, before_apply_streams,
             } => {
                 let mut next = state.world.clone();
-                next.apply(event.actor, action.clone())
-                    .map_err(|e| format!("replay reducer failure: {e}"))?;
+                if let Some(before) = before_apply_streams {
+                    before.checked_progress(&rng)?;
+                    let mut reducer_rng = before.clone();
+                    next.apply_with_streams(event.actor, action.clone(), &mut reducer_rng)
+                        .map_err(|e| format!("replay reducer failure: {e}"))?;
+                    if reducer_rng != event.after_streams {
+                        return Err("replayed world RNG diverges".into());
+                    }
+                } else {
+                    // Legacy event: no stochastic reducer channel.
+                    if rng != event.after_streams {
+                        return Err("legacy RNG stream divergence".into());
+                    }
+                    next.apply(event.actor, action.clone())
+                        .map_err(|e| format!("replay reducer failure: {e}"))?;
+                }
                 if digest(&next)? != *state_hash
                     || world.as_ref().is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
                 {
@@ -602,7 +616,7 @@ where
         state.sequence = state.sequence.checked_add(1).ok_or("sequence overflow")?;
         state.chain_head = event.hash.clone();
         state.schedule = sched;
-        state.streams = rng;
+        state.streams = event.after_streams.clone();
         Ok(())
     }
 
@@ -631,9 +645,10 @@ where
         } else if expected_schedule.select(&mut expected_streams)? != Some(actor) {
             return Err("unexpected selected actor".into());
         }
-        if schedule != expected_schedule || streams != expected_streams {
-            return Err("scheduler or random stream divergence".into());
+        if schedule != expected_schedule {
+            return Err("scheduler divergence".into());
         }
+        streams.checked_progress(&expected_streams)?;
         let accepted = matches!(&outcome, Outcome::Accepted { .. });
         let next_step = self
             .logical_step
@@ -641,9 +656,19 @@ where
             .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
         let new_world = match &outcome {
-            Outcome::Accepted { action, world, state_hash } => {
+            Outcome::Accepted { action, world, state_hash, before_apply_streams } => {
                 let mut next = self.world.clone();
-                next.apply(actor, action.clone())?;
+                if let Some(before) = before_apply_streams {
+                    before.checked_progress(&expected_streams)?;
+                    let mut reducer_rng = before.clone();
+                    next.apply_with_streams(actor, action.clone(), &mut reducer_rng)?;
+                    if reducer_rng != streams {
+                        return Err("staged world RNG divergence".into());
+                    }
+                } else {
+                    if streams != expected_streams { return Err("legacy RNG divergence".into()); }
+                    next.apply(actor, action.clone())?;
+                }
                 if digest(&next)? != *state_hash
                     || world.as_ref().is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
                 {
