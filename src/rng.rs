@@ -111,6 +111,21 @@ impl Streams {
         Ok(())
     }
 
+    /// Enforce that an agent callback advances only its own named stream
+    /// (or a reducer only the world family). Other streams cannot be added,
+    /// removed or modified by this callback.
+    pub fn checked_scope_progress(&self, before: &Self, family: &str) -> Result<(), String> {
+        self.checked_progress(before)?;
+        for (name, position) in &self.positions {
+            let allowed = name == family
+                || name.strip_prefix(family).is_some_and(|s| s.starts_with('/'));
+            if !allowed && before.positions.get(name) != Some(position) {
+                return Err(format!("unauthorized RNG stream draw: {name}"));
+            }
+        }
+        Ok(())
+    }
+
     /// Exact uniform choice without modulo bias. n must be positive.
     pub fn uniform_index(&mut self, stream: &str, n: usize) -> Result<usize, String> {
         let bound = u64::try_from(n).map_err(|_| "scheduler size exceeds u64")?;
