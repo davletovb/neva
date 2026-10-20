@@ -110,7 +110,8 @@ pub struct BuildProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_dirty: Option<bool>,
     /// SHA-256 of the engine checkout lockfile, not an external consumer's.
-    #[serde(alias = "engine_lock_sha256")]
+    // Keep schema-v1 wire spelling for existing genesis hashes.
+    #[serde(rename = "engine_lock_sha256")]
     pub engine_checkout_lock_sha256: String,
 }
 impl BuildProvenance {
