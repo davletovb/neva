@@ -366,6 +366,7 @@ impl EffectJournal {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(|e| e.to_string())?;
         lock_file
