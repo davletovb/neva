@@ -103,6 +103,9 @@ and storage limits see [R5 release contracts](r5-release.md) and
   full historical Python feature parity.
 - Existing generic model/tool/summarization capabilities are represented by
   typed Rust requests and opt-in backends, not specific provider SDKs.
-- The archived Python tree remains accessible temporarily for **manual**
-  baseline calibration. Delete only after preserving independent measurements
-  and historical evidence; it is not part of any native build.
+- The historical Python runtime, tests and CI were removed from the Rust
+  mainline after checking for committed research datasets. The complete source
+  plus two tutorial notebooks are frozen on
+  [archive/hiyal-python-pre-r5](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5).
+  The independent baseline remains a **manual** deferred benchmark using
+  `HIYAL_LEGACY_SOURCE` and a separate worktree, not part of native CI.
