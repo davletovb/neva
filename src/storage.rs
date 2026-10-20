@@ -635,7 +635,7 @@ where
     }
 
     /// Commit a scheduler control record and return the durable log entry.
-    pub fn set_paused(&mut self, actor: AgentId, paused: bool) -> Result<Entry<W, A>, String> {
+    pub fn set_paused_event(&mut self, actor: AgentId, paused: bool) -> Result<Entry<W, A>, String> {
         let mut scheduled = self.schedule.clone();
         if paused {
             scheduled.pause(actor)?;
@@ -648,6 +648,11 @@ where
             scheduled,
             self.streams.clone(),
         )
+    }
+
+    /// Backward-compatible convenience wrapper for scheduling controls.
+    pub fn set_paused(&mut self, actor: AgentId, paused: bool) -> Result<(), String> {
+        self.set_paused_event(actor, paused).map(|_| ())
     }
 
     pub fn snapshot(&self) -> Result<(), String> {
