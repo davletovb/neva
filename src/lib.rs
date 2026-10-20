@@ -7,6 +7,8 @@ pub mod effects;
 pub mod experiment;
 pub mod guard;
 pub mod metrics;
+pub mod memory;
+pub mod observe;
 pub mod research;
 pub mod rng;
 pub mod runtime;
