@@ -9,7 +9,7 @@ use hiyal::{
     research::{CounterMetrics, Sweep, ensure_observer_health, paired_forks, verify_fork},
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
-    storage::{Store, Durability},
+    storage::{Durability, Store},
 };
 use serde::Deserialize;
 use std::{env, fs, path::Path, sync::Arc};
@@ -217,9 +217,15 @@ async fn launch() -> Result<(), String> {
             let live = opts.iter().any(|o| o == "--live");
             let trusted = opts.iter().any(|o| o == "--trusted-snapshot");
             let checkpoint_durability = opts.iter().any(|o| o == "--checkpoint-durability");
-            if opts.len() > 3 || opts.iter().any(|o| !matches!(o.as_str(),
-                "--live" | "--trusted-snapshot" | "--checkpoint-durability"))
-                || opts.iter().collect::<std::collections::BTreeSet<_>>().len() != opts.len() {
+            if opts.len() > 3
+                || opts.iter().any(|o| {
+                    !matches!(
+                        o.as_str(),
+                        "--live" | "--trusted-snapshot" | "--checkpoint-durability"
+                    )
+                })
+                || opts.iter().collect::<std::collections::BTreeSet<_>>().len() != opts.len()
+            {
                 return Err(help().into());
             }
             let kind = read_kind(dir)?;
