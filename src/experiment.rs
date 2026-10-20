@@ -340,6 +340,140 @@ where
             }
         }
     }
+    /// Two-phase synchronous round: each eligible agent observes the SAME
+    /// pre-round world. Effects are resolved concurrently in bounded batches;
+    /// actions then commit in deterministic scheduler order. Reducer writes
+    /// are sequential and conflicts use that declared order.
+    ///
+    /// The round API currently supports the non-stream-aware `requests` and
+    /// `decide` policy methods. For stochastic decisions use sequential step(),
+    /// which records named RNG progression as part of each committed event.
+    pub async fn run_round(&mut self, max_actors: usize) -> Result<Vec<Step<W>>, String> {
+        struct Plan<O> {
+            actor: AgentId,
+            observation: Option<O>,
+            reason: Option<String>,
+            specs: Vec<(crate::effects::EffectCallKey, EffectSpec)>,
+        }
+        let available = self.store.schedule.agents.len()
+            .saturating_sub(self.store.schedule.paused.len());
+        if max_actors == 0 || available == 0 { return Ok(Vec::new()); }
+        if max_actors > 10_000 { return Err("round exceeds 10,000 actors".into()); }
+        let limit = max_actors.min(available);
+        let mut schedule = self.store.schedule.clone();
+        let mut streams = self.store.streams.clone();
+        let mut plans = Vec::with_capacity(limit);
+        let mut all_specs = Vec::new();
+        for i in 0..limit {
+            let Some(actor) = schedule.select(&mut streams)? else { break; };
+            let sequence = self.store.sequence.checked_add(i as u64).ok_or("round sequence overflow")?;
+            let mut plan = Plan { actor, observation: None, reason: None, specs: Vec::new() };
+            match self.store.world.observe(actor) {
+                Err(e) => plan.reason = Some(e),
+                Ok(obs) => {
+                    match self.policy.requests(actor, &obs) {
+                        Err(e) => plan.reason = Some(e),
+                        Ok(specs) => {
+                            if specs.len() > 32 ||
+                                specs.iter().filter(|s| matches!(s, EffectSpec::Tool{..})).count() > 8 {
+                                plan.reason = Some("round policy exceeds per-actor effect limits".into());
+                            } else {
+                                for (index, spec) in specs.into_iter().enumerate() {
+                                    let key = spec.key(&self.store.genesis.trial_id,
+                                        sequence, actor, index as u32)?;
+                                    all_specs.push((key.clone(), spec.clone()));
+                                    plan.specs.push((key, spec));
+                                }
+                            }
+                        }
+                    }
+                    plan.observation = Some(obs);
+                }
+            }
+            plans.push(plan);
+        }
+        // Bound concurrent billable work and per-batch tool calls even when
+        // the round contains many agents. Within each wave, effects overlap.
+        let mut receipts = std::collections::BTreeMap::new();
+        let mut cursor = 0usize;
+        while cursor < all_specs.len() {
+            let mut end = cursor;
+            let mut tools = 0;
+            while end < all_specs.len() && end - cursor < 32 {
+                let is_tool = matches!(&all_specs[end].1, EffectSpec::Tool{..});
+                if is_tool && tools == 8 { break; }
+                tools += usize::from(is_tool);
+                end += 1;
+            }
+            let chunk = all_specs[cursor..end].to_vec();
+            let resolved = self.effects.resolve_all(chunk, self.backend.clone(),
+                self.concurrency, self.timeout, self.replay_only).await?;
+            for receipt in resolved {
+                receipts.insert(receipt.key.clone(), receipt);
+            }
+            cursor = end;
+        }
+        let mut events = Vec::with_capacity(plans.len());
+        for plan in plans {
+            // Re-select against actual committed state to preserve exact
+            // scheduling and RNG ordering even when a prior actor rejected.
+            let mut scheduled = self.store.schedule.clone();
+            let mut rng = self.store.streams.clone();
+            if scheduled.select(&mut rng)? != Some(plan.actor) {
+                return Err("synchronous round scheduler drift".into());
+            }
+            let action = match (plan.reason, plan.observation) {
+                (Some(reason), _) => Err(reason),
+                (None, Some(obs)) => {
+                    let mut ordered = Vec::new();
+                    for (key, _) in plan.specs {
+                        let receipt = receipts.get(&key).ok_or("missing round effect receipt")?;
+                        ordered.push(receipt.clone());
+                    }
+                    if ordered.iter().any(|r| matches!(&r.result,
+                        crate::effects::EffectResult::Failed{..} |
+                        crate::effects::EffectResult::UnsupportedCapability{..})) {
+                        Err("round effect failed or unsupported".into())
+                    } else {
+                        self.policy.decide(plan.actor, &obs, &ordered)
+                    }
+                }
+                (None, None) => Err("round missing observation".into()),
+            };
+            let event = match action {
+                Ok(action) => {
+                    let mut next = self.store.world.clone();
+                    let before_apply = rng.clone();
+                    match next.apply_with_streams(plan.actor, action.clone(), &mut rng) {
+                        Err(reason) => {
+                            let entry = self.store.append(plan.actor, Outcome::Rejected {
+                                reason: reason.clone() }, scheduled, rng)?;
+                            self.emit(&entry);
+                            Step::Rejected { actor: plan.actor, reason }
+                        }
+                        Ok(()) => {
+                            let state_hash = crate::storage::digest(&next)?;
+                            let entry = self.store.append(plan.actor, Outcome::Accepted {
+                                action, world: None, state_hash,
+                                before_apply_streams: Some(before_apply),
+                            }, scheduled, rng)?;
+                            self.emit(&entry);
+                            Step::Accepted(Box::new(entry))
+                        }
+                    }
+                }
+                Err(reason) => {
+                    let entry = self.store.append(plan.actor, Outcome::Rejected {
+                        reason: reason.clone() }, scheduled, rng)?;
+                    self.emit(&entry);
+                    Step::Rejected { actor: plan.actor, reason }
+                }
+            };
+            events.push(event);
+        }
+        Ok(events)
+    }
+
     pub async fn run_attempts(&mut self, n: u64) -> Result<u64, String> {
         let mut accepted = 0;
         for _ in 0..n {
