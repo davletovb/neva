@@ -322,78 +322,150 @@ async fn synchronous_round_overlaps_effects_and_commits_in_order() {
 
 struct OtherActorsStream;
 impl EffectPolicy<RandomWorld> for OtherActorsStream {
-    fn decide(&self, _: AgentId, _: &(), _: &[hiyal::runtime::Receipt]) -> Result<u64,String> { Ok(0) }
-    fn decide_with_streams(&self, _: AgentId, _: &(), _: &[hiyal::runtime::Receipt],
-                           rng: &mut Streams) -> Result<u64,String> {
+    fn decide(&self, _: AgentId, _: &(), _: &[hiyal::runtime::Receipt]) -> Result<u64, String> {
+        Ok(0)
+    }
+    fn decide_with_streams(
+        &self,
+        _: AgentId,
+        _: &(),
+        _: &[hiyal::runtime::Receipt],
+        rng: &mut Streams,
+    ) -> Result<u64, String> {
         rng.draw_u64("agent/1")
     }
 }
 #[tokio::test]
 async fn policy_cannot_consume_another_agents_named_stream() {
-    let p=dir("rng-scope");
-    let mut trial=Trial::create(&p,"scope",81,"rng.scope",RandomWorld{total:0},
-        OtherActorsStream,Arc::new(ScriptedBackend),vec![AgentId(0),AgentId(1)],
-        Scheduling::RoundRobin).unwrap();
-    assert!(trial.step().await.unwrap_err().contains("unauthorized RNG stream"));
-    assert_eq!(trial.store.sequence(),0);
-    drop(trial);fs::remove_dir_all(p).unwrap();
+    let p = dir("rng-scope");
+    let mut trial = Trial::create(
+        &p,
+        "scope",
+        81,
+        "rng.scope",
+        RandomWorld { total: 0 },
+        OtherActorsStream,
+        Arc::new(ScriptedBackend),
+        vec![AgentId(0), AgentId(1)],
+        Scheduling::RoundRobin,
+    )
+    .unwrap();
+    assert!(
+        trial
+            .step()
+            .await
+            .unwrap_err()
+            .contains("unauthorized RNG stream")
+    );
+    assert_eq!(trial.store.sequence(), 0);
+    drop(trial);
+    fs::remove_dir_all(p).unwrap();
 }
-struct WrongWorldStream { value:u64 }
+struct WrongWorldStream {
+    value: u64,
+}
 impl Clone for WrongWorldStream {
-    fn clone(&self)->Self{Self{value:self.value}}
+    fn clone(&self) -> Self {
+        Self { value: self.value }
+    }
 }
 impl Serialize for WrongWorldStream {
-    fn serialize<S:serde::Serializer>(&self,s:S)->Result<S::Ok,S::Error>{self.value.serialize(s)}
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(s)
+    }
 }
 impl<'de> Deserialize<'de> for WrongWorldStream {
-    fn deserialize<D:serde::Deserializer<'de>>(d:D)->Result<Self,D::Error>{
-        Ok(Self{value:u64::deserialize(d)?})
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            value: u64::deserialize(d)?,
+        })
     }
 }
 impl World for WrongWorldStream {
-    type Action=u64;type Observation=();
-    fn observe(&self,_:AgentId)->Result<(),String>{Ok(())}
-    fn apply(&mut self,_:AgentId,action:u64)->Result<(),String>{self.value+=action;Ok(())}
-    fn apply_with_streams(&mut self,a:AgentId,action:u64,rng:&mut Streams)->Result<(),String>{
+    type Action = u64;
+    type Observation = ();
+    fn observe(&self, _: AgentId) -> Result<(), String> {
+        Ok(())
+    }
+    fn apply(&mut self, _: AgentId, action: u64) -> Result<(), String> {
+        self.value += action;
+        Ok(())
+    }
+    fn apply_with_streams(
+        &mut self,
+        a: AgentId,
+        action: u64,
+        rng: &mut Streams,
+    ) -> Result<(), String> {
         rng.draw_u64("agent/1")?;
-        self.apply(a,action)
+        self.apply(a, action)
     }
 }
 struct InnocentPolicy;
 impl EffectPolicy<WrongWorldStream> for InnocentPolicy {
-    fn decide(&self,_:AgentId,_:&(),_:&[hiyal::runtime::Receipt])->Result<u64,String>{Ok(1)}
+    fn decide(&self, _: AgentId, _: &(), _: &[hiyal::runtime::Receipt]) -> Result<u64, String> {
+        Ok(1)
+    }
 }
 #[tokio::test]
 async fn reducer_cannot_consume_agents_stream() {
-    let p=dir("world-scope");
-    let mut trial=Trial::create(&p,"world-scope",81,"rng.world-scope",WrongWorldStream{value:0},
-        InnocentPolicy,Arc::new(ScriptedBackend),vec![AgentId(0)],Scheduling::RoundRobin).unwrap();
-    assert!(trial.step().await.unwrap_err().contains("unauthorized RNG stream"));
-    assert_eq!(trial.store.sequence(),0);
-    drop(trial);fs::remove_dir_all(p).unwrap();
+    let p = dir("world-scope");
+    let mut trial = Trial::create(
+        &p,
+        "world-scope",
+        81,
+        "rng.world-scope",
+        WrongWorldStream { value: 0 },
+        InnocentPolicy,
+        Arc::new(ScriptedBackend),
+        vec![AgentId(0)],
+        Scheduling::RoundRobin,
+    )
+    .unwrap();
+    assert!(
+        trial
+            .step()
+            .await
+            .unwrap_err()
+            .contains("unauthorized RNG stream")
+    );
+    assert_eq!(trial.store.sequence(), 0);
+    drop(trial);
+    fs::remove_dir_all(p).unwrap();
 }
 #[tokio::test]
 async fn trusted_projection_recovers_only_missing_suffix() {
     use hiyal::observe::{EventSummary, JsonlObserver};
-    let p=dir("trust-projection");
-    let mut trial=create_society(&p);
+    let p = dir("trust-projection");
+    let mut trial = create_society(&p);
     trial.observe_with(Arc::new(JsonlObserver::recover(&p).unwrap()));
     trial.run_attempts(4).await.unwrap();
     trial.checkpoint().unwrap();
     drop(trial);
-    let path=JsonlObserver::<Society>::path(&p);
-    let all=fs::read_to_string(&path).unwrap();
-    let first_three=all.lines().take(3).map(|s|format!("{s}\n")).collect::<String>();
-    assert_eq!(first_three.lines().count(),3);
-    let last:EventSummary=serde_json::from_str(first_three.lines().last().unwrap()).unwrap();
+    let path = JsonlObserver::<Society>::path(&p);
+    let all = fs::read_to_string(&path).unwrap();
+    let first_three = all
+        .lines()
+        .take(3)
+        .map(|s| format!("{s}\n"))
+        .collect::<String>();
+    assert_eq!(first_three.lines().count(), 3);
+    let last: EventSummary = serde_json::from_str(first_three.lines().last().unwrap()).unwrap();
     assert!(last.source_log_bytes.is_some());
-    fs::write(&path,first_three).unwrap();
-    let resumed=Trial::resume_trusted(&p,"society.v1",Rules(Gain),
-        Arc::new(ScriptedBackend),false).unwrap();
-    let observer=JsonlObserver::recover_trusted(&resumed.store).unwrap();
-    drop(observer);drop(resumed);
-    let reconstructed=fs::read_to_string(&path).unwrap();
-    assert_eq!(reconstructed.lines().count(),4);
-    assert_eq!(reconstructed,all);
+    fs::write(&path, first_three).unwrap();
+    let resumed = Trial::resume_trusted(
+        &p,
+        "society.v1",
+        Rules(Gain),
+        Arc::new(ScriptedBackend),
+        false,
+    )
+    .unwrap();
+    let observer = JsonlObserver::recover_trusted(&resumed.store).unwrap();
+    drop(observer);
+    drop(resumed);
+    let reconstructed = fs::read_to_string(&path).unwrap();
+    assert_eq!(reconstructed.lines().count(), 4);
+    assert_eq!(reconstructed, all);
     fs::remove_dir_all(p).unwrap();
 }
