@@ -155,12 +155,12 @@ where
     }
     /// Scheduler control is an audited event, never a raw in-memory mutation.
     pub fn pause_actor(&mut self, actor: AgentId) -> Result<(), String> {
-        let entry = self.store.set_paused(actor, true)?;
+        let entry = self.store.set_paused_event(actor, true)?;
         self.emit(&entry);
         Ok(())
     }
     pub fn resume_actor(&mut self, actor: AgentId) -> Result<(), String> {
-        let entry = self.store.set_paused(actor, false)?;
+        let entry = self.store.set_paused_event(actor, false)?;
         self.emit(&entry);
         Ok(())
     }
