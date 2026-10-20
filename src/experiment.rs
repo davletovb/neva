@@ -54,6 +54,11 @@ impl<W: World, P: crate::core::Policy<W> + Send + Sync> EffectPolicy<W> for Rule
 }
 pub trait Observer<W: World>: Send + Sync {
     fn committed(&self, entry: &Entry<W, W::Action>) -> Result<(), String>;
+    /// The authoritative byte boundary enables safe suffix recovery of
+    /// derived projections without changing existing observer implementations.
+    fn committed_with_log_offset(&self, entry: &Entry<W, W::Action>, _end: u64) -> Result<(), String> {
+        self.committed(entry)
+    }
 }
 #[derive(Debug)]
 pub enum Step<W: World> {
@@ -243,7 +248,7 @@ where
     // Observer errors are diagnostic and must never roll back a committed event.
     fn emit(&mut self, entry: &Entry<W, W::Action>) {
         for observer in &self.observers {
-            if let Err(e) = observer.committed(entry) {
+            if let Err(e) = observer.committed_with_log_offset(entry, self.store.log_bytes()) {
                 self.diagnostics.push(format!("observer failed: {e}"));
             }
         }
