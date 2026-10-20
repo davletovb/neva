@@ -821,7 +821,7 @@ impl Backend for OpenAiCompatible {
                     capability: "model and bounded max_output_tokens (1..=8192) required".into(),
                 });
             }
-            let roles: Result<Vec<_>,String> = model
+            let roles: Result<Vec<_>, String> = model
                 .messages
                 .iter()
                 .map(|m| {
