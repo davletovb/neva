@@ -2,7 +2,7 @@
 //! fsynced effect receipts. World reducers never perform model/network I/O.
 use crate::core::AgentId;
 use crate::effects::{EffectCallKey, EffectResult, ModelRequest, Sampling, Usage};
-use crate::storage::{digest, read_record_limited, stable_bytes, MAX_EVENT_RECORD_BYTES};
+use crate::storage::{MAX_EVENT_RECORD_BYTES, digest, read_record_limited, stable_bytes};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -261,20 +261,26 @@ fn scan_receipts(
     let mut line = Vec::new();
     loop {
         let count = read_record_limited(&mut reader, &mut line)?;
-        if count == 0 { break; }
-        let next = offset.checked_add(count as u64).ok_or("effect ledger offset overflow")?;
+        if count == 0 {
+            break;
+        }
+        let next = offset
+            .checked_add(count as u64)
+            .ok_or("effect ledger offset overflow")?;
         if next > MAX_EFFECT_JOURNAL_BYTES {
             return Err("effect journal exceeds portable total size limit".into());
         }
         if !line.ends_with(b"\n") {
-            if allow_torn_tail { break; }
+            if allow_torn_tail {
+                break;
+            }
             return Err("effect log has uncommitted/truncated final record".into());
         }
         if line == b"\n" {
             return Err("blank committed receipt record".into());
         }
-        let receipt: Receipt = serde_json::from_slice(&line)
-            .map_err(|e| format!("invalid effect ledger: {e}"))?;
+        let receipt: Receipt =
+            serde_json::from_slice(&line).map_err(|e| format!("invalid effect ledger: {e}"))?;
         if receipt.content_hash != receipt.compute_hash()?
             || receipt.spec.key(
                 &receipt.key.trial_id,
@@ -325,8 +331,13 @@ impl EffectJournal {
             return Err("effect journal exceeds portable total size limit".into());
         }
         if length < physical {
-            let f = OpenOptions::new().write(true).open(&path).map_err(|e| e.to_string())?;
-            f.set_len(length).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+            let f = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .map_err(|e| e.to_string())?;
+            f.set_len(length)
+                .and_then(|_| f.sync_all())
+                .map_err(|e| e.to_string())?;
         }
         Ok(Self {
             path,
@@ -393,7 +404,10 @@ impl EffectJournal {
             return Err("effect receipt exceeds portable record size limit".into());
         }
         let total = fs::metadata(&self.path).map_err(|e| e.to_string())?.len();
-        if total.checked_add(bytes.len() as u64).is_none_or(|n| n > MAX_EFFECT_JOURNAL_BYTES) {
+        if total
+            .checked_add(bytes.len() as u64)
+            .is_none_or(|n| n > MAX_EFFECT_JOURNAL_BYTES)
+        {
             return Err("effect journal exceeds portable total size limit".into());
         }
         if let Err(e) = (|| -> std::io::Result<()> {
