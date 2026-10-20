@@ -333,6 +333,7 @@ where
         dir: &Path,
         genesis: &Genesis<W>,
         allow_torn_tail: bool,
+        trust_snapshot: bool,
     ) -> Result<(Projection<W>, u64, u64), String> {
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
@@ -356,9 +357,45 @@ where
         } else {
             None
         };
-        let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        let mut reader = BufReader::new(input);
+        let mut input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
         let mut offset = 0u64;
+        // Explicit trusted-checkpoint mode is faster, but it does NOT
+        // independently verify events before the snapshot. Normal open() and
+        // read-only validate() still independently verify the full history.
+        if trust_snapshot {
+            if let Some(ref s) = snapshot {
+                let file_len = input.metadata().map_err(|e| e.to_string())?.len();
+                if s.schema != genesis.schema
+                    || s.trial_id != genesis.trial_id
+                    || s.streams.trial != genesis.trial_id
+                    || s.sequence < s.logical_step
+                    || s.log_bytes > file_len
+                    || s.chain_head.len() != 64
+                    || !s.chain_head.bytes().all(|b| b.is_ascii_hexdigit())
+                {
+                    return Err("invalid trusted snapshot identity/bounds".into());
+                }
+                s.schedule.validate()?;
+                if s.log_bytes > 0 {
+                    input.seek(SeekFrom::Start(s.log_bytes - 1))
+                        .map_err(|e| e.to_string())?;
+                    let mut delimiter = [0u8; 1];
+                    input.read_exact(&mut delimiter).map_err(|e| e.to_string())?;
+                    if delimiter != [b'\n'] {
+                        return Err("trusted snapshot offset is not an event boundary".into());
+                    }
+                }
+                input.seek(SeekFrom::Start(s.log_bytes)).map_err(|e| e.to_string())?;
+                state = Projection {
+                    world: s.world.clone(), schedule: s.schedule.clone(),
+                    streams: s.streams.clone(), sequence: s.sequence,
+                    logical_step: s.logical_step, chain_head: s.chain_head.clone(),
+                };
+                offset = s.log_bytes;
+                matched = Some(state.clone());
+            }
+        }
+        let mut reader = BufReader::new(input);
         let mut line = Vec::new();
         loop {
             let count = read_record_limited(&mut reader, &mut line)?;
@@ -412,7 +449,7 @@ where
             return Err("invalid read-only manifest".into());
         }
         genesis.initial_schedule.validate()?;
-        let (state, offset, _) = Self::replay_history(dir, &genesis, false)?;
+        let (state, offset, _) = Self::replay_history(dir, &genesis, false, false)?;
         Ok(ReadOnly {
             genesis,
             world: state.world,
@@ -426,6 +463,16 @@ where
     }
 
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_mode(dir, false)
+    }
+
+    /// Faster resume from a caller-*trusted* snapshot. Only verifies the
+    /// suffix after the snapshot. Use inspect_read_only for full validation.
+    pub fn open_trusted(dir: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_mode(dir, true)
+    }
+
+    fn open_mode(dir: impl AsRef<Path>, trust_snapshot: bool) -> Result<Self, String> {
         let dir = dir.as_ref();
         let lock = lock_dir(dir)?;
         // The exclusive writer lease allows discarding an abandoned
@@ -441,7 +488,7 @@ where
             return Err("unsupported manifest/trial schema".into());
         }
         genesis.initial_schedule.validate()?;
-        let (projected, durable_length, file_length) = Self::replay_history(dir, &genesis, true)?;
+        let (projected, durable_length, file_length) = Self::replay_history(dir, &genesis, true, trust_snapshot)?;
         if durable_length < file_length {
             let f = OpenOptions::new()
                 .write(true)
