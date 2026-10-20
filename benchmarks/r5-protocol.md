@@ -11,7 +11,15 @@ Nx faster" would be scientifically invalid.
 ## Measurement commands (manual only)
 
 On a dedicated Linux host with Rust plus the isolated archived Python
-dependencies installed:
+dependencies installed. Fetch the frozen archive branch into a separate
+worktree first; the archived source is intentionally absent from Rust main:
+
+```sh
+git worktree add --detach ../hiyal-python-reference archive/hiyal-python-pre-r5
+export HIYAL_LEGACY_SOURCE="$(cd ../hiyal-python-reference/hiyal-python && pwd)"
+```
+
+Then record provenance and run workloads (manual only):
 
 ```sh
 git rev-parse HEAD
