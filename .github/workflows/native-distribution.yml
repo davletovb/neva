@@ -1,12 +1,15 @@
-# Explicit release validation only: not on ordinary pushes or PR edits.
+# Cost-controlled R5 release qualification. No ordinary PR or main pushes.
+# Manually dispatch against an R5 branch, or validate an explicit v* tag.
 name: Native distribution
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
+
 permissions:
   contents: read
+
 jobs:
   package:
     strategy:
@@ -20,29 +23,66 @@ jobs:
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Rust test
-        run: cargo test --workspace --locked
-      - name: Build release binary
-        run: cargo build --locked --release --bin hiyal
-      - name: Stage portable package
+      - name: Record Rust toolchain
         shell: bash
         run: |
+          rustc --version
+          cargo --version
+      - name: Rust-native workspace and corruption tests
+        run: cargo test --workspace --locked
+      - name: Release build
+        run: cargo build --locked --release --bin hiyal
+      - name: Native binary smoke, custom model, no Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          binary="target/release/hiyal"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then binary="${binary}.exe"; fi
+          "$binary" run examples/counter.toml "$work/trial"
+          "$binary" validate "$work/trial"
+          "$binary" resume "$work/trial" 2
+          "$binary" export "$work/trial" "$work/summary.jsonl"
+          test -s "$work/summary.jsonl"
+          cargo run --quiet --locked -p hiyal-custom-model-example -- run "$work/native" 3
+          cargo run --quiet --locked -p hiyal-custom-model-example -- resume "$work/native" 2
+          cargo run --quiet --locked -p hiyal-custom-model-example -- inspect "$work/native"
+          rm -rf "$work"
+      - name: Stage portable artifacts and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p dist
           binary="target/release/hiyal"
           if [[ "${{ runner.os }}" == "Windows" ]]; then binary="${binary}.exe"; fi
-          cp "$binary" "dist/"
-          cp README.md LICENSE "dist/"
-          cp docs/r4-native.md "dist/"
+          cp "$binary" dist/
+          cp README.md LICENSE Cargo.lock docs/r5-release.md dist/
+          {
+            echo "source_sha=$(git rev-parse HEAD)"
+            echo "target=${{ matrix.triple }}"
+            echo "rustc=$(rustc --version)"
+            echo "cargo=$(cargo --version)"
+            echo "schema=1"
+          } > dist/BUILD.txt
+          (
+            cd dist
+            if command -v sha256sum >/dev/null; then
+              sha256sum hiyal* > SHA256SUMS
+            else
+              shasum -a 256 hiyal* > SHA256SUMS
+            fi
+          )
       - uses: actions/upload-artifact@v4
         with:
           name: hiyal-${{ matrix.triple }}
           path: dist/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
