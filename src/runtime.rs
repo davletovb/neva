@@ -249,7 +249,18 @@ pub struct EffectJournal {
 
 /// Per-record cap for receipts (same bound as durable events). Total file
 /// bound also caps aggregate replay indexing and avoids unbounded history.
-pub const MAX_EFFECT_JOURNAL_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_EFFECT_JOURNAL_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Reserve the worst-case portable record size for every *new* effect before
+/// any backend dispatch. Never bill a request we already know cannot journal.
+fn ensure_effect_capacity(current: u64, pending: usize) -> Result<(), String> {
+    let reserved = (pending as u64).checked_mul(MAX_EVENT_RECORD_BYTES as u64)
+        .ok_or("effect journal reservation overflow")?;
+    if current.checked_add(reserved).is_none_or(|bytes| bytes > MAX_EFFECT_JOURNAL_BYTES) {
+        return Err("effect journal has insufficient capacity for pending requests".into());
+    }
+    Ok(())
+}
 
 /// Iterate independently verified lines; writer mode tolerates only a final
 /// unfinished fragment and may truncate it under its exclusive writer lock.
@@ -497,6 +508,17 @@ impl EffectJournal {
         if self.poisoned && !pending.is_empty() {
             return Err("effect ledger poisoned; reopen/recover before generating".into());
         }
+        if !pending.is_empty() {
+            let existing = fs::metadata(&self.path).map_err(|e| e.to_string())?.len();
+            ensure_effect_capacity(existing, pending.len())?;
+            // Leave room for the billing status and even a compact failure
+            // receipt. An oversized request cannot be dispatched safely.
+            for (_, spec) in &pending {
+                if stable_bytes(spec)?.len() >= MAX_EVENT_RECORD_BYTES - 4096 {
+                    return Err("effect request too large to journal safely".into());
+                }
+            }
+        }
         let sem = Arc::new(Semaphore::new(concurrency));
         let mut jobs = JoinSet::new();
         for (key, spec) in pending {
@@ -527,7 +549,7 @@ impl EffectJournal {
                 };
                 let billing = backend.billing_disposition(&spec, &response);
                 let provider = backend.effective_provider(&spec);
-                Ok::<_, String>(Receipt {
+                let mut receipt = Receipt {
                     key,
                     spec,
                     result: response,
@@ -535,7 +557,18 @@ impl EffectJournal {
                     effective_provider: provider,
                     effective_model: model,
                     content_hash: String::new(),
-                })
+                };
+                if stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
+                    // Do not discard potentially billable results: persist a
+                    // compact, keyed failed receipt and require reconciliation.
+                    receipt.result = EffectResult::Failed {
+                        category: "response_too_large".into(),
+                        message: "response exceeded portable journal limit".into(),
+                    };
+                    receipt.billing = BillingDisposition::Unknown;
+                    receipt.effective_model = None;
+                }
+                Ok::<_, String>(receipt)
             });
         }
         // Always join all requests, even if one receipt append fails.
@@ -1756,5 +1789,19 @@ mod http_tests {
         assert!(wire.contains("POST /v1/chat/completions"));
         assert!(wire.contains("\"content\":\"hello\""));
         assert!(wire.contains("\"model\":\"fixed-v1\""));
+    }
+}
+
+#[cfg(test)]
+mod r5_journal_capacity_tests {
+    use super::*;
+
+    #[test]
+    fn capacity_is_reserved_for_all_pending_effects_before_dispatch() {
+        assert!(ensure_effect_capacity(0, 32).is_ok());
+        assert!(ensure_effect_capacity(1, 32).is_err());
+        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64, 1).is_ok());
+        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES - MAX_EVENT_RECORD_BYTES as u64 + 1, 1).is_err());
+        assert!(ensure_effect_capacity(MAX_EFFECT_JOURNAL_BYTES + 1, 0).is_err());
     }
 }
