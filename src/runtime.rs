@@ -79,6 +79,11 @@ impl Receipt {
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
+    /// Restore budget and effect quota before any new provider dispatch.
+    fn recover_admission(&self, _dir: &Path,
+        _receipts: &BTreeMap<EffectCallKey, Receipt>) -> Result<(), String> {
+        Ok(())
+    }
     /// Called *after* the timed-out future has been cancelled. The provider
     /// may have processed/billed the request, so this only updates breaker
     /// state; it never retries or refunds the uncertain transaction.
