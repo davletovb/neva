@@ -227,11 +227,14 @@ impl ReplayBackend {
 /// Single-writer file lease for standalone effect journals.
 struct EffectWriterLock {
     path: PathBuf,
-    file: std::fs::File,
+    file: Option<std::fs::File>,
 }
 impl Drop for EffectWriterLock {
     fn drop(&mut self) {
-        let _ = self.file.sync_all();
+        if let Some(file) = self.file.take() {
+            let _ = file.sync_all();
+            drop(file);
+        }
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -307,7 +310,7 @@ impl EffectJournal {
             .map_err(|e| format!("effect journal already open or stale lock: {e}"))?;
         let lock = EffectWriterLock {
             path: lock_path,
-            file: lock_file,
+            file: Some(lock_file),
         };
         let path = dir.as_ref().join("effects.jsonl");
         if !path.exists() {
