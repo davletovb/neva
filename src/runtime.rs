@@ -2,13 +2,13 @@
 //! fsynced effect receipts. World reducers never perform model/network I/O.
 use crate::core::AgentId;
 use crate::effects::{EffectCallKey, EffectResult, ModelRequest, Sampling, Usage};
-use crate::storage::{digest, stable_bytes};
+use crate::storage::{digest, read_record_limited, stable_bytes, MAX_EVENT_RECORD_BYTES};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     future::Future,
-    io::Write,
+    io::{BufReader, Write},
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -244,6 +244,53 @@ pub struct EffectJournal {
     owning_trial: Option<String>,
 }
 
+/// Per-record cap for receipts (same bound as durable events). Total file
+/// bound also caps aggregate replay indexing and avoids unbounded history.
+pub const MAX_EFFECT_JOURNAL_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Iterate independently verified lines; writer mode tolerates only a final
+/// unfinished fragment and may truncate it under its exclusive writer lock.
+fn scan_receipts(
+    path: &Path,
+    allow_torn_tail: bool,
+    mut on_receipt: impl FnMut(Receipt) -> Result<(), String>,
+) -> Result<u64, String> {
+    let input = File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(input);
+    let mut offset = 0u64;
+    let mut line = Vec::new();
+    loop {
+        let count = read_record_limited(&mut reader, &mut line)?;
+        if count == 0 { break; }
+        let next = offset.checked_add(count as u64).ok_or("effect ledger offset overflow")?;
+        if next > MAX_EFFECT_JOURNAL_BYTES {
+            return Err("effect journal exceeds portable total size limit".into());
+        }
+        if !line.ends_with(b"\n") {
+            if allow_torn_tail { break; }
+            return Err("effect log has uncommitted/truncated final record".into());
+        }
+        if line == b"\n" {
+            return Err("blank committed receipt record".into());
+        }
+        let receipt: Receipt = serde_json::from_slice(&line)
+            .map_err(|e| format!("invalid effect ledger: {e}"))?;
+        if receipt.content_hash != receipt.compute_hash()?
+            || receipt.spec.key(
+                &receipt.key.trial_id,
+                receipt.key.logical_step,
+                receipt.key.agent_id,
+                receipt.key.call_index,
+            )? != receipt.key
+        {
+            return Err("effect ledger receipt hash/request identity mismatch".into());
+        }
+        on_receipt(receipt)?;
+        offset = next;
+    }
+    Ok(offset)
+}
+
 impl EffectJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let lock_path = dir.as_ref().join(".effects-writer.lock");
@@ -266,42 +313,20 @@ impl EffectJournal {
                 .map_err(|e| e.to_string())?;
             crate::storage::sync_trial_directory(dir.as_ref())?;
         }
-        let raw = fs::read(&path).map_err(|e| e.to_string())?;
-        let length = raw
-            .iter()
-            .rposition(|c| *c == b'\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
         let mut receipts = BTreeMap::new();
-        for line in raw[..length]
-            .split(|c| *c == b'\n')
-            .filter(|x| !x.is_empty())
-        {
-            let receipt: Receipt =
-                serde_json::from_slice(line).map_err(|e| format!("invalid effect ledger: {e}"))?;
-            if receipt.content_hash != receipt.compute_hash()? {
-                return Err("effect ledger receipt hash mismatch".into());
+        let length = scan_receipts(&path, true, |receipt| {
+            if receipts.insert(receipt.key.clone(), receipt).is_some() {
+                return Err("duplicate effect ledger key".into());
             }
-            let key = &receipt.key;
-            if receipt.spec.key(
-                &key.trial_id,
-                key.logical_step,
-                key.agent_id,
-                key.call_index,
-            )? != *key
-                || receipts.insert(key.clone(), receipt).is_some()
-            {
-                return Err("duplicate/mismatched effect ledger key".into());
-            }
+            Ok(())
+        })?;
+        let physical = fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        if physical > MAX_EFFECT_JOURNAL_BYTES {
+            return Err("effect journal exceeds portable total size limit".into());
         }
-        if length < raw.len() {
-            let f = OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .map_err(|e| e.to_string())?;
-            f.set_len(length as u64)
-                .and_then(|_| f.sync_all())
-                .map_err(|e| e.to_string())?;
+        if length < physical {
+            let f = OpenOptions::new().write(true).open(&path).map_err(|e| e.to_string())?;
+            f.set_len(length).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
         }
         Ok(Self {
             path,
@@ -323,26 +348,14 @@ impl EffectJournal {
 
     /// Read-only ledger validation: no writer lock, creation or truncation.
     pub fn inspect_read_only(dir: impl AsRef<Path>, trial: &str) -> Result<usize, String> {
-        let raw = fs::read(dir.as_ref().join("effects.jsonl")).map_err(|e| e.to_string())?;
-        if !raw.is_empty() && !raw.ends_with(b"\n") {
-            return Err("effect log has uncommitted/truncated final record".into());
-        }
-        let mut keys = std::collections::BTreeSet::new();
-        for line in raw.split(|b| *b == b'\n').filter(|row| !row.is_empty()) {
-            let receipt: Receipt = serde_json::from_slice(line).map_err(|e| e.to_string())?;
-            let key = &receipt.key;
-            if key.trial_id != trial
-                || receipt.content_hash != receipt.compute_hash()?
-                || receipt
-                    .spec
-                    .key(trial, key.logical_step, key.agent_id, key.call_index)?
-                    != *key
-                || !keys.insert(key.clone())
-            {
+        let mut seen = std::collections::BTreeSet::new();
+        scan_receipts(&dir.as_ref().join("effects.jsonl"), false, |receipt| {
+            if receipt.key.trial_id != trial || !seen.insert(receipt.key.clone()) {
                 return Err("effect ledger failed read-only trial/integrity check".into());
             }
-        }
-        Ok(keys.len())
+            Ok(())
+        })?;
+        Ok(seen.len())
     }
 
     pub fn open_existing(dir: impl AsRef<Path>) -> Result<Self, String> {
@@ -376,6 +389,13 @@ impl EffectJournal {
         receipt.content_hash = receipt.compute_hash()?;
         let mut bytes = stable_bytes(&receipt)?;
         bytes.push(b'\n');
+        if bytes.len() > MAX_EVENT_RECORD_BYTES {
+            return Err("effect receipt exceeds portable record size limit".into());
+        }
+        let total = fs::metadata(&self.path).map_err(|e| e.to_string())?.len();
+        if total.checked_add(bytes.len() as u64).is_none_or(|n| n > MAX_EFFECT_JOURNAL_BYTES) {
+            return Err("effect journal exceeds portable total size limit".into());
+        }
         if let Err(e) = (|| -> std::io::Result<()> {
             let mut f = OpenOptions::new().append(true).open(&self.path)?;
             f.write_all(&bytes)?;
