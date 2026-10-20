@@ -246,12 +246,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hiyal-r4-truncate-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut trial = Trial::create(
-            &dir, "truncated", 2,
+            &dir,
+            "truncated",
+            2,
             &kind(1, false, "fixed-v1", "scripted").unwrap(),
             Counter { total: 0 },
-            Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
-            Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin,
-        ).unwrap();
+            Increment {
+                amount: 1,
+                model: false,
+                model_id: "fixed-v1".into(),
+                provider: "scripted".into(),
+            },
+            Arc::new(ScriptedBackend),
+            vec![AgentId(0)],
+            Scheduling::RoundRobin,
+        )
+        .unwrap();
         trial.run_attempts(2).await.unwrap();
         let verified = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
         // Simulate malicious storage truncation after the read-only verification.
