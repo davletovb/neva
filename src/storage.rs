@@ -68,6 +68,30 @@ pub fn digest<T: Serialize>(value: &T) -> Result<String, String> {
     Ok(crate::core::hex_digest(&hash))
 }
 
+/// In-manifest producer identity is hash-chained through the genesis hash.
+/// Optional values remain unknown unless supplied by build automation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BuildProvenance {
+    pub engine_version: String,
+    pub rustc_version: Option<String>,
+    pub target: String,
+    pub source_revision: Option<String>,
+    /// SHA-256 of the engine checkout lockfile, not an external consumer's.
+    pub engine_lock_sha256: String,
+}
+impl BuildProvenance {
+    pub fn current() -> Self {
+        Self {
+            engine_version: env!("CARGO_PKG_VERSION").into(),
+            rustc_version: option_env!("HIYAL_RUSTC_VERSION").map(str::to_owned),
+            target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            source_revision: option_env!("GITHUB_SHA").map(str::to_owned),
+            engine_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!("../Cargo.lock"))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "W: Serialize", deserialize = "W: DeserializeOwned"))]
 pub struct Genesis<W> {
@@ -77,6 +101,8 @@ pub struct Genesis<W> {
     pub initial_schedule: Schedule,
     pub initial_streams: Streams,
     pub world_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildProvenance>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
