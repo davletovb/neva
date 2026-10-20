@@ -3,7 +3,7 @@
 use crate::effects::{EffectCallKey, EffectResult, ModelRequest};
 use crate::runtime::{Backend, BoxResult, EffectSpec};
 use crate::storage::{digest, read_metadata_limited};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -271,24 +271,34 @@ impl Backend for GovernedBackend {
                 let saved: BudgetConfig = serde_json::from_slice(&read_metadata_limited(&file)?)
                     .map_err(|e| e.to_string())?;
                 if &saved != config {
-                    return Err("trial budget/pricing changed across resume; refuse live dispatch".into());
+                    return Err(
+                        "trial budget/pricing changed across resume; refuse live dispatch".into(),
+                    );
                 }
             } else {
                 if !receipts.is_empty() {
-                    return Err("existing trial lacks durable budget config; refuse live dispatch".into());
+                    return Err(
+                        "existing trial lacks durable budget config; refuse live dispatch".into(),
+                    );
                 }
                 let serialized = serde_json::to_vec(config).map_err(|e| e.to_string())?;
-                let mut out = std::fs::OpenOptions::new().write(true).create_new(true)
-                    .open(&file).map_err(|e| e.to_string())?;
+                let mut out = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&file)
+                    .map_err(|e| e.to_string())?;
                 use std::io::Write;
-                out.write_all(&serialized).and_then(|_| out.sync_all()).map_err(|e| e.to_string())?;
+                out.write_all(&serialized)
+                    .and_then(|_| out.sync_all())
+                    .map_err(|e| e.to_string())?;
                 crate::storage::sync_trial_directory(dir)?;
             }
             let mut used = 0u64;
             for receipt in receipts.values() {
                 if receipt.billing != crate::runtime::BillingDisposition::NotCharged {
                     if let EffectSpec::Model(request) = &receipt.spec {
-                        used = used.checked_add(config.reserve_amount(request)?)
+                        used = used
+                            .checked_add(config.reserve_amount(request)?)
                             .ok_or("durable budget accounting overflow")?;
                     }
                 }
@@ -296,7 +306,8 @@ impl Backend for GovernedBackend {
             if used > config.maximum_micro_usd {
                 return Err("recorded provider reservations exceed trial cap".into());
             }
-            self.remaining.store(config.maximum_micro_usd - used, Ordering::SeqCst);
+            self.remaining
+                .store(config.maximum_micro_usd - used, Ordering::SeqCst);
         }
         if receipts.len() as u64 > self.max_total_effects {
             return Err("past effect count exceeds configured cap".into());
