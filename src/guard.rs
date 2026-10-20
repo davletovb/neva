@@ -2,7 +2,9 @@
 //! Limits are process-local reservations; they are not provider billing data.
 use crate::effects::{EffectCallKey, EffectResult, ModelRequest};
 use crate::runtime::{Backend, BoxResult, EffectSpec};
-use crate::storage::digest;
+use crate::storage::{digest, read_metadata_limited};
+use serde::{Serialize, Deserialize};
+use std::path::Path;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -13,7 +15,8 @@ use std::{
 
 /// Monetary units are integer micro-USD; a reservation is NEVER refunded on
 /// transport failure, because a provider might already have billed the call.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BudgetConfig {
     pub maximum_micro_usd: u64,
     pub prompt_micro_usd_per_token: u64,
@@ -255,6 +258,52 @@ impl GovernedBackend {
     }
 }
 impl Backend for GovernedBackend {
+    /// Bind the declared cap to trial files and reconstruct conservative
+    /// previously reserved spend while the Trial holds both writer leases.
+    fn recover_admission(
+        &self,
+        dir: &Path,
+        receipts: &BTreeMap<EffectCallKey, crate::runtime::Receipt>,
+    ) -> Result<(), String> {
+        if let Some(config) = &self.budget {
+            let file = dir.join("trial-budget.json");
+            if file.exists() {
+                let saved: BudgetConfig = serde_json::from_slice(&read_metadata_limited(&file)?)
+                    .map_err(|e| e.to_string())?;
+                if &saved != config {
+                    return Err("trial budget/pricing changed across resume; refuse live dispatch".into());
+                }
+            } else {
+                if !receipts.is_empty() {
+                    return Err("existing trial lacks durable budget config; refuse live dispatch".into());
+                }
+                let serialized = serde_json::to_vec(config).map_err(|e| e.to_string())?;
+                let mut out = std::fs::OpenOptions::new().write(true).create_new(true)
+                    .open(&file).map_err(|e| e.to_string())?;
+                use std::io::Write;
+                out.write_all(&serialized).and_then(|_| out.sync_all()).map_err(|e| e.to_string())?;
+                crate::storage::sync_trial_directory(dir)?;
+            }
+            let mut used = 0u64;
+            for receipt in receipts.values() {
+                if receipt.billing != crate::runtime::BillingDisposition::NotCharged {
+                    if let EffectSpec::Model(request) = &receipt.spec {
+                        used = used.checked_add(config.reserve_amount(request)?)
+                            .ok_or("durable budget accounting overflow")?;
+                    }
+                }
+            }
+            if used > config.maximum_micro_usd {
+                return Err("recorded provider reservations exceed trial cap".into());
+            }
+            self.remaining.store(config.maximum_micro_usd - used, Ordering::SeqCst);
+        }
+        if receipts.len() as u64 > self.max_total_effects {
+            return Err("past effect count exceeds configured cap".into());
+        }
+        self.started.store(receipts.len() as u64, Ordering::SeqCst);
+        Ok(())
+    }
     fn on_timeout<'a>(
         &'a self,
         spec: &'a EffectSpec,
