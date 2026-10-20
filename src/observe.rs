@@ -8,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -51,6 +51,44 @@ impl EventSummary {
     }
 }
 
+/// Project exactly the already-verified committed prefix, even if a writer
+/// appends additional events after inspection. One writer for CLI and recovery
+/// prevents drift in delimiters, blank-line handling and JSON shape.
+pub fn write_summaries<W>(
+    dir: &Path,
+    verified: &crate::storage::ReadOnly<W>,
+    out: &mut impl Write,
+) -> Result<(), String>
+where
+    W: World + Serialize + DeserializeOwned,
+    W::Action: Serialize + DeserializeOwned + Clone,
+{
+    let source = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(source.take(verified.log_bytes));
+    let mut line = Vec::new();
+    let mut read_bytes = 0u64;
+    loop {
+        line.clear();
+        let count = reader.read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        read_bytes += count as u64;
+        if !line.ends_with(b"\n") {
+            return Err("export source has an incomplete event record".into());
+        }
+        let entry: Entry<W, W::Action> =
+            serde_json::from_slice(&line).map_err(|e| e.to_string())?;
+        serde_json::to_writer(&mut *out, &EventSummary::from_entry(&entry))
+            .map_err(|e| e.to_string())?;
+        out.write_all(b"\n").map_err(|e| e.to_string())?;
+    }
+    if read_bytes != verified.log_bytes {
+        return Err("export source changed after verification".into());
+    }
+    Ok(())
+}
+
 pub struct JsonlObserver<W: World> {
     file: Mutex<File>,
     _world: PhantomData<fn() -> W>,
@@ -69,23 +107,9 @@ where
     /// Run only while holding the trial's writer lease.
     pub fn recover(dir: impl AsRef<Path>) -> Result<Self, String> {
         let dir = dir.as_ref();
-        let _: crate::storage::ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(dir)?;
+        let verified = Store::<W, W::Action>::inspect_read_only(dir)?;
         let path = Self::path(dir);
-        atomic_write_with(&path, |out| {
-            let file = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-            for line in BufReader::new(file).lines() {
-                let line = line.map_err(|e| e.to_string())?;
-                if line.is_empty() {
-                    return Err("empty committed event".into());
-                }
-                let event: Entry<W, W::Action> =
-                    serde_json::from_str(&line).map_err(|e| e.to_string())?;
-                let summary = EventSummary::from_entry(&event);
-                serde_json::to_writer(&mut *out, &summary).map_err(|e| e.to_string())?;
-                out.write_all(b"\n").map_err(|e| e.to_string())?;
-            }
-            Ok(())
-        })?;
+        atomic_write_with(&path, |out| write_summaries::<W>(dir, &verified, out))?;
         let file = OpenOptions::new()
             .append(true)
             .open(path)
@@ -165,6 +189,57 @@ mod tests {
             fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(),
             first
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+
+    #[tokio::test]
+    async fn rejected_and_control_records_are_projected_live_and_on_recovery() {
+        let dir = std::env::temp_dir().join(format!("hiyal-r4-all-outcomes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut trial = Trial::create(
+                &dir, "all-outcomes", 44,
+                &kind(1, false, "fixed-v1", "scripted").unwrap(),
+                Counter { total: u64::MAX },
+                Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
+                Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin,
+            ).unwrap();
+            trial.observe_with(Arc::new(JsonlObserver::recover(&dir).unwrap()));
+            trial.pause_actor(AgentId(0)).unwrap();
+            trial.resume_actor(AgentId(0)).unwrap();
+            assert_eq!(trial.run_attempts(1).await.unwrap(), 0);
+            assert!(trial.diagnostics.is_empty());
+            trial.checkpoint().unwrap();
+        }
+        let live = fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap();
+        let kinds: Vec<String> = String::from_utf8(live.clone()).unwrap().lines().map(|line| {
+            serde_json::from_str::<EventSummary>(line).unwrap().kind
+        }).collect();
+        assert_eq!(kinds, ["control", "control", "rejected"]);
+        let _: JsonlObserver<Counter> = JsonlObserver::recover(&dir).unwrap();
+        assert_eq!(fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(), live);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn write_summaries_rejects_truncated_verified_prefix() {
+        let dir = std::env::temp_dir().join(format!("hiyal-r4-truncate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let trial = Trial::create(
+                &dir, "truncated", 2,
+                &kind(1, false, "fixed-v1", "scripted").unwrap(),
+                Counter { total: 0 },
+                Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
+                Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin,
+            ).unwrap();
+            let verified = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
+            let mut output = Vec::new();
+            write_summaries(&dir, &verified, &mut output).unwrap();
+            assert!(output.is_empty());
+            drop(trial);
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 
