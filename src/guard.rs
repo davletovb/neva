@@ -156,7 +156,7 @@ impl GovernedBackend {
     }
     fn reserve(counter: &AtomicU64, units: u64) -> bool {
         counter
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |now| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |now| {
                 now.checked_sub(units)
             })
             .is_ok()
@@ -211,7 +211,7 @@ impl GovernedBackend {
     ) -> Result<EffectResult, String> {
         if self
             .started
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
                 if old < self.max_total_effects {
                     old.checked_add(1)
                 } else {
