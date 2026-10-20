@@ -59,7 +59,13 @@ where
         projector: &M,
         state: &mut W,
     ) -> Result<(), String> {
-        let Outcome::Accepted { action, state_hash, before_apply_streams, .. } = &event.outcome else {
+        let Outcome::Accepted {
+            action,
+            state_hash,
+            before_apply_streams,
+            ..
+        } = &event.outcome
+        else {
             return Ok(());
         };
         let mut next = state.clone();
@@ -153,7 +159,10 @@ where
     M: MetricProjector<W>,
 {
     fn committed(&self, event: &Entry<W, W::Action>) -> Result<(), String> {
-        let mut state = self.world.lock().map_err(|_| "metrics world lock poisoned")?;
+        let mut state = self
+            .world
+            .lock()
+            .map_err(|_| "metrics world lock poisoned")?;
         let mut file = self.file.lock().map_err(|_| "metrics lock poisoned")?;
         Self::write_event(&mut *file, event, &self.projector, &mut state)?;
         // Derived data is reconstructed from fsynced events on restart.
