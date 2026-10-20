@@ -99,6 +99,15 @@ fn read_kind(path: &Path) -> Result<String, String> {
 /// Export exactly one read-only verified event-log prefix. Stage in the same
 /// destination directory and publish by hard-linking (create-new semantics),
 /// so a failure or concurrent exporter cannot leave a partial public file.
+fn marker_actively_locked(path: &Path) -> Result<bool, String> {
+    if !path.exists() { return Ok(false); }
+    let file = fs::OpenOptions::new().read(true).write(true).open(path)
+        .map_err(|e| e.to_string())?;
+    // Marker files survive crashes. Only OS lock contention is evidence of
+    // an active writer; the OS releases locks on SIGKILL/process exit.
+    Ok(file.try_lock().is_err())
+}
+
 fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
     use std::io::Write;
 
@@ -318,8 +327,8 @@ async fn launch() -> Result<(), String> {
                     || meta.intervention != "counter-shock"
                     || meta.parameters != expected_parameters
                     || prior.sequence != 0
-                    || existing.join(".writer.lock").exists()
-                    || existing.join(".effects-writer.lock").exists()
+                    || marker_actively_locked(&existing.join(".writer.lock"))?
+                    || marker_actively_locked(&existing.join(".effects-writer.lock"))?
                 {
                     return Err("partial fork cannot be safely recreated".into());
                 }
