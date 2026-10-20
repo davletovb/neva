@@ -113,8 +113,7 @@ fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
     }
     // A process-unique staging name prevents two independent exports from
     // interfering; create_new refuses stale files rather than deleting them.
-    static EXPORT_NONCE: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(0);
+    static EXPORT_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nonce = EXPORT_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let temporary = output.with_extension(format!("hiyal-{}-{nonce}.tmp", std::process::id()));
     let mut created = false;
