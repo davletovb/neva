@@ -191,6 +191,7 @@ mod tests {
             fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(),
             first
         );
+        drop(_observer);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -239,34 +240,29 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
-    #[test]
-    fn write_summaries_rejects_truncated_verified_prefix() {
+    #[tokio::test]
+    async fn write_summaries_rejects_truncated_verified_prefix() {
+        use std::io::Write;
         let dir = std::env::temp_dir().join(format!("hiyal-r4-truncate-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        {
-            let trial = Trial::create(
-                &dir,
-                "truncated",
-                2,
-                &kind(1, false, "fixed-v1", "scripted").unwrap(),
-                Counter { total: 0 },
-                Increment {
-                    amount: 1,
-                    model: false,
-                    model_id: "fixed-v1".into(),
-                    provider: "scripted".into(),
-                },
-                Arc::new(ScriptedBackend),
-                vec![AgentId(0)],
-                Scheduling::RoundRobin,
-            )
-            .unwrap();
-            let verified = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
-            let mut output = Vec::new();
-            write_summaries(&dir, &verified, &mut output).unwrap();
-            assert!(output.is_empty());
-            drop(trial);
-        }
+        let mut trial = Trial::create(
+            &dir, "truncated", 2,
+            &kind(1, false, "fixed-v1", "scripted").unwrap(),
+            Counter { total: 0 },
+            Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
+            Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin,
+        ).unwrap();
+        trial.run_attempts(2).await.unwrap();
+        let verified = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
+        // Simulate malicious storage truncation after the read-only verification.
+        let path = dir.join("events.jsonl");
+        let f = fs::OpenOptions::new().write(true).open(path).unwrap();
+        f.set_len(verified.log_bytes - 1).unwrap();
+        drop(f);
+        let mut out = Vec::new();
+        assert!(write_summaries(&dir, &verified, &mut out).is_err());
+        out.flush().unwrap();
+        drop(trial);
         fs::remove_dir_all(dir).unwrap();
     }
 
