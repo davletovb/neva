@@ -139,7 +139,22 @@ where
         backend: Arc<dyn Backend>,
         replay_only: bool,
     ) -> Result<Self, String> {
-        let store = Store::open(&dir)?;
+        Self::resume_mode(dir, kind, policy, backend, replay_only, false)
+    }
+
+    /// Bypasses historical prefix replay by trusting the latest snapshot.
+    /// Run `Store::inspect_read_only` for full independent integrity checks.
+    pub fn resume_trusted(
+        dir: impl AsRef<Path>, kind: &str, policy: P,
+        backend: Arc<dyn Backend>, replay_only: bool,
+    ) -> Result<Self, String> {
+        Self::resume_mode(dir, kind, policy, backend, replay_only, true)
+    }
+
+    fn resume_mode(dir: impl AsRef<Path>, kind: &str, policy: P,
+                   backend: Arc<dyn Backend>, replay_only: bool, trust_snapshot: bool)
+        -> Result<Self, String> {
+        let store = if trust_snapshot { Store::open_trusted(&dir)? } else { Store::open(&dir)? };
         if store.genesis.world_kind != kind {
             return Err("wrong registered world kind".into());
         }
