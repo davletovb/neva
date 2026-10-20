@@ -17,16 +17,12 @@ pub const SCHEMA: u32 = 1;
 /// Durability of the authoritative event log. `EveryEvent` is the default;
 /// `AtCheckpoint` trades crash durability for throughput and must be opted
 /// into explicitly by the application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
+    #[default]
     EveryEvent,
     AtCheckpoint,
-}
-impl Default for Durability {
-    fn default() -> Self {
-        Self::EveryEvent
-    }
 }
 
 /// Per-record limit bounds corrupted or hostile files during streaming replay.
@@ -142,15 +138,11 @@ pub struct Genesis<W> {
 
 /// Preserve the distinction between omitted world (compact events) and
 /// an explicit JSON null world in historical full-world records.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum LegacyWorld<W> {
+    #[default]
     Missing,
     Present(W),
-}
-impl<W> Default for LegacyWorld<W> {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 impl<W> LegacyWorld<W> {
     fn is_missing(&self) -> bool {
