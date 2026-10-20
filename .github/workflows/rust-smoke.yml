@@ -136,6 +136,9 @@ jobs:
         run: |
           cargo run --locked --quiet -p hiyal-custom-world-example >/tmp/hiyal-events.jsonl
           test "$(wc -l </tmp/hiyal-events.jsonl)" -eq 6
+      - name: Independent offline custom-model smoke
+        run: cargo run --locked --quiet -p hiyal-custom-model-example
+
 
       - name: Additional release/manual lint
         if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.extended) }}
