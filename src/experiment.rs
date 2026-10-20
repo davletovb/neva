@@ -1353,15 +1353,19 @@ mod r6_interrupted_round_tests {
         }
     }
 
-
     #[derive(Clone, Serialize, Deserialize)]
-    struct Words { total: u64 }
+    struct Words {
+        total: u64,
+    }
     impl World for Words {
         type Action = String;
         type Observation = u64;
-        fn observe(&self, _: AgentId) -> Result<u64, String> { Ok(self.total) }
+        fn observe(&self, _: AgentId) -> Result<u64, String> {
+            Ok(self.total)
+        }
         fn apply(&mut self, _: AgentId, action: String) -> Result<(), String> {
-            self.total += action.len() as u64; Ok(())
+            self.total += action.len() as u64;
+            Ok(())
         }
     }
     struct OversizedRoundAction;
@@ -1377,9 +1381,18 @@ mod r6_interrupted_round_tests {
     #[tokio::test]
     async fn oversized_round_event_is_recorded_rejection_not_orphaned_receipt() {
         let dir = path();
-        let mut trial = Trial::create(&dir, "oversized-round", 91, "words.v1",
-            Words { total: 0 }, OversizedRoundAction, Arc::new(ScriptedBackend),
-            vec![AgentId(0),AgentId(1)], Scheduling::RoundRobin).unwrap();
+        let mut trial = Trial::create(
+            &dir,
+            "oversized-round",
+            91,
+            "words.v1",
+            Words { total: 0 },
+            OversizedRoundAction,
+            Arc::new(ScriptedBackend),
+            vec![AgentId(0), AgentId(1)],
+            Scheduling::RoundRobin,
+        )
+        .unwrap();
         let events = trial.run_round(2).await.unwrap();
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], Step::Rejected { .. }));
