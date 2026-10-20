@@ -767,7 +767,8 @@ where
             } => {
                 let mut next = self.world.clone();
                 if let Some(before) = before_apply_streams {
-                    before.checked_scope_progress(&expected_streams, &format!("agent/{}", actor.0))?;
+                    before
+                        .checked_scope_progress(&expected_streams, &format!("agent/{}", actor.0))?;
                     let mut reducer_rng = before.clone();
                     next.apply_with_streams(actor, action.clone(), &mut reducer_rng)?;
                     reducer_rng.checked_scope_progress(before, "world")?;
@@ -894,7 +895,9 @@ where
 
     /// Flush committed bytes, including when using checkpoint-only durability.
     pub fn sync_log(&self) -> Result<(), String> {
-        OpenOptions::new().write(true).open(self.dir.join("events.jsonl"))
+        OpenOptions::new()
+            .write(true)
+            .open(self.dir.join("events.jsonl"))
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())
     }
