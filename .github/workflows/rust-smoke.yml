@@ -8,6 +8,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'benchmarks/native/**'
       - 'src/**'
       - 'examples/**'
       - 'tests/**'
@@ -140,7 +141,7 @@ jobs:
         run: cargo run --locked --quiet -p hiyal-custom-model-example
       - name: Benchmark provenance smoke (3 native offline steps)
         run: |
-          cargo run --locked --quiet --bin hiyal-bench -- 2 3 off > /tmp/hiyal-r5-bench.jsonl
+          cargo run --locked --quiet -p hiyal-native-bench -- 2 3 off > /tmp/hiyal-r5-bench.jsonl
           grep -E '"rust_version":"rustc [0-9]+' /tmp/hiyal-r5-bench.jsonl
 
 
