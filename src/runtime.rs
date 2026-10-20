@@ -565,12 +565,16 @@ impl EffectJournal {
                 // Capture a bounded provider identity and reject unbounded
                 // model identity as an explicit failed receipt.
                 let oversized_identity = receipt.effective_provider.len() > 256
-                    || receipt.effective_model.as_ref().is_some_and(|id| id.len() > 256);
+                    || receipt
+                        .effective_model
+                        .as_ref()
+                        .is_some_and(|id| id.len() > 256);
                 if receipt.effective_provider.len() > 256 {
                     receipt.effective_provider = "provider-identity-too-long".into();
                 }
                 receipt.content_hash = receipt.compute_hash()?;
-                if oversized_identity || stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
+                if oversized_identity || stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES
+                {
                     // Size includes the final 64-byte receipt hash before any
                     // append. Preserve a compact keyed failure after a billed
                     // response; never silently redeliver the same request.
@@ -582,7 +586,10 @@ impl EffectJournal {
                     receipt.effective_model = None;
                     receipt.content_hash = receipt.compute_hash()?;
                     if stable_bytes(&receipt)?.len() + 1 > MAX_EVENT_RECORD_BYTES {
-                        return Err("effect request left insufficient room for durable failure receipt".into());
+                        return Err(
+                            "effect request left insufficient room for durable failure receipt"
+                                .into(),
+                        );
                     }
                 }
                 Ok::<_, String>(receipt)
