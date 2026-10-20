@@ -354,7 +354,8 @@ async fn policy_cannot_consume_another_agents_named_stream() {
         trial
             .step()
             .await
-            .err().expect("unauthorized draw must fail")
+            .err()
+            .expect("unauthorized draw must fail")
             .contains("unauthorized RNG stream")
     );
     assert_eq!(trial.store.sequence(), 0);
@@ -426,7 +427,8 @@ async fn reducer_cannot_consume_agents_stream() {
         trial
             .step()
             .await
-            .err().expect("unauthorized draw must fail")
+            .err()
+            .expect("unauthorized draw must fail")
             .contains("unauthorized RNG stream")
     );
     assert_eq!(trial.store.sequence(), 0);
