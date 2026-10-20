@@ -2,6 +2,7 @@
 # Manual-only R0 evidence collection. No CI or Dependabot triggers.
 set -eu
 cd "$(dirname "$0")/.."
+: "${HIYAL_LEGACY_SOURCE:?Set HIYAL_LEGACY_SOURCE to an archive-branch hiyal-python directory before running Python benchmarks}"
 mkdir -p benchmarks/results
 printf 'Repository revision: '
 git rev-parse HEAD
