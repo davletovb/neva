@@ -3,6 +3,18 @@
 name: Native distribution
 on:
   workflow_dispatch:
+  # One-time candidate qualification on this explicit release-hardening PR.
+  # Only draft->ready launches a matrix, never every commit/synchronize.
+  pull_request:
+    types: [ready_for_review]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'examples/**'
+      - 'benchmarks/native/**'
+      - '.github/workflows/native-distribution.yml'
   push:
     tags:
       - 'v*'
@@ -12,6 +24,7 @@ permissions:
 
 jobs:
   package:
+    if: github.event_name != 'pull_request' || github.head_ref == 'feat/r4-r5-release-hardening-no-benchmarks'
     strategy:
       fail-fast: false
       matrix:
