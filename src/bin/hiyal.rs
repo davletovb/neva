@@ -9,7 +9,7 @@ use hiyal::{
     research::{CounterMetrics, Sweep, ensure_observer_health, paired_forks, verify_fork},
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
-    storage::Store,
+    storage::{Durability, Store},
 };
 use serde::Deserialize;
 use std::{env, fs, path::Path, sync::Arc};
@@ -25,10 +25,12 @@ struct Config {
     scheduler: Scheduling,
     model: bool,
     model_id: Option<String>,
+    #[serde(default)]
+    durability: Durability,
 }
 fn help() -> &'static str {
     "hiyal run <config.toml> <trial-dir> [--live]\n\
-     hiyal resume <trial-dir> <attempts> [--live]\n\
+     hiyal resume <trial-dir> <attempts> [--live] [--trusted-snapshot] [--checkpoint-durability]\n\
      hiyal inspect <trial-dir>\n\
      hiyal validate <trial-dir>\n\
      hiyal export <trial-dir> <output.jsonl>\n\
@@ -97,6 +99,27 @@ fn read_kind(path: &Path) -> Result<String, String> {
 /// Export exactly one read-only verified event-log prefix. Stage in the same
 /// destination directory and publish by hard-linking (create-new semantics),
 /// so a failure or concurrent exporter cannot leave a partial public file.
+/// Acquire BOTH permanent writer marker leases and keep their OS locks held
+/// throughout verification and removal. A transient try_lock boolean opens
+/// a time-of-check/time-of-use race with a newly resumed fork writer.
+fn lock_partial_fork_for_cleanup(dir: &Path) -> Result<[fs::File; 2], String> {
+    fn lock_marker(path: &Path) -> Result<fs::File, String> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        file.try_lock()
+            .map_err(|e| format!("partial fork has active writer: {e}"))?;
+        Ok(file)
+    }
+    let event = lock_marker(&dir.join(".writer.lock"))?;
+    let effect = lock_marker(&dir.join(".effects-writer.lock"))?;
+    Ok([event, effect])
+}
+
 fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
     use std::io::Write;
 
@@ -186,6 +209,7 @@ async fn launch() -> Result<(), String> {
                 agents,
                 cfg.scheduler,
             )?;
+            trial.store.set_durability(cfg.durability)?;
             trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(cfg.attempts).await?;
             trial.checkpoint()?;
@@ -210,8 +234,19 @@ async fn launch() -> Result<(), String> {
                 .ok_or(help())?
                 .parse::<u64>()
                 .map_err(|e| e.to_string())?;
-            let live = args.get(3).is_some_and(|s| s == "--live");
-            if args.len() > 4 || (args.len() == 4 && !live) {
+            let opts = &args[3..];
+            let live = opts.iter().any(|o| o == "--live");
+            let trusted = opts.iter().any(|o| o == "--trusted-snapshot");
+            let checkpoint_durability = opts.iter().any(|o| o == "--checkpoint-durability");
+            if opts.len() > 3
+                || opts.iter().any(|o| {
+                    !matches!(
+                        o.as_str(),
+                        "--live" | "--trusted-snapshot" | "--checkpoint-durability"
+                    )
+                })
+                || opts.iter().collect::<std::collections::BTreeSet<_>>().len() != opts.len()
+            {
                 return Err(help().into());
             }
             let kind = read_kind(dir)?;
@@ -225,8 +260,23 @@ async fn launch() -> Result<(), String> {
             {
                 return Err("resume backend differs from saved trial provider".into());
             }
-            let mut trial = Trial::resume(dir, &kind, policy, backend(live)?, false)?;
-            trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
+            let backend = backend(live)?;
+            let mut trial = if trusted {
+                Trial::resume_trusted(dir, &kind, policy, backend, false)?
+            } else {
+                Trial::resume(dir, &kind, policy, backend, false)?
+            };
+            if checkpoint_durability {
+                trial.store.set_durability(Durability::AtCheckpoint)?;
+            }
+            // Derived observability remains independently verifiable; it
+            // reconstructs projections from all committed records.
+            let observer = if trusted {
+                JsonlObserver::recover_trusted(&trial.store)?
+            } else {
+                JsonlObserver::recover(dir)?
+            };
+            trial.observe_with(Arc::new(observer));
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
             ensure_observer_health(&trial.diagnostics)?;
@@ -285,6 +335,9 @@ async fn launch() -> Result<(), String> {
                         serde_json::json!({"added":shock}),
                     )
                 };
+                // Retain both leases until after the recursive removal has
+                // completed. A competing resume cannot enter the trial.
+                let _leases = lock_partial_fork_for_cleanup(existing)?;
                 let meta = verify_fork::<Counter>(existing)?;
                 let prior = Store::<Counter, u64>::inspect_read_only(existing)?;
                 if meta.parent_id != source.genesis.trial_id
@@ -294,8 +347,6 @@ async fn launch() -> Result<(), String> {
                     || meta.intervention != "counter-shock"
                     || meta.parameters != expected_parameters
                     || prior.sequence != 0
-                    || existing.join(".writer.lock").exists()
-                    || existing.join(".effects-writer.lock").exists()
                 {
                     return Err("partial fork cannot be safely recreated".into());
                 }
@@ -523,5 +574,40 @@ mod export_tests {
         assert_eq!(output.iter().filter(|b| **b == b'\n').count(), 2);
         drop(trial);
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod partial_fork_lease_tests {
+    use super::*;
+
+    #[test]
+    fn both_leases_stay_exclusive_through_cleanup_scope() {
+        let dir = std::env::temp_dir().join(format!(
+            "hiyal-fork-lease-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        {
+            let _held = lock_partial_fork_for_cleanup(&dir).unwrap();
+            for marker in [".writer.lock", ".effects-writer.lock"] {
+                let contender = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(dir.join(marker))
+                    .unwrap();
+                assert!(
+                    contender.try_lock().is_err(),
+                    "must retain {marker} until deletion"
+                );
+            }
+        }
+        let again = lock_partial_fork_for_cleanup(&dir).unwrap();
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

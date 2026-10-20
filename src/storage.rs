@@ -1,6 +1,6 @@
 //! Append-only committed transitions + rejected-attempt audit, verified replay,
-//! fsynced snapshots. The complete state is stored with each accepted event;
-//! reducers re-apply actions during restore to detect divergence.
+//! fsynced snapshots. Accepted events contain an action and world-state hash;
+//! legacy events with embedded worlds remain readable and verified.
 use crate::core::{AgentId, World, decimal_u64};
 use crate::rng::Streams;
 use crate::scheduler::Schedule;
@@ -8,16 +8,52 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
 pub const SCHEMA: u32 = 1;
+
+/// Durability of the authoritative event log. `EveryEvent` is the default;
+/// `AtCheckpoint` trades crash durability for throughput and must be opted
+/// into explicitly by the application.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Durability {
+    #[default]
+    EveryEvent,
+    AtCheckpoint,
+}
+
 /// Per-record limit bounds corrupted or hostile files during streaming replay.
 pub const MAX_EVENT_RECORD_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
 /// A size admission failure occurs before any append or in-memory state change.
 pub(crate) const EVENT_TOO_LARGE: &str = "event record exceeds portable size limit";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AppendError {
+    TooLarge,
+    Other(String),
+}
+impl std::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str(EVENT_TOO_LARGE),
+            Self::Other(s) => f.write_str(s),
+        }
+    }
+}
+impl From<String> for AppendError {
+    fn from(value: String) -> Self {
+        Self::Other(value)
+    }
+}
+impl From<&'static str> for AppendError {
+    fn from(value: &'static str) -> Self {
+        Self::Other(value.into())
+    }
+}
 
 /// Single, bounded metadata read for library, CLI and research consumers.
 pub fn read_metadata_limited(path: &Path) -> Result<Vec<u8>, String> {
@@ -61,6 +97,38 @@ pub fn digest<T: Serialize>(value: &T) -> Result<String, String> {
     Ok(crate::core::hex_digest(&hash))
 }
 
+/// In-manifest producer identity is hash-chained through the genesis hash.
+/// Optional values remain unknown unless supplied by build automation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BuildProvenance {
+    pub engine_version: String,
+    pub rustc_version: Option<String>,
+    pub target: String,
+    pub source_revision: Option<String>,
+    /// Whether the own source checkout had tracked changes at compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dirty: Option<bool>,
+    /// SHA-256 of the engine checkout lockfile, not an external consumer's.
+    // Keep schema-v1 wire spelling for existing genesis hashes.
+    #[serde(rename = "engine_lock_sha256")]
+    pub engine_checkout_lock_sha256: String,
+}
+impl BuildProvenance {
+    pub fn current() -> Self {
+        Self {
+            engine_version: env!("CARGO_PKG_VERSION").into(),
+            rustc_version: Some(env!("HIYAL_RUSTC_VERSION").into()),
+            target: env!("HIYAL_BUILD_TARGET").into(),
+            source_revision: option_env!("HIYAL_SOURCE_REVISION").map(str::to_owned),
+            source_dirty: option_env!("HIYAL_SOURCE_DIRTY").map(|s| s == "true"),
+            engine_checkout_lock_sha256: crate::core::hex_digest(&Sha256::digest(include_bytes!(
+                "../Cargo.lock"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "W: Serialize", deserialize = "W: DeserializeOwned"))]
 pub struct Genesis<W> {
@@ -70,6 +138,43 @@ pub struct Genesis<W> {
     pub initial_schedule: Schedule,
     pub initial_streams: Streams,
     pub world_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildProvenance>,
+}
+
+/// Preserve the distinction between omitted world (compact events) and
+/// an explicit JSON null world in historical full-world records.
+#[derive(Clone, Debug, Default)]
+pub enum LegacyWorld<W> {
+    #[default]
+    Missing,
+    Present(W),
+}
+impl<W> LegacyWorld<W> {
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+    pub fn as_ref(&self) -> Option<&W> {
+        match self {
+            Self::Present(world) => Some(world),
+            Self::Missing => None,
+        }
+    }
+    fn deserialize_present<'de, D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        W: serde::Deserialize<'de>,
+    {
+        Ok(Self::Present(W::deserialize(d)?))
+    }
+}
+impl<W: Serialize> Serialize for LegacyWorld<W> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Present(world) => world.serialize(s),
+            Self::Missing => s.serialize_none(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,8 +186,17 @@ pub struct Genesis<W> {
 pub enum Outcome<W, A> {
     Accepted {
         action: A,
-        world: W,
+        /// Older schema-v1 events embed the world; modern events omit it.
+        /// `Some` retains byte-for-byte legacy hash serialization.
+        #[serde(
+            default,
+            skip_serializing_if = "LegacyWorld::is_missing",
+            deserialize_with = "LegacyWorld::<W>::deserialize_present"
+        )]
+        world: LegacyWorld<W>,
         state_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_apply_streams: Option<Streams>,
     },
     Rejected {
         reason: String,
@@ -195,7 +309,8 @@ where
     pub(crate) chain_head: String,
     pub(crate) log_bytes: u64,
     poisoned: bool,
-    /// Exclusive single-writer lock, removed on clean close.
+    durability: Durability,
+    /// Exclusive OS-backed single-writer lease released by the kernel.
     _lock: WriterLock,
     _action: std::marker::PhantomData<A>,
 }
@@ -245,19 +360,11 @@ pub(crate) fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
-/// RAII lock: even a malformed manifest/snapshot never strands a lock.
+/// OS-backed lock survives stale marker paths and automatically releases
+/// on process death. The marker is deliberately *never removed* to avoid
+/// a race where an unlinked locked inode admits another writer.
 struct WriterLock {
-    file: Option<File>,
-    path: PathBuf,
-}
-impl Drop for WriterLock {
-    fn drop(&mut self) {
-        if let Some(file) = self.file.take() {
-            let _ = file.sync_all();
-            drop(file); // Windows cannot always unlink while a handle is live.
-        }
-        let _ = fs::remove_file(&self.path);
-    }
+    _file: File,
 }
 pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
@@ -272,16 +379,15 @@ pub(crate) fn sync_trial_directory(dir: &Path) -> Result<(), String> {
 fn lock_dir(dir: &Path) -> Result<WriterLock, String> {
     let path = dir.join(".writer.lock");
     let file = OpenOptions::new()
+        .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(false)
         .open(&path)
-        .map_err(|e| {
-            format!("trial already open or stale lock (remove ONLY after verifying no writer): {e}")
-        })?;
-    Ok(WriterLock {
-        file: Some(file),
-        path,
-    })
+        .map_err(|e| e.to_string())?;
+    file.try_lock()
+        .map_err(|e| format!("trial already has an active writer: {e}"))?;
+    Ok(WriterLock { _file: file })
 }
 
 impl<W, A> Store<W, A>
@@ -324,6 +430,7 @@ where
             chain_head: initial_hash,
             log_bytes: 0,
             poisoned: false,
+            durability: Durability::EveryEvent,
             _lock: lock,
             genesis,
             _action: std::marker::PhantomData,
@@ -336,6 +443,7 @@ where
         dir: &Path,
         genesis: &Genesis<W>,
         allow_torn_tail: bool,
+        trust_snapshot: bool,
     ) -> Result<(Projection<W>, u64, u64), String> {
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
@@ -359,9 +467,51 @@ where
         } else {
             None
         };
-        let input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        let mut reader = BufReader::new(input);
+        let mut input = File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
         let mut offset = 0u64;
+        // Explicit trusted-checkpoint mode is faster, but it does NOT
+        // independently verify events before the snapshot. Normal open() and
+        // read-only validate() still independently verify the full history.
+        if trust_snapshot && let Some(ref s) = snapshot {
+            let file_len = input.metadata().map_err(|e| e.to_string())?.len();
+            if s.schema != genesis.schema
+                || s.trial_id != genesis.trial_id
+                || s.streams.trial != genesis.trial_id
+                || s.sequence < s.logical_step
+                || s.log_bytes > file_len
+                || s.chain_head.len() != 64
+                || !s.chain_head.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("invalid trusted snapshot identity/bounds".into());
+            }
+            s.schedule.validate()?;
+            if s.log_bytes > 0 {
+                input
+                    .seek(SeekFrom::Start(s.log_bytes - 1))
+                    .map_err(|e| e.to_string())?;
+                let mut delimiter = [0u8; 1];
+                input
+                    .read_exact(&mut delimiter)
+                    .map_err(|e| e.to_string())?;
+                if delimiter != *b"\n" {
+                    return Err("trusted snapshot offset is not an event boundary".into());
+                }
+            }
+            input
+                .seek(SeekFrom::Start(s.log_bytes))
+                .map_err(|e| e.to_string())?;
+            state = Projection {
+                world: s.world.clone(),
+                schedule: s.schedule.clone(),
+                streams: s.streams.clone(),
+                sequence: s.sequence,
+                logical_step: s.logical_step,
+                chain_head: s.chain_head.clone(),
+            };
+            offset = s.log_bytes;
+            matched = Some(state.clone());
+        }
+        let mut reader = BufReader::new(input);
         let mut line = Vec::new();
         loop {
             let count = read_record_limited(&mut reader, &mut line)?;
@@ -415,7 +565,7 @@ where
             return Err("invalid read-only manifest".into());
         }
         genesis.initial_schedule.validate()?;
-        let (state, offset, _) = Self::replay_history(dir, &genesis, false)?;
+        let (state, offset, _) = Self::replay_history(dir, &genesis, false, false)?;
         Ok(ReadOnly {
             genesis,
             world: state.world,
@@ -429,6 +579,16 @@ where
     }
 
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_mode(dir, false)
+    }
+
+    /// Faster resume from a caller-*trusted* snapshot. Only verifies the
+    /// suffix after the snapshot. Use inspect_read_only for full validation.
+    pub fn open_trusted(dir: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_mode(dir, true)
+    }
+
+    fn open_mode(dir: impl AsRef<Path>, trust_snapshot: bool) -> Result<Self, String> {
         let dir = dir.as_ref();
         let lock = lock_dir(dir)?;
         // The exclusive writer lease allows discarding an abandoned
@@ -444,7 +604,8 @@ where
             return Err("unsupported manifest/trial schema".into());
         }
         genesis.initial_schedule.validate()?;
-        let (projected, durable_length, file_length) = Self::replay_history(dir, &genesis, true)?;
+        let (projected, durable_length, file_length) =
+            Self::replay_history(dir, &genesis, true, trust_snapshot)?;
         if durable_length < file_length {
             let f = OpenOptions::new()
                 .write(true)
@@ -465,6 +626,7 @@ where
             chain_head: projected.chain_head,
             log_bytes: durable_length,
             poisoned: false,
+            durability: Durability::EveryEvent,
             _lock: lock,
             _action: std::marker::PhantomData,
         })
@@ -502,22 +664,40 @@ where
             return Ok(());
         }
         let selected = sched.select(&mut rng)?;
-        if selected != Some(event.actor)
-            || sched != event.after_schedule
-            || rng != event.after_streams
-        {
+        if selected != Some(event.actor) || sched != event.after_schedule {
             return Err("log selection/RNG divergence".into());
         }
+        event.after_streams.checked_progress(&rng)?;
         match &event.outcome {
             Outcome::Accepted {
                 action,
                 world,
                 state_hash,
+                before_apply_streams,
             } => {
                 let mut next = state.world.clone();
-                next.apply(event.actor, action.clone())
-                    .map_err(|e| format!("replay reducer failure: {e}"))?;
-                if digest(&next)? != *state_hash || digest(&next)? != digest(world)? {
+                if let Some(before) = before_apply_streams {
+                    before.checked_scope_progress(&rng, &format!("agent/{}", event.actor.0))?;
+                    let mut reducer_rng = before.clone();
+                    next.apply_with_streams(event.actor, action.clone(), &mut reducer_rng)
+                        .map_err(|e| format!("replay reducer failure: {e}"))?;
+                    reducer_rng.checked_scope_progress(before, "world")?;
+                    if reducer_rng != event.after_streams {
+                        return Err("replayed world RNG diverges".into());
+                    }
+                } else {
+                    // Legacy event: no stochastic reducer channel.
+                    if rng != event.after_streams {
+                        return Err("legacy RNG stream divergence".into());
+                    }
+                    next.apply(event.actor, action.clone())
+                        .map_err(|e| format!("replay reducer failure: {e}"))?;
+                }
+                if digest(&next)? != *state_hash
+                    || world
+                        .as_ref()
+                        .is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
+                {
                     return Err("replayed world state differs from committed state".into());
                 }
                 state.world = next;
@@ -529,7 +709,7 @@ where
         state.sequence = state.sequence.checked_add(1).ok_or("sequence overflow")?;
         state.chain_head = event.hash.clone();
         state.schedule = sched;
-        state.streams = rng;
+        state.streams = event.after_streams.clone();
         Ok(())
     }
 
@@ -543,6 +723,17 @@ where
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, String> {
+        self.append_typed(actor, outcome, schedule, streams)
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn append_typed(
+        &mut self,
+        actor: AgentId,
+        outcome: Outcome<W, A>,
+        schedule: Schedule,
+        streams: Streams,
+    ) -> Result<Entry<W, A>, AppendError> {
         if self.poisoned {
             return Err("writer poisoned; reopen/recover".into());
         }
@@ -558,9 +749,10 @@ where
         } else if expected_schedule.select(&mut expected_streams)? != Some(actor) {
             return Err("unexpected selected actor".into());
         }
-        if schedule != expected_schedule || streams != expected_streams {
-            return Err("scheduler or random stream divergence".into());
+        if schedule != expected_schedule {
+            return Err("scheduler divergence".into());
         }
+        streams.checked_progress(&expected_streams)?;
         let accepted = matches!(&outcome, Outcome::Accepted { .. });
         let next_step = self
             .logical_step
@@ -569,17 +761,40 @@ where
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
         let new_world = match &outcome {
             Outcome::Accepted {
-                world, state_hash, ..
+                action,
+                world,
+                state_hash,
+                before_apply_streams,
             } => {
-                if digest(world)? != *state_hash {
+                let mut next = self.world.clone();
+                if let Some(before) = before_apply_streams {
+                    before
+                        .checked_scope_progress(&expected_streams, &format!("agent/{}", actor.0))?;
+                    let mut reducer_rng = before.clone();
+                    next.apply_with_streams(actor, action.clone(), &mut reducer_rng)?;
+                    reducer_rng.checked_scope_progress(before, "world")?;
+                    if reducer_rng != streams {
+                        return Err("staged world RNG divergence".into());
+                    }
+                } else {
+                    if streams != expected_streams {
+                        return Err("legacy RNG divergence".into());
+                    }
+                    next.apply(actor, action.clone())?;
+                }
+                if digest(&next)? != *state_hash
+                    || world
+                        .as_ref()
+                        .is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
+                {
                     return Err("staged state hash mismatch".into());
                 }
-                world.clone()
+                next
             }
             Outcome::Rejected { .. } | Outcome::Control { .. } => self.world.clone(),
         };
         let mut event = Entry {
-            schema: SCHEMA,
+            schema: self.genesis.schema,
             trial_id: self.genesis.trial_id.clone(),
             sequence: self.sequence,
             logical_step: self.logical_step,
@@ -594,18 +809,23 @@ where
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
         if encoded.len() > MAX_EVENT_RECORD_BYTES {
-            return Err(EVENT_TOO_LARGE.into());
+            return Err(AppendError::TooLarge);
         }
         let write_result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .append(true)
                 .open(self.dir.join("events.jsonl"))?;
             file.write_all(&encoded)?;
-            file.sync_all()
+            if self.durability == Durability::EveryEvent {
+                file.sync_all()?;
+            }
+            Ok(())
         })();
         if let Err(error) = write_result {
             self.poisoned = true;
-            return Err(format!("event append/fsync failed: {error}"));
+            return Err(AppendError::Other(format!(
+                "event append/fsync failed: {error}"
+            )));
         }
         self.log_bytes += encoded.len() as u64;
         self.sequence = next_sequence;
@@ -662,7 +882,29 @@ where
         self.set_paused_event(actor, paused).map(|_| ())
     }
 
+    /// Choose a durability tradeoff. The setting affects subsequent events.
+    /// Before changing modes, flush earlier writes to establish a boundary.
+    pub fn set_durability(&mut self, durability: Durability) -> Result<(), String> {
+        self.sync_log()?;
+        self.durability = durability;
+        Ok(())
+    }
+
+    pub fn durability(&self) -> Durability {
+        self.durability
+    }
+
+    /// Flush committed bytes, including when using checkpoint-only durability.
+    pub fn sync_log(&self) -> Result<(), String> {
+        OpenOptions::new()
+            .write(true)
+            .open(self.dir.join("events.jsonl"))
+            .and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn snapshot(&self) -> Result<(), String> {
+        self.sync_log()?;
         let snapshot = Snapshot {
             schema: SCHEMA,
             trial_id: self.genesis.trial_id.clone(),
@@ -682,10 +924,65 @@ where
     }
 
     pub fn read_events(&self) -> Result<Vec<Entry<W, A>>, String> {
-        let raw = fs::read(self.dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        raw.split(|b| *b == b'\n')
-            .filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_slice(line).map_err(|e| e.to_string()))
-            .collect()
+        let mut result = Vec::new();
+        // Historical convenience method: reject huge outputs instead of
+        // unboundedly collecting the whole log into process memory.
+        if self.log_bytes > 64 * 1024 * 1024 {
+            return Err("read_events memory budget exceeded; use visit_events".into());
+        }
+        self.visit_events(|entry| {
+            result.push(entry);
+            Ok(())
+        })?;
+        Ok(result)
+    }
+
+    pub fn visit_events(
+        &self,
+        mut visitor: impl FnMut(Entry<W, A>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let source = File::open(self.dir.join("events.jsonl")).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(source.take(self.log_bytes));
+        let mut line = Vec::new();
+        let mut consumed = 0u64;
+        loop {
+            let n = read_record_limited(&mut reader, &mut line)?;
+            if n == 0 {
+                break;
+            }
+            if !line.ends_with(b"\n") {
+                return Err("incomplete bounded event".into());
+            }
+            consumed += n as u64;
+            visitor(serde_json::from_slice(&line).map_err(|e| e.to_string())?)?;
+        }
+        if consumed != self.log_bytes {
+            return Err("event log shrank during read".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod r6_legacy_world_compatibility {
+    use super::*;
+    #[test]
+    fn historic_null_and_compact_absent_worlds_are_distinct() {
+        // Serde's Option<W> loses this distinction for W whose wire value
+        // is JSON null, breaking schema-v1 committed hashes on old worlds.
+        let historic = r#"{"outcome":"accepted","action":1,"world":null,"state_hash":"abc"}"#;
+        let parsed: Outcome<serde_json::Value, u64> = serde_json::from_str(historic).unwrap();
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert!(encoded.as_object().unwrap().contains_key("world"));
+        assert!(encoded["world"].is_null());
+
+        let compact = r#"{"outcome":"accepted","action":1,"state_hash":"abc"}"#;
+        let parsed: Outcome<serde_json::Value, u64> = serde_json::from_str(compact).unwrap();
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert!(!encoded.as_object().unwrap().contains_key("world"));
+
+        let typed: Outcome<Option<u64>, u64> = serde_json::from_str(historic).unwrap();
+        let encoded = serde_json::to_value(typed).unwrap();
+        assert!(encoded.as_object().unwrap().contains_key("world"));
     }
 }

@@ -181,14 +181,14 @@ impl Sweep {
             match result {
                 Ok((job, Ok(value))) => {
                     finished.push((job, value));
-                    if errors.is_empty() {
-                        if let Some(next) = iterator.next() {
-                            let fun = action.clone();
-                            active.spawn(async move {
-                                let value = fun(next.clone()).await;
-                                (next, value)
-                            });
-                        }
+                    if errors.is_empty()
+                        && let Some(next) = iterator.next()
+                    {
+                        let fun = action.clone();
+                        active.spawn(async move {
+                            let value = fun(next.clone()).await;
+                            (next, value)
+                        });
                     }
                 }
                 Ok((job, Err(error))) => errors.push(format!("job {}: {error}", job.id)),
@@ -529,6 +529,7 @@ where
         initial_schedule: parent.schedule.clone(),
         initial_streams: streams,
         world_kind: parent.genesis.world_kind.clone(),
+        build: Some(crate::storage::BuildProvenance::current()),
     };
     // Build an entire branch in a unique sibling directory. The public child
     // path appears only after ancestry, attribution and both ledgers verify.

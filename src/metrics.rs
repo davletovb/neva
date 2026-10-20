@@ -42,6 +42,7 @@ fn escape_cell(value: &str) -> String {
 
 pub struct CsvMetrics<W: World, M: MetricProjector<W>> {
     file: Mutex<File>,
+    world: Mutex<W>,
     projector: M,
     _world: PhantomData<fn() -> W>,
 }
@@ -56,11 +57,31 @@ where
         writer: &mut impl Write,
         event: &Entry<W, W::Action>,
         projector: &M,
+        state: &mut W,
     ) -> Result<(), String> {
-        let Outcome::Accepted { world, .. } = &event.outcome else {
+        let Outcome::Accepted {
+            action,
+            state_hash,
+            before_apply_streams,
+            ..
+        } = &event.outcome
+        else {
             return Ok(());
         };
-        for metric in projector.project(world)? {
+        let mut next = state.clone();
+        if let Some(before) = before_apply_streams {
+            let mut rng = before.clone();
+            next.apply_with_streams(event.actor, action.clone(), &mut rng)?;
+            if rng != event.after_streams {
+                return Err("metric reducer RNG diverged".into());
+            }
+        } else {
+            next.apply(event.actor, action.clone())?;
+        }
+        if crate::storage::digest(&next)? != *state_hash {
+            return Err("metric replay state hash mismatch".into());
+        }
+        for metric in projector.project(&next)? {
             if metric.name.is_empty() || metric.name.contains('\0') {
                 return Err("invalid metric name".into());
             }
@@ -77,6 +98,7 @@ where
                 .write_all(row.as_bytes())
                 .map_err(|e| e.to_string())?;
         }
+        *state = next;
         Ok(())
     }
 
@@ -87,6 +109,7 @@ where
         let dir = dir.as_ref();
         let verified = Store::<W, W::Action>::inspect_read_only(dir)?;
         let target = dir.join("metrics.csv");
+        let mut projection_world = verified.genesis.initial_world.clone();
         atomic_write_with(&target, |output| {
             output
                 .write_all(HEADER.as_bytes())
@@ -106,7 +129,7 @@ where
                 read_bytes += count as u64;
                 let event: Entry<W, W::Action> =
                     serde_json::from_slice(&line).map_err(|e| e.to_string())?;
-                Self::write_event(output, &event, &projector)?;
+                Self::write_event(output, &event, &projector, &mut projection_world)?;
             }
             if read_bytes != verified.log_bytes {
                 return Err("event prefix changed during metrics recovery".into());
@@ -119,6 +142,7 @@ where
             .map_err(|e| e.to_string())?;
         Ok(Self {
             file: Mutex::new(file),
+            world: Mutex::new(projection_world),
             projector,
             _world: PhantomData,
         })
@@ -130,13 +154,17 @@ where
 }
 impl<W, M> Observer<W> for CsvMetrics<W, M>
 where
-    W: World + Serialize + DeserializeOwned,
+    W: World + Serialize + DeserializeOwned + Send,
     W::Action: Serialize + DeserializeOwned + Clone,
     M: MetricProjector<W>,
 {
     fn committed(&self, event: &Entry<W, W::Action>) -> Result<(), String> {
+        let mut state = self
+            .world
+            .lock()
+            .map_err(|_| "metrics world lock poisoned")?;
         let mut file = self.file.lock().map_err(|_| "metrics lock poisoned")?;
-        Self::write_event(&mut *file, event, &self.projector)?;
+        Self::write_event(&mut *file, event, &self.projector, &mut state)?;
         // Derived data is reconstructed from fsynced events on restart.
         // No second synchronous disk barrier on every accepted action.
         file.flush().map_err(|e| e.to_string())

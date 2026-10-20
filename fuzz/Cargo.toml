@@ -1,0 +1,36 @@
+[package]
+name = "hiyal-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+hiyal = { path = ".." }
+serde_json = "1"
+
+[[bin]]
+name = "memory"
+path = "fuzz_targets/memory.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bounded_events"
+path = "fuzz_targets/bounded_events.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compact_events"
+path = "fuzz_targets/compact_events.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

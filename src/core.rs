@@ -150,11 +150,28 @@ pub trait World: Clone {
 
     fn observe(&self, actor: AgentId) -> Result<Self::Observation, String>;
     fn apply(&mut self, actor: AgentId, action: Self::Action) -> Result<(), String>;
+    /// Opt-in replayable world randomness; only named trial streams.
+    fn apply_with_streams(
+        &mut self,
+        actor: AgentId,
+        action: Self::Action,
+        _streams: &mut crate::rng::Streams,
+    ) -> Result<(), String> {
+        self.apply(actor, action)
+    }
 }
 
 /// Pure synchronous policy; async effect resolution remains R1 work.
 pub trait Policy<W: World> {
     fn propose(&self, actor: AgentId, observation: &W::Observation) -> Result<W::Action, String>;
+    fn propose_with_streams(
+        &self,
+        actor: AgentId,
+        observation: &W::Observation,
+        _streams: &mut crate::rng::Streams,
+    ) -> Result<W::Action, String> {
+        self.propose(actor, observation)
+    }
 }
 
 /// A successful world transition. The action alone is NOT sufficient to

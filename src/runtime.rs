@@ -79,6 +79,14 @@ impl Receipt {
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
+    /// Restore budget and effect quota before any new provider dispatch.
+    fn recover_admission(
+        &self,
+        _dir: &Path,
+        _receipts: &BTreeMap<EffectCallKey, Receipt>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Called *after* the timed-out future has been cancelled. The provider
     /// may have processed/billed the request, so this only updates breaker
     /// state; it never retries or refunds the uncertain transaction.
@@ -225,18 +233,9 @@ impl ReplayBackend {
 }
 
 /// Single-writer file lease for standalone effect journals.
+/// Kernel-backed single-writer lease. Keep marker inode stable; never unlink.
 struct EffectWriterLock {
-    path: PathBuf,
-    file: Option<std::fs::File>,
-}
-impl Drop for EffectWriterLock {
-    fn drop(&mut self) {
-        if let Some(file) = self.file.take() {
-            let _ = file.sync_all();
-            drop(file);
-        }
-        let _ = fs::remove_file(&self.path);
-    }
+    _file: std::fs::File,
 }
 
 pub struct EffectJournal {
@@ -364,14 +363,16 @@ impl EffectJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let lock_path = dir.as_ref().join(".effects-writer.lock");
         let lock_file = OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(false)
             .open(&lock_path)
-            .map_err(|e| format!("effect journal already open or stale lock: {e}"))?;
-        let lock = EffectWriterLock {
-            path: lock_path,
-            file: Some(lock_file),
-        };
+            .map_err(|e| e.to_string())?;
+        lock_file
+            .try_lock()
+            .map_err(|e| format!("effect journal already has an active writer: {e}"))?;
+        let lock = EffectWriterLock { _file: lock_file };
         let path = dir.as_ref().join("effects.jsonl");
         if !path.exists() {
             OpenOptions::new()
@@ -1213,7 +1214,7 @@ mod batch_regression_tests {
         assert!(EffectJournal::open(&path).is_err());
         assert!(path.join(".effects-writer.lock").exists());
         drop(first);
-        assert!(!path.join(".effects-writer.lock").exists());
+        assert!(path.join(".effects-writer.lock").exists()); // persistent marker; OS lock released
         let second = EffectJournal::open_existing(&path).unwrap();
         drop(second);
         fs::remove_dir_all(&path).unwrap();

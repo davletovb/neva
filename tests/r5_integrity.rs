@@ -109,7 +109,7 @@ async fn corrupt_committed_log_or_snapshot_fails_without_writing_repairs() {
     .unwrap();
     assert!(Store::<Counter, u64>::inspect_read_only(&dir).is_err());
     assert!(resume(&dir).is_err());
-    assert!(!dir.join(".writer.lock").exists());
+    assert!(dir.join(".writer.lock").exists()); // persistent OS lease inode
     fs::write(dir.join("snapshot.json"), &original_snap).unwrap();
     // Every single hash-byte mutation in a committed record must be detected.
     let log_text = String::from_utf8(original_log.clone()).unwrap();

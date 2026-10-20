@@ -2,7 +2,9 @@
 //! Limits are process-local reservations; they are not provider billing data.
 use crate::effects::{EffectCallKey, EffectResult, ModelRequest};
 use crate::runtime::{Backend, BoxResult, EffectSpec};
-use crate::storage::digest;
+use crate::storage::{digest, read_metadata_limited};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -13,7 +15,8 @@ use std::{
 
 /// Monetary units are integer micro-USD; a reservation is NEVER refunded on
 /// transport failure, because a provider might already have billed the call.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BudgetConfig {
     pub maximum_micro_usd: u64,
     pub prompt_micro_usd_per_token: u64,
@@ -151,6 +154,7 @@ impl GovernedBackend {
             .as_ref()
             .map(|_| self.remaining.load(Ordering::SeqCst))
     }
+    #[allow(deprecated)] // MSRV 1.89: AtomicU64::try_update requires 1.95
     fn reserve(counter: &AtomicU64, units: u64) -> bool {
         counter
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |now| {
@@ -201,6 +205,7 @@ impl GovernedBackend {
     }
 }
 impl GovernedBackend {
+    #[allow(deprecated)] // MSRV 1.89: retain fetch_update compatibility
     async fn call_effect(
         &self,
         key: Option<&EffectCallKey>,
@@ -255,6 +260,61 @@ impl GovernedBackend {
     }
 }
 impl Backend for GovernedBackend {
+    /// Bind the declared cap to trial files and reconstruct conservative
+    /// previously reserved spend while the Trial holds both writer leases.
+    fn recover_admission(
+        &self,
+        dir: &Path,
+        receipts: &BTreeMap<EffectCallKey, crate::runtime::Receipt>,
+    ) -> Result<(), String> {
+        if let Some(config) = &self.budget {
+            let file = dir.join("trial-budget.json");
+            if file.exists() {
+                let saved: BudgetConfig = serde_json::from_slice(&read_metadata_limited(&file)?)
+                    .map_err(|e| e.to_string())?;
+                if &saved != config {
+                    return Err(
+                        "trial budget/pricing changed across resume; refuse live dispatch".into(),
+                    );
+                }
+            } else {
+                if !receipts.is_empty() {
+                    return Err(
+                        "existing trial lacks durable budget config; refuse live dispatch".into(),
+                    );
+                }
+                let serialized = serde_json::to_vec(config).map_err(|e| e.to_string())?;
+                crate::storage::save_atomic(&file, &serialized)?;
+            }
+            let mut used = 0u64;
+            for receipt in receipts.values() {
+                if receipt.billing != crate::runtime::BillingDisposition::NotCharged
+                    && let EffectSpec::Model(request) = &receipt.spec
+                {
+                    used = used
+                        .checked_add(config.reserve_amount(request)?)
+                        .ok_or("durable budget accounting overflow")?;
+                }
+            }
+            if used > config.maximum_micro_usd {
+                return Err("recorded provider reservations exceed trial cap".into());
+            }
+            self.remaining
+                .store(config.maximum_micro_usd - used, Ordering::SeqCst);
+        }
+        // Unsupported/pre-dispatch denials release their admission slot; a
+        // NotCharged receipt is evidence of that decision. Charged/Unknown
+        // effects consume one slot and are conservatively restored.
+        let admitted = receipts
+            .values()
+            .filter(|r| r.billing != crate::runtime::BillingDisposition::NotCharged)
+            .count() as u64;
+        if admitted > self.max_total_effects {
+            return Err("past dispatched/uncertain effect count exceeds cap".into());
+        }
+        self.started.store(admitted, Ordering::SeqCst);
+        Ok(())
+    }
     fn on_timeout<'a>(
         &'a self,
         spec: &'a EffectSpec,
@@ -545,5 +605,80 @@ mod tests {
             EffectResult::UnsupportedCapability { .. }
         ));
         assert_eq!(remaining, guarded.remaining_micro_usd().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod r6_resume_quota_tests {
+    use super::*;
+    use crate::{
+        core::AgentId,
+        runtime::{BillingDisposition, Receipt, ScriptedBackend, sample_request},
+    };
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn not_charged_rejections_do_not_exhaust_resumed_quota() {
+        let dir = std::env::temp_dir().join(format!(
+            "hiyal-r6-spend-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = BudgetConfig {
+            maximum_micro_usd: 1_000_000,
+            prompt_micro_usd_per_token: 1,
+            output_micro_usd_per_token: 1,
+            max_input_bytes: 50_000,
+            max_output_tokens: 2048,
+        };
+        let spec = sample_request("admission");
+        let rejected = Receipt {
+            key: spec.key("quota", 0, AgentId(0), 0).unwrap(),
+            spec: spec.clone(),
+            result: EffectResult::UnsupportedCapability {
+                capability: "refused".into(),
+            },
+            billing: BillingDisposition::NotCharged,
+            effective_provider: "offline".into(),
+            effective_model: None,
+            content_hash: String::new(),
+        };
+        let charged = Receipt {
+            key: spec.key("quota", 1, AgentId(0), 0).unwrap(),
+            billing: BillingDisposition::Unknown,
+            ..rejected.clone()
+        };
+        let mut receipts = BTreeMap::new();
+        receipts.insert(rejected.key.clone(), rejected);
+        receipts.insert(charged.key.clone(), charged);
+        let guard = GovernedBackend::new(Arc::new(ScriptedBackend), 1).with_budget(config.clone());
+        guard.recover_admission(&dir, &BTreeMap::new()).unwrap();
+        let resumed =
+            GovernedBackend::new(Arc::new(ScriptedBackend), 1).with_budget(config.clone());
+        resumed.recover_admission(&dir, &receipts).unwrap();
+        assert_eq!(resumed.started.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            resumed.remaining_micro_usd(),
+            Some(
+                config.maximum_micro_usd
+                    - config
+                        .reserve_amount(match &spec {
+                            EffectSpec::Model(r) => r,
+                            _ => unreachable!(),
+                        })
+                        .unwrap()
+            )
+        );
+        assert!(
+            GovernedBackend::new(Arc::new(ScriptedBackend), 0)
+                .with_budget(config)
+                .recover_admission(&dir, &receipts)
+                .is_err()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

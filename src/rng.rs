@@ -77,6 +77,57 @@ impl Streams {
         Ok(value)
     }
 
+    /// Validate that policy/world draws only advance named streams. The
+    /// scheduler's stream must be left to the engine alone.
+    pub fn checked_progress(&self, from: &Self) -> Result<(), String> {
+        if self.profile != from.profile
+            || self.trial != from.trial
+            || self.root_seed != from.root_seed
+            || self.seed_domain != from.seed_domain
+            || self.positions.get("scheduler") != from.positions.get("scheduler")
+        {
+            return Err("RNG origin or scheduler stream modified outside scheduler".into());
+        }
+        for (name, before) in &from.positions {
+            let old = before
+                .parse::<u128>()
+                .map_err(|_| "invalid old RNG position")?;
+            let new = self
+                .positions
+                .get(name)
+                .ok_or("removed named RNG stream")?
+                .parse::<u128>()
+                .map_err(|_| "invalid new RNG position")?;
+            if old > new || before != &old.to_string() {
+                return Err("non-monotonic RNG stream".into());
+            }
+        }
+        for value in self.positions.values() {
+            let parsed = value.parse::<u128>().map_err(|_| "invalid RNG position")?;
+            if value != &parsed.to_string() {
+                return Err("noncanonical RNG position".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Enforce that an agent callback advances only its own named stream
+    /// (or a reducer only the world family). Other streams cannot be added,
+    /// removed or modified by this callback.
+    pub fn checked_scope_progress(&self, before: &Self, family: &str) -> Result<(), String> {
+        self.checked_progress(before)?;
+        for (name, position) in &self.positions {
+            let allowed = name == family
+                || name
+                    .strip_prefix(family)
+                    .is_some_and(|s| s.starts_with('/'));
+            if !allowed && before.positions.get(name) != Some(position) {
+                return Err(format!("unauthorized RNG stream draw: {name}"));
+            }
+        }
+        Ok(())
+    }
+
     /// Exact uniform choice without modulo bias. n must be positive.
     pub fn uniform_index(&mut self, stream: &str, n: usize) -> Result<usize, String> {
         let bound = u64::try_from(n).map_err(|_| "scheduler size exceeds u64")?;
@@ -127,6 +178,20 @@ mod tests {
             );
         }
         assert_eq!(a.seed_domain.as_deref(), Some("parent"));
+    }
+
+    #[test]
+    fn pinned_chacha20_golden_and_actor_stream_isolation() {
+        // Derived independently from SHA-256 seed domains + the ChaCha20
+        // initial block. A dependency upgrade must not silently change D1.
+        let mut s = Streams::new("trial".into(), 17);
+        assert_eq!(s.draw_u64("scheduler").unwrap(), 9758413615208853506u64);
+        let scheduled = s.clone();
+        let _ = s.draw_u64("agent/2").unwrap();
+        s.checked_progress(&scheduled).unwrap();
+        let old = s.clone();
+        assert!(s.draw_u64("scheduler").is_ok());
+        assert!(s.checked_progress(&old).is_err());
     }
 
     #[test]
