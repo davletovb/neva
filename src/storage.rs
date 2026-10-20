@@ -634,7 +634,8 @@ where
         self.log_bytes
     }
 
-    pub fn set_paused(&mut self, actor: AgentId, paused: bool) -> Result<(), String> {
+    /// Commit a scheduler control record and return the durable log entry.
+    pub fn set_paused(&mut self, actor: AgentId, paused: bool) -> Result<Entry<W, A>, String> {
         let mut scheduled = self.schedule.clone();
         if paused {
             scheduled.pause(actor)?;
@@ -646,8 +647,7 @@ where
             Outcome::Control { paused },
             scheduled,
             self.streams.clone(),
-        )?;
-        Ok(())
+        )
     }
 
     pub fn snapshot(&self) -> Result<(), String> {
