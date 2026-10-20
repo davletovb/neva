@@ -4,7 +4,7 @@ use crate::{
     rng::Streams,
     runtime::{Backend, EffectJournal, EffectSpec, Receipt},
     scheduler::{Schedule, Scheduling},
-    storage::{BuildProvenance, Entry, Genesis, Outcome, SCHEMA, Store},
+    storage::{AppendError, BuildProvenance, Entry, Genesis, Outcome, SCHEMA, Store},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -292,7 +292,7 @@ where
                     return Ok(Step::Rejected { actor, reason });
                 }
                 let state_hash = crate::storage::digest(&staged)?;
-                let append = self.store.append(
+                let append = self.store.append_typed(
                     actor,
                     Outcome::Accepted {
                         action,
@@ -308,7 +308,7 @@ where
                         self.emit(&entry);
                         Ok(Step::Accepted(Box::new(entry)))
                     }
-                    Err(error) if error == crate::storage::EVENT_TOO_LARGE => {
+                    Err(AppendError::TooLarge) => {
                         // Admission failed before any append. Preserve effects
                         // but record a rejected attempt so replay can progress.
                         let reason = error;
@@ -323,7 +323,7 @@ where
                         self.emit(&entry);
                         Ok(Step::Rejected { actor, reason })
                     }
-                    Err(error) => Err(error),
+                    Err(error) => Err(error.to_string()),
                 }
             }
             Err(reason) => {
