@@ -5,6 +5,7 @@ use hiyal::{
     core::AgentId,
     experiment::Trial,
     metrics::CsvMetrics,
+    observe::JsonlObserver,
     research::{CounterMetrics, Sweep, ensure_observer_health, paired_forks, verify_fork},
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
@@ -30,6 +31,7 @@ fn help() -> &'static str {
      hiyal resume <trial-dir> <attempts> [--live]\n\
      hiyal inspect <trial-dir>\n\
      hiyal validate <trial-dir>\n\
+     hiyal export <trial-dir> <output.jsonl>\n\
      hiyal sweep <sweep.toml> <output-root>\n\
      hiyal fork <parent-trial> <pair-root> <shock> <attempts>\n\
      Live mode requires --features live-http, OPENAI_COMPAT_URL and OPENAI_COMPAT_API_KEY.\n\
@@ -92,6 +94,58 @@ fn read_kind(path: &Path) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or("missing world_kind".into())
 }
+/// Export exactly one read-only verified event-log prefix. Stage in the same
+/// destination directory and publish by hard-linking (create-new semantics),
+/// so a failure or concurrent exporter cannot leave a partial public file.
+fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
+    use std::io::Write;
+
+    let verified = Store::<Counter, u64>::inspect_read_only(dir)?;
+    hiyal::runtime::EffectJournal::inspect_read_only(dir, &verified.genesis.trial_id)?;
+    let trial_root = fs::canonicalize(dir).map_err(|e| e.to_string())?;
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let destination_root = fs::canonicalize(parent).map_err(|e| e.to_string())?;
+    if destination_root.starts_with(&trial_root) || output.exists() {
+        return Err("export destination exists or is inside the trial root".into());
+    }
+    // A process-unique staging name prevents two independent exports from
+    // interfering; create_new refuses stale files rather than deleting them.
+    static EXPORT_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nonce = EXPORT_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = output.with_extension(format!("hiyal-{}-{nonce}.tmp", std::process::id()));
+    let mut created = false;
+    let result = (|| -> Result<(), String> {
+        let mut staging = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| e.to_string())?;
+        created = true;
+        hiyal::observe::write_summaries::<Counter>(dir, &verified, &mut staging)?;
+        staging
+            .flush()
+            .and_then(|_| staging.sync_all())
+            .map_err(|e| e.to_string())?;
+        drop(staging);
+        // Atomic exclusive publication; rename would overwrite a concurrent
+        // exporter on Unix. Both files reside on the same filesystem.
+        fs::hard_link(&temporary, output).map_err(|e| e.to_string())?;
+        fs::remove_file(&temporary).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        fs::File::open(&destination_root)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if result.is_err() && created {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 async fn launch() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     let cmd = args.first().ok_or(help())?.as_str();
@@ -132,8 +186,10 @@ async fn launch() -> Result<(), String> {
                 agents,
                 cfg.scheduler,
             )?;
+            trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(cfg.attempts).await?;
             trial.checkpoint()?;
+            ensure_observer_health(&trial.diagnostics)?;
             if live && accepted != cfg.attempts {
                 return Err(format!(
                     "live run incomplete: accepted {accepted}/{} requested attempts; inspect trial rejections and budget quota",
@@ -170,8 +226,10 @@ async fn launch() -> Result<(), String> {
                 return Err("resume backend differs from saved trial provider".into());
             }
             let mut trial = Trial::resume(dir, &kind, policy, backend(live)?, false)?;
+            trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
+            ensure_observer_health(&trial.diagnostics)?;
             if live && accepted != attempts {
                 return Err(format!(
                     "live resume incomplete: accepted {accepted}/{attempts}; inspect trial rejections, spend and quota"
@@ -295,6 +353,8 @@ async fn launch() -> Result<(), String> {
             if control.store.sequence() > attempts || treatment.store.sequence() > attempts {
                 return Err("fork already passed requested attempt count".into());
             }
+            control.observe_with(Arc::new(JsonlObserver::recover(&control_dir)?));
+            treatment.observe_with(Arc::new(JsonlObserver::recover(&treatment_dir)?));
             control.observe_with(Arc::new(CsvMetrics::recover(&control_dir, CounterMetrics)?));
             treatment.observe_with(Arc::new(CsvMetrics::recover(
                 &treatment_dir,
@@ -317,6 +377,15 @@ async fn launch() -> Result<(), String> {
                 control.store.chain_head(),
                 treatment.store.chain_head()
             );
+        }
+        "export" => {
+            if args.len() != 3 {
+                return Err(help().into());
+            }
+            let dir = Path::new(&args[1]);
+            let output = Path::new(&args[2]);
+            export_trial(dir, output)?;
+            println!("exported redacted event summaries to {}", output.display());
         }
         "inspect" | "validate" => {
             let dir = Path::new(args.get(1).ok_or(help())?);
@@ -363,5 +432,96 @@ async fn main() {
     if let Err(error) = launch().await {
         eprintln!("error: {error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[tokio::test]
+    async fn exported_jsonl_is_valid_verified_and_non_clobbering() {
+        let root = env::temp_dir().join(format!(
+            "hiyal-r4-export-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let dir = root.join("trial");
+        fs::create_dir_all(&root).unwrap();
+        {
+            let mut trial = Trial::create(
+                &dir,
+                "export-regression",
+                33,
+                &kind(1, false, "fixed-v1", "scripted").unwrap(),
+                Counter { total: 0 },
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
+            trial.run_attempts(3).await.unwrap();
+            trial.checkpoint().unwrap();
+        }
+        let output = root.join("export.jsonl");
+        export_trial(&dir, &output).unwrap();
+        let bytes = fs::read(&output).unwrap();
+        assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 3);
+        for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+            let event: hiyal::observe::EventSummary = serde_json::from_slice(line).unwrap();
+            assert_eq!(event.kind, "accepted");
+        }
+        assert!(export_trial(&dir, &output).is_err());
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+        fs::create_dir_all(dir.join("exports")).unwrap();
+        assert!(export_trial(&dir, &dir.join("exports/out.jsonl")).is_err());
+        assert!(export_trial(&dir, &dir.join("in-root.jsonl")).is_err());
+        assert!(!dir.join("exports/out.jsonl").exists());
+        assert!(!dir.join("in-root.jsonl").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn summary_writer_stops_at_verified_boundary() {
+        let root = env::temp_dir().join(format!(
+            "hiyal-r4-boundary-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let dir = root.join("trial");
+        fs::create_dir_all(&root).unwrap();
+        let mut trial = Trial::create(
+            &dir,
+            "verified-boundary",
+            22,
+            &kind(1, false, "fixed-v1", "scripted").unwrap(),
+            Counter { total: 0 },
+            Increment {
+                amount: 1,
+                model: false,
+                model_id: "fixed-v1".into(),
+                provider: "scripted".into(),
+            },
+            Arc::new(ScriptedBackend),
+            vec![AgentId(0)],
+            Scheduling::RoundRobin,
+        )
+        .unwrap();
+        trial.run_attempts(2).await.unwrap();
+        let prior = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
+        trial.run_attempts(2).await.unwrap();
+        let mut output = Vec::new();
+        hiyal::observe::write_summaries::<Counter>(&dir, &prior, &mut output).unwrap();
+        assert_eq!(output.iter().filter(|b| **b == b'\n').count(), 2);
+        drop(trial);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -10,6 +10,18 @@ models; JSONL and later open-data exports let Python, R, Julia, Rust and DuckDB
 analyze the results independently. No Python runtime or bindings are required
 by the Rust engine.
 
+## Native memory and redacted observation (R4)
+
+R4 introduces bounded, deterministic structured memory with TTL and adaptive
+salience for Rust applications, plus privacy-conscious derived JSONL event
+summaries. The CLI can export verified redacted event summaries without model
+prompts or world snapshots. See [R4 native contracts](docs/r4-native.md).
+
+```sh
+cargo run --locked -p hiyal -- run examples/counter.toml /tmp/hiyal-r4
+cargo run --locked -p hiyal -- export /tmp/hiyal-r4 /tmp/hiyal-r4.jsonl
+```
+
 ## Guarded provider and tool boundaries (R3)
 
 The optional `live-http` feature supports bounded OpenAI-compatible JSON/SSE

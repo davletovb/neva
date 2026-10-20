@@ -329,7 +329,7 @@ pub fn ensure_observer_health(diagnostics: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "derived metrics failed; restart will rebuild the CSV: {}",
+            "derived observer output failed; restart can rebuild projections: {}",
             diagnostics.join("; ")
         ))
     }

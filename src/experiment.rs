@@ -144,12 +144,25 @@ where
     pub fn observe_with(&mut self, obs: Arc<dyn Observer<W>>) {
         self.observers.push(obs);
     }
+    // All durable log entries (accepted, rejected, control) reach observers.
+    // Observer errors are diagnostic and must never roll back a committed event.
+    fn emit(&mut self, entry: &Entry<W, W::Action>) {
+        for observer in &self.observers {
+            if let Err(e) = observer.committed(entry) {
+                self.diagnostics.push(format!("observer failed: {e}"));
+            }
+        }
+    }
     /// Scheduler control is an audited event, never a raw in-memory mutation.
     pub fn pause_actor(&mut self, actor: AgentId) -> Result<(), String> {
-        self.store.set_paused(actor, true)
+        let entry = self.store.set_paused_event(actor, true)?;
+        self.emit(&entry);
+        Ok(())
     }
     pub fn resume_actor(&mut self, actor: AgentId) -> Result<(), String> {
-        self.store.set_paused(actor, false)
+        let entry = self.store.set_paused_event(actor, false)?;
+        self.emit(&entry);
+        Ok(())
     }
     pub async fn step(&mut self) -> Result<Step<W>, String> {
         let mut sched = self.store.schedule.clone();
@@ -234,7 +247,7 @@ where
             Ok(action) => {
                 let mut staged = self.store.world.clone();
                 if let Err(reason) = staged.apply(actor, action.clone()) {
-                    self.store.append(
+                    let entry = self.store.append(
                         actor,
                         Outcome::Rejected {
                             reason: reason.clone(),
@@ -242,6 +255,7 @@ where
                         sched,
                         rng,
                     )?;
+                    self.emit(&entry);
                     return Ok(Step::Rejected { actor, reason });
                 }
                 let state_hash = crate::storage::digest(&staged)?;
@@ -255,15 +269,11 @@ where
                     sched,
                     rng,
                 )?;
-                for observer in &self.observers {
-                    if let Err(e) = observer.committed(&entry) {
-                        self.diagnostics.push(format!("observer failed: {e}"));
-                    }
-                }
+                self.emit(&entry);
                 Ok(Step::Accepted(entry))
             }
             Err(reason) => {
-                self.store.append(
+                let entry = self.store.append(
                     actor,
                     Outcome::Rejected {
                         reason: reason.clone(),
@@ -271,6 +281,7 @@ where
                     sched,
                     rng,
                 )?;
+                self.emit(&entry);
                 Ok(Step::Rejected { actor, reason })
             }
         }
