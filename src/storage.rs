@@ -31,6 +31,27 @@ pub const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
 /// A size admission failure occurs before any append or in-memory state change.
 pub(crate) const EVENT_TOO_LARGE: &str = "event record exceeds portable size limit";
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AppendError {
+    TooLarge,
+    Other(String),
+}
+impl std::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str(EVENT_TOO_LARGE),
+            Self::Other(s) => f.write_str(s),
+        }
+    }
+}
+impl From<String> for AppendError {
+    fn from(value: String) -> Self { Self::Other(value) }
+}
+impl From<&'static str> for AppendError {
+    fn from(value: &'static str) -> Self { Self::Other(value.into()) }
+}
+
+
 /// Single, bounded metadata read for library, CLI and research consumers.
 pub fn read_metadata_limited(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
@@ -629,12 +650,16 @@ where
     /// On failure, the writer is poisoned to prevent appending after a torn tail.
     /// Internal staged append: replay independently re-applies actions during restore.
     pub(crate) fn append(
-        &mut self,
-        actor: AgentId,
-        outcome: Outcome<W, A>,
-        schedule: Schedule,
-        streams: Streams,
+        &mut self, actor: AgentId, outcome: Outcome<W, A>,
+        schedule: Schedule, streams: Streams,
     ) -> Result<Entry<W, A>, String> {
+        self.append_typed(actor, outcome, schedule, streams).map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn append_typed(
+        &mut self, actor: AgentId, outcome: Outcome<W, A>,
+        schedule: Schedule, streams: Streams,
+    ) -> Result<Entry<W, A>, AppendError> {
         if self.poisoned {
             return Err("writer poisoned; reopen/recover".into());
         }
@@ -699,7 +724,7 @@ where
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
         if encoded.len() > MAX_EVENT_RECORD_BYTES {
-            return Err(EVENT_TOO_LARGE.into());
+            return Err(AppendError::TooLarge);
         }
         let write_result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
@@ -713,7 +738,7 @@ where
         })();
         if let Err(error) = write_result {
             self.poisoned = true;
-            return Err(format!("event append/fsync failed: {error}"));
+            return Err(AppendError::Other(format!("event append/fsync failed: {error}")));
         }
         self.log_bytes += encoded.len() as u64;
         self.sequence = next_sequence;
