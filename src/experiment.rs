@@ -259,18 +259,36 @@ where
                     return Ok(Step::Rejected { actor, reason });
                 }
                 let state_hash = crate::storage::digest(&staged)?;
-                let entry = self.store.append(
+                let append = self.store.append(
                     actor,
                     Outcome::Accepted {
                         action,
                         world: staged,
                         state_hash,
                     },
-                    sched,
-                    rng,
-                )?;
-                self.emit(&entry);
-                Ok(Step::Accepted(entry))
+                    sched.clone(),
+                    rng.clone(),
+                );
+                match append {
+                    Ok(entry) => {
+                        self.emit(&entry);
+                        Ok(Step::Accepted(entry))
+                    }
+                    Err(error) if error == crate::storage::EVENT_TOO_LARGE => {
+                        // Admission failed before any append. Preserve effects
+                        // but record a rejected attempt so replay can progress.
+                        let reason = error;
+                        let entry = self.store.append(
+                            actor,
+                            Outcome::Rejected { reason: reason.clone() },
+                            sched,
+                            rng,
+                        )?;
+                        self.emit(&entry);
+                        Ok(Step::Rejected { actor, reason })
+                    }
+                    Err(error) => Err(error),
+                }
             }
             Err(reason) => {
                 let entry = self.store.append(
