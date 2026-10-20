@@ -27,5 +27,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 atomicwrites = "0.4.4"
 
 [workspace]
-members = ["examples/custom_world", "examples/custom_model"]
+members = ["examples/custom_world", "examples/custom_model", "benchmarks/native"]
 resolver = "3"
