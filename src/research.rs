@@ -471,6 +471,7 @@ where
 /// Create a branch at the validated *latest committed boundary*. This
 /// intentionally does not support a mid-event fork. Intervention applies once
 /// to genesis, and its before/after state plus parameters are recorded.
+#[allow(clippy::too_many_arguments)]
 pub fn fork_at_head<W, P, F>(
     parent_dir: impl AsRef<Path>,
     child_dir: impl AsRef<Path>,
@@ -608,6 +609,9 @@ where
         .map_err(|e| format!("open published fork: {e}"))
 }
 
+/// Control and treatment trials returned by `paired_forks`.
+pub type ForkPair<W, P> = (Trial<W, P>, Trial<W, P>);
+
 /// Paired branches share an independently verified parent boundary and RNG
 /// stream domain, but have different trial IDs, histories, and effect ledgers.
 pub fn paired_forks<W, P, F>(
@@ -618,7 +622,7 @@ pub fn paired_forks<W, P, F>(
     make_policy: impl Fn() -> P,
     treatment: F,
     backend: Arc<dyn Backend>,
-) -> Result<(Trial<W, P>, Trial<W, P>), String>
+) -> Result<ForkPair<W, P>, String>
 where
     W: World + Serialize + DeserializeOwned,
     W::Action: Serialize + DeserializeOwned + Clone,

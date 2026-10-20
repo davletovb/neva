@@ -206,7 +206,7 @@ mod tests {
         let mut reference = rng.clone();
         let mut degrees = vec![0u64; 5];
         let mut other = degrees.clone();
-        let mut selected = vec![0u64; 5];
+        let mut selected = [0u64; 5];
         for _ in 0..2000 {
             let chosen = preferential_target(&degrees, &mut rng).unwrap();
             let mut urn = Vec::new();

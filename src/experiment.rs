@@ -31,7 +31,7 @@ pub trait Observer<W: World>: Send + Sync {
 }
 #[derive(Debug)]
 pub enum Step<W: World> {
-    Accepted(Entry<W, W::Action>),
+    Accepted(Box<Entry<W, W::Action>>),
     Rejected { actor: AgentId, reason: String },
     NoEligible,
 }
@@ -57,6 +57,7 @@ where
     W::Action: Serialize + DeserializeOwned + Clone,
     P: EffectPolicy<W>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         dir: impl AsRef<Path>,
         name: &str,
@@ -272,7 +273,7 @@ where
                 match append {
                     Ok(entry) => {
                         self.emit(&entry);
-                        Ok(Step::Accepted(entry))
+                        Ok(Step::Accepted(Box::new(entry)))
                     }
                     Err(error) if error == crate::storage::EVENT_TOO_LARGE => {
                         // Admission failed before any append. Preserve effects

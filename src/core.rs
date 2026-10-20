@@ -11,7 +11,7 @@ use std::io::{self, Write};
 /// JSON-compatible unsigned 64-bit integers must be exact decimal strings.
 /// Numeric JSON is deliberately rejected even when the value would fit in f64.
 pub mod decimal_u64 {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
 
     pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&value.to_string())
@@ -30,7 +30,6 @@ pub mod decimal_u64 {
 
     pub mod option {
         use super::*;
-        use serde::de::Error as _;
 
         pub fn serialize<S: Serializer>(
             value: &Option<u64>,
