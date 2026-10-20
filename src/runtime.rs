@@ -80,8 +80,11 @@ impl Receipt {
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
     /// Restore budget and effect quota before any new provider dispatch.
-    fn recover_admission(&self, _dir: &Path,
-        _receipts: &BTreeMap<EffectCallKey, Receipt>) -> Result<(), String> {
+    fn recover_admission(
+        &self,
+        _dir: &Path,
+        _receipts: &BTreeMap<EffectCallKey, Receipt>,
+    ) -> Result<(), String> {
         Ok(())
     }
     /// Called *after* the timed-out future has been cancelled. The provider
@@ -360,9 +363,14 @@ impl EffectJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
         let lock_path = dir.as_ref().join(".effects-writer.lock");
         let lock_file = OpenOptions::new()
-            .read(true).write(true).create(true)
-            .open(&lock_path).map_err(|e| e.to_string())?;
-        lock_file.try_lock().map_err(|e| format!("effect journal already has an active writer: {e}"))?;
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .map_err(|e| e.to_string())?;
+        lock_file
+            .try_lock()
+            .map_err(|e| format!("effect journal already has an active writer: {e}"))?;
         let lock = EffectWriterLock { _file: lock_file };
         let path = dir.as_ref().join("effects.jsonl");
         if !path.exists() {
