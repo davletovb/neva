@@ -88,9 +88,11 @@ not part of the R1 implementation gate.
 
 ## Archived Python reference
 
-The prior implementation, tests, docs and historical (inactive) CI are under
-[`hiyal-python/`](hiyal-python/README.md). The new Rust workspace does not
-depend on it. The [Python benchmark harness](benchmarks/README.md) is used
+The prior implementation, tests, docs and historical (inactive) CI were
+removed from the Rust mainline. They remain browsable at the
+[archived Python README](https://github.com/davletovb/hiyal/blob/d056e228dab3d42162f1568d91b2595b17b8e8a7/hiyal-python/README.md)
+and the dedicated [archive branch](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5).
+The Rust workspace does not depend on that code. The [Python benchmark harness](benchmarks/README.md) is used
 only to measure the legacy observer-on/off reference fairly. The historical
 Python CI and Dependabot configuration remain archived and inactive. The
 [new Rust verification workflow](docs/ci-budget.md) is deliberately minimal:
