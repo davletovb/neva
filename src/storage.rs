@@ -140,6 +140,32 @@ pub struct Genesis<W> {
     pub build: Option<BuildProvenance>,
 }
 
+/// Preserve the distinction between omitted world (compact events) and
+/// an explicit JSON null world in historical full-world records.
+#[derive(Clone, Debug)]
+pub enum LegacyWorld<W> { Missing, Present(W) }
+impl<W> Default for LegacyWorld<W> {
+    fn default() -> Self { Self::Missing }
+}
+impl<W> LegacyWorld<W> {
+    fn is_missing(&self) -> bool { matches!(self, Self::Missing) }
+    pub fn as_ref(&self) -> Option<&W> {
+        match self { Self::Present(world) => Some(world), Self::Missing => None }
+    }
+    fn deserialize_present<'de, D>(d: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de>, W: serde::Deserialize<'de> {
+        Ok(Self::Present(W::deserialize(d)?))
+    }
+}
+impl<W: Serialize> Serialize for LegacyWorld<W> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Present(world) => world.serialize(s),
+            Self::Missing => s.serialize_none(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "W: Serialize, A: Serialize",
@@ -151,8 +177,9 @@ pub enum Outcome<W, A> {
         action: A,
         /// Older schema-v1 events embed the world; modern events omit it.
         /// `Some` retains byte-for-byte legacy hash serialization.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        world: Option<W>,
+        #[serde(default, skip_serializing_if = "LegacyWorld::is_missing",
+                deserialize_with = "LegacyWorld::<W>::deserialize_present")]
+        world: LegacyWorld<W>,
         state_hash: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_apply_streams: Option<Streams>,
