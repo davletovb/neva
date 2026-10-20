@@ -5,6 +5,7 @@ pub mod builtins;
 pub mod core;
 pub mod effects;
 pub mod experiment;
+pub mod guard;
 pub mod metrics;
 pub mod research;
 pub mod rng;

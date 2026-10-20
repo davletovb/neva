@@ -79,6 +79,56 @@ impl Receipt {
 
 pub type BoxResult<'a> = Pin<Box<dyn Future<Output = Result<EffectResult, String>> + Send + 'a>>;
 pub trait Backend: Send + Sync {
+    /// Called *after* the timed-out future has been cancelled. The provider
+    /// may have processed/billed the request, so this only updates breaker
+    /// state; it never retries or refunds the uncertain transaction.
+    fn on_timeout<'a>(
+        &'a self,
+        _spec: &'a EffectSpec,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async {})
+    }
+    /// Explicit guarantee: UnsupportedCapability never follows a dispatch.
+    /// Default custom backends are not trusted to make this assertion.
+    fn unsupported_is_pre_dispatch(&self) -> bool {
+        false
+    }
+    /// Opt-in only: tool execution requires a backend with explicit guards.
+    fn permits_tools(&self) -> bool {
+        false
+    }
+    fn resolve_keyed<'a>(
+        &'a self,
+        _key: &'a EffectCallKey,
+        request: &'a EffectSpec,
+    ) -> BoxResult<'a> {
+        self.resolve(request)
+    }
+    fn billing_disposition(
+        &self,
+        spec: &EffectSpec,
+        response: &EffectResult,
+    ) -> BillingDisposition {
+        if matches!(response, EffectResult::UnsupportedCapability { .. }) {
+            if self.unsupported_is_pre_dispatch() {
+                BillingDisposition::NotCharged
+            } else {
+                BillingDisposition::Unknown
+            }
+        } else if matches!(spec, EffectSpec::Tool { .. }) {
+            BillingDisposition::Unknown
+        } else if matches!(response, EffectResult::Model { .. }) {
+            BillingDisposition::Charged
+        } else {
+            BillingDisposition::Unknown
+        }
+    }
+    fn effective_provider(&self, spec: &EffectSpec) -> String {
+        match spec {
+            EffectSpec::Tool { name, .. } => format!("tool:{name}"),
+            _ => self.backend_id().into(),
+        }
+    }
     /// Useful for distinguishing scripted from network-backed billing semantics.
     fn backend_id(&self) -> &'static str {
         "custom"
@@ -90,6 +140,25 @@ pub trait Backend: Send + Sync {
 #[derive(Default)]
 pub struct ScriptedBackend;
 impl Backend for ScriptedBackend {
+    fn billing_disposition(
+        &self,
+        spec: &EffectSpec,
+        response: &EffectResult,
+    ) -> BillingDisposition {
+        match spec {
+            EffectSpec::Model(_) => BillingDisposition::NotCharged,
+            _ => {
+                if matches!(response, EffectResult::UnsupportedCapability { .. }) {
+                    BillingDisposition::NotCharged
+                } else {
+                    BillingDisposition::Unknown
+                }
+            }
+        }
+    }
+    fn unsupported_is_pre_dispatch(&self) -> bool {
+        true
+    }
     fn backend_id(&self) -> &'static str {
         "scripted"
     }
@@ -368,6 +437,26 @@ impl EffectJournal {
                 pending.push((key, spec));
             }
         }
+        // Historic receipts with >32 calls remain valid to replay. Only
+        // pending (newly billable) effects are subject to execution limits.
+        if pending.len() > 32
+            || pending
+                .iter()
+                .filter(|(_, spec)| matches!(spec, EffectSpec::Tool { .. }))
+                .count()
+                > 8
+        {
+            return Err("new effect batch exceeds limit (32 effects / 8 tools)".into());
+        }
+        // Replayed/previously recorded tool effects are inert and need no
+        // live executor permission. Only validate pending executions.
+        if pending
+            .iter()
+            .any(|(_, spec)| matches!(spec, EffectSpec::Tool { .. }))
+            && !backend.permits_tools()
+        {
+            return Err("tool backend lacks explicit permissions/approvals".into());
+        }
         if self.poisoned && !pending.is_empty() {
             return Err("effect ledger poisoned; reopen/recover before generating".into());
         }
@@ -378,40 +467,35 @@ impl EffectJournal {
             let backend = backend.clone();
             jobs.spawn(async move {
                 let _permit = sem.acquire_owned().await.map_err(|e| e.to_string())?;
-                let result = timeout(deadline, backend.resolve(&spec)).await;
+                let result = timeout(deadline, backend.resolve_keyed(&key, &spec)).await;
                 let response = match result {
                     Ok(Ok(value)) => value,
                     Ok(Err(error)) => EffectResult::Failed {
                         category: "backend".into(),
                         message: error,
                     },
-                    Err(_) => EffectResult::Failed {
-                        category: "timeout".into(),
-                        message: "effect deadline exceeded".into(),
-                    },
+                    Err(_) => {
+                        backend.on_timeout(&spec).await;
+                        EffectResult::Failed {
+                            category: "timeout".into(),
+                            message: "effect deadline exceeded".into(),
+                        }
+                    }
                 };
-                let backend_kind = backend.backend_id();
                 let model = match &response {
                     EffectResult::Model {
                         effective_model, ..
                     } => Some(effective_model.clone()),
                     _ => None,
                 };
-                let billing = if backend_kind == "scripted"
-                    || matches!(&response, EffectResult::UnsupportedCapability { .. })
-                {
-                    BillingDisposition::NotCharged
-                } else if matches!(&response, EffectResult::Model { .. }) {
-                    BillingDisposition::Charged
-                } else {
-                    BillingDisposition::Unknown
-                };
+                let billing = backend.billing_disposition(&spec, &response);
+                let provider = backend.effective_provider(&spec);
                 Ok::<_, String>(Receipt {
                     key,
                     spec,
                     result: response,
                     billing,
-                    effective_provider: backend_kind.into(),
+                    effective_provider: provider,
                     effective_model: model,
                     content_hash: String::new(),
                 })
@@ -441,14 +525,47 @@ impl EffectJournal {
     }
 }
 
-/// Minimal OpenAI-compatible, opt-in JSON chat adapter, HTTP only via reqwest.
-/// No network requests occur unless the "live-http" feature and backend are
-/// selected explicitly. Provider seed remains best-effort, not D1.
+/// Opt-in OpenAI-compatible HTTP adapter. Network requests are never D1.
+/// Unknown billing after timeout/network error is retained in the journal.
+#[cfg(feature = "live-http")]
+#[derive(Clone, Debug)]
+pub struct HttpReliability {
+    pub max_response_bytes: usize,
+    /// Only an explicit HTTP 429 is retried; transport/timeouts and 5xx may
+    /// already have incurred provider charges and are never auto-retried.
+    pub retry_429: u8,
+    /// Not universally supported by OpenAI-compatible servers; opt in.
+    pub include_stream_usage: bool,
+    pub retry_delay: Duration,
+    pub circuit_threshold: u32,
+    pub circuit_cooldown: Duration,
+}
+#[cfg(feature = "live-http")]
+impl Default for HttpReliability {
+    fn default() -> Self {
+        Self {
+            max_response_bytes: 1024 * 1024,
+            retry_429: 0,
+            include_stream_usage: false,
+            retry_delay: Duration::from_millis(100),
+            circuit_threshold: 3,
+            circuit_cooldown: Duration::from_secs(30),
+        }
+    }
+}
+#[cfg(feature = "live-http")]
+#[derive(Default)]
+struct CircuitState {
+    failures: u32,
+    open_until: Option<tokio::time::Instant>,
+}
 #[cfg(feature = "live-http")]
 pub struct OpenAiCompatible {
     client: reqwest::Client,
     url: String,
     api_key: String,
+    reliability: HttpReliability,
+    circuit: tokio::sync::Mutex<CircuitState>,
 }
 #[cfg(feature = "live-http")]
 impl OpenAiCompatible {
@@ -457,32 +574,224 @@ impl OpenAiCompatible {
         if !parsed.username().is_empty() || parsed.password().is_some() {
             return Err("userinfo in live URL is forbidden".into());
         }
-        let allowed = match parsed.scheme() {
-            "https" => true,
-            "http" => parsed.host_str().is_some_and(|host| {
-                host == "localhost"
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|address| address.is_loopback())
-            }),
-            _ => false,
-        };
+        // Endpoint admission and proxy bypass use one shared test, including IPv6.
+        let is_loopback = parsed.host_str().is_some_and(|host| {
+            let bare = host
+                .strip_prefix('[')
+                .and_then(|v| v.strip_suffix(']'))
+                .unwrap_or(host);
+            bare == "localhost"
+                || bare
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        });
+        let allowed = parsed.scheme() == "https" || (parsed.scheme() == "http" && is_loopback);
         if !allowed {
             return Err("live model URL must be HTTPS or parsed loopback HTTP".into());
         }
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| e.to_string())?;
+        // Default environment HTTP_PROXY/HTTPS_PROXY discovery could tunnel
+        // a localhost bearer request through an untrusted proxy, even though
+        // the URL itself is parsed and validated. Force *direct* loopback.
+        let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        if is_loopback {
+            builder = builder.no_proxy();
+        }
+        let client = builder.build().map_err(|e| e.to_string())?;
         Ok(Self {
             client,
             url: parsed.to_string(),
             api_key,
+            reliability: HttpReliability::default(),
+            circuit: tokio::sync::Mutex::new(CircuitState::default()),
+        })
+    }
+    pub fn with_reliability(mut self, reliability: HttpReliability) -> Result<Self, String> {
+        if reliability.max_response_bytes < 1024
+            || reliability.max_response_bytes > 8 * 1024 * 1024
+            || reliability.retry_429 > 2
+            || reliability.circuit_threshold == 0
+        {
+            return Err("invalid HTTP reliability bounds".into());
+        }
+        self.reliability = reliability;
+        Ok(self)
+    }
+    async fn failure(&self) {
+        let mut state = self.circuit.lock().await;
+        state.failures = state.failures.saturating_add(1);
+        if state.failures >= self.reliability.circuit_threshold {
+            state.open_until =
+                Some(tokio::time::Instant::now() + self.reliability.circuit_cooldown);
+        }
+    }
+    async fn successful(&self) {
+        let mut state = self.circuit.lock().await;
+        state.failures = 0;
+        state.open_until = None;
+    }
+    async fn allowed(&self) -> bool {
+        let mut state = self.circuit.lock().await;
+        if let Some(end) = state.open_until {
+            if tokio::time::Instant::now() < end {
+                return false;
+            }
+            state.failures = 0;
+            state.open_until = None;
+        }
+        true
+    }
+}
+
+#[cfg(feature = "live-http")]
+fn has_tool_calls(value: Option<&serde_json::Value>) -> bool {
+    value.is_some_and(|v| match v {
+        serde_json::Value::Null => false,
+        serde_json::Value::Array(values) => !values.is_empty(),
+        _ => true,
+    })
+}
+#[cfg(feature = "live-http")]
+fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
+    value.get("usage").filter(|v| !v.is_null()).map(|u| Usage {
+        input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()),
+        output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()),
+        billed_cost: None,
+        currency: None,
+    })
+}
+#[cfg(feature = "live-http")]
+struct SseAccumulator {
+    line: Vec<u8>,
+    frame: Vec<u8>,
+    text: String,
+    effective_model: Option<String>,
+    usage: Option<Usage>,
+    done: bool,
+    seen_bytes: usize,
+    limit: usize,
+}
+#[cfg(feature = "live-http")]
+impl SseAccumulator {
+    fn new(limit: usize) -> Self {
+        Self {
+            line: vec![],
+            frame: vec![],
+            text: String::new(),
+            effective_model: None,
+            usage: None,
+            done: false,
+            seen_bytes: 0,
+            limit,
+        }
+    }
+    fn feed(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.seen_bytes = self
+            .seen_bytes
+            .checked_add(bytes.len())
+            .ok_or("stream response overflow")?;
+        if self.seen_bytes > self.limit {
+            return Err("stream response exceeds byte cap".into());
+        }
+        for &byte in bytes {
+            if self.done {
+                break;
+            }
+            if byte == b'\n' {
+                let mut line = std::mem::take(&mut self.line);
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if line.is_empty() {
+                    if !self.frame.is_empty() {
+                        let frame = std::mem::take(&mut self.frame);
+                        self.parse_frame(&frame)?;
+                    }
+                } else if let Some(payload) = line.strip_prefix(b"data:") {
+                    if !self.frame.is_empty() {
+                        self.frame.push(b'\n');
+                    }
+                    self.frame
+                        .extend_from_slice(payload.strip_prefix(b" ").unwrap_or(payload));
+                }
+            } else {
+                self.line.push(byte);
+                if self.line.len() > self.limit {
+                    return Err("SSE line too long".into());
+                }
+            }
+        }
+        Ok(())
+    }
+    fn parse_frame(&mut self, frame: &[u8]) -> Result<(), String> {
+        if frame == b"[DONE]" {
+            self.done = true;
+            return Ok(());
+        }
+        let payload: serde_json::Value =
+            serde_json::from_slice(frame).map_err(|e| format!("invalid SSE JSON: {e}"))?;
+        if payload.get("error").is_some_and(|v| !v.is_null()) {
+            return Err("provider returned SSE error frame".into());
+        }
+        if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
+            self.effective_model = Some(model.into());
+        }
+        if let Some(usage) = parse_usage(&payload) {
+            self.usage = Some(usage);
+        }
+        if let Some(delta) = payload
+            .pointer("/choices/0/delta/content")
+            .and_then(|v| v.as_str())
+        {
+            self.text.push_str(delta);
+            if self.text.len() > self.limit {
+                return Err("stream output exceeds cap".into());
+            }
+        }
+        if has_tool_calls(payload.pointer("/choices/0/delta/tool_calls")) {
+            return Err("tool call streaming requires explicit tool executor".into());
+        }
+        Ok(())
+    }
+    fn finish(mut self, fallback: &str) -> Result<EffectResult, String> {
+        if !self.line.is_empty() || !self.frame.is_empty() {
+            return Err("truncated SSE frame".into());
+        }
+        if !self.done {
+            return Err("stream ended without [DONE]".into());
+        }
+        Ok(EffectResult::Model {
+            content: std::mem::take(&mut self.text),
+            effective_model: self.effective_model.unwrap_or_else(|| fallback.into()),
+            usage: self.usage,
         })
     }
 }
 #[cfg(feature = "live-http")]
+async fn bounded_bytes(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
+    let mut raw = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if raw.len().checked_add(chunk.len()).is_none_or(|n| n > cap) {
+            return Err("HTTP response exceeds configured byte cap".into());
+        }
+        raw.extend_from_slice(&chunk);
+    }
+    Ok(raw)
+}
+#[cfg(feature = "live-http")]
 impl Backend for OpenAiCompatible {
+    fn on_timeout<'a>(
+        &'a self,
+        spec: &'a EffectSpec,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if matches!(spec, EffectSpec::Model(_)) {
+                self.failure().await;
+            }
+        })
+    }
+    fn unsupported_is_pre_dispatch(&self) -> bool {
+        true
+    }
     fn backend_id(&self) -> &'static str {
         "openai-compatible"
     }
@@ -492,17 +801,27 @@ impl Backend for OpenAiCompatible {
                 EffectSpec::Model(m) => m,
                 _ => {
                     return Ok(EffectResult::UnsupportedCapability {
-                        capability: "HTTP tool".into(),
+                        capability: "HTTP tool operations require a separate permitted executor"
+                            .into(),
                     });
                 }
             };
-            if model.streaming || !model.tool_schemas.is_empty() || model.response_format.is_some()
-            {
+            if !model.tool_schemas.is_empty() || model.response_format.is_some() {
                 return Ok(EffectResult::UnsupportedCapability {
-                    capability: "streaming/tool schemas/response format (minimal adapter)".into(),
+                    capability: "tool schemas/structured output unsupported by this adapter".into(),
                 });
             }
-            let roles: Vec<_> = model
+            if model.model.trim().is_empty()
+                || model
+                    .sampling
+                    .max_output_tokens
+                    .is_none_or(|n| n == 0 || n > 8192)
+            {
+                return Ok(EffectResult::UnsupportedCapability {
+                    capability: "model and bounded max_output_tokens (1..=8192) required".into(),
+                });
+            }
+            let roles: Result<Vec<_>, String> = model
                 .messages
                 .iter()
                 .map(|m| {
@@ -514,16 +833,22 @@ impl Backend for OpenAiCompatible {
                     };
                     let mut message = serde_json::json!({"role":role,"content":m.content});
                     if matches!(m.role, crate::effects::Role::Tool) {
-                        let call_id = m
+                        let id = m
                             .tool_call_id
                             .as_ref()
                             .ok_or("tool role message requires tool_call_id")?;
-                        message["tool_call_id"] = serde_json::json!(call_id);
+                        message["tool_call_id"] = serde_json::json!(id);
                     }
                     Ok::<_, String>(message)
                 })
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut body = serde_json::json!({"model":model.model,"messages":roles,"stream":false});
+                .collect::<Result<Vec<_>, _>>();
+            let roles = match roles {
+                Ok(roles) => roles,
+                Err(error) => return Ok(EffectResult::UnsupportedCapability { capability: error }),
+            };
+            let mut body = serde_json::json!({
+                "model":model.model,"messages":roles,"stream":model.streaming
+            });
             if let Some(t) = model.sampling.temperature {
                 body["temperature"] = serde_json::json!(t);
             }
@@ -536,38 +861,119 @@ impl Backend for OpenAiCompatible {
             if let Some(max) = model.sampling.max_output_tokens {
                 body["max_tokens"] = serde_json::json!(max);
             }
-            let response = self
-                .client
-                .post(&self.url)
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("HTTP backend status {}", response.status()));
+            if model.streaming && self.reliability.include_stream_usage {
+                body["stream_options"] = serde_json::json!({"include_usage":true});
             }
-            let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-            let text = payload
-                .pointer("/choices/0/message/content")
-                .and_then(|v| v.as_str())
-                .ok_or("missing chat completion content")?;
-            let effective_model = payload
-                .get("model")
-                .and_then(|v| v.as_str())
-                .unwrap_or(model.model.as_str())
-                .to_owned();
-            let usage = payload.get("usage").map(|u| Usage {
-                input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()),
-                output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()),
-                billed_cost: None,
-                currency: None,
-            });
-            Ok(EffectResult::Model {
-                content: text.into(),
-                effective_model,
-                usage,
-            })
+            let body_bytes = match serde_json::to_vec(&body) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return Ok(EffectResult::UnsupportedCapability {
+                        capability: format!("model payload could not be serialized: {error}"),
+                    });
+                }
+            };
+            if body_bytes.len() > 512 * 1024 {
+                return Ok(EffectResult::UnsupportedCapability {
+                    capability: "request exceeds 512 KiB".into(),
+                });
+            }
+            for attempt in 0..=self.reliability.retry_429 {
+                if !self.allowed().await {
+                    if attempt == 0 {
+                        return Ok(EffectResult::UnsupportedCapability {
+                            capability: "HTTP circuit open; no provider request launched".into(),
+                        });
+                    }
+                    // An earlier 429 already reached the provider. Another
+                    // concurrent call may open the circuit during backoff.
+                    // Never report this as a purely local, refundable denial.
+                    return Err(
+                        "circuit opened during retry after provider dispatch; charge unknown"
+                            .into(),
+                    );
+                }
+                let response = self
+                    .client
+                    .post(&self.url)
+                    .bearer_auth(&self.api_key)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body_bytes.clone())
+                    .send()
+                    .await;
+                let response = match response {
+                    Ok(r) => r,
+                    Err(error) => {
+                        self.failure().await;
+                        // Transport can fail after delivery: never silently retry.
+                        return Err(format!("transport_unknown_charge: {error}"));
+                    }
+                };
+                let status = response.status();
+                if status.as_u16() == 429 && attempt < self.reliability.retry_429 {
+                    // An explicitly retryable response is not a completed
+                    // failed attempt for circuit accounting; only exhaustion
+                    // or non-retryable failure increments the breaker.
+                    // Only HTTP 429 is treated as explicitly non-admitted.
+                    // Do not retry timeout, 500, 503, or partial streams.
+                    tokio::time::sleep(self.reliability.retry_delay).await;
+                    continue;
+                }
+                if !status.is_success() {
+                    self.failure().await;
+                    return Err(format!(
+                        "http_status_{}: provider may have charged",
+                        status.as_u16()
+                    ));
+                }
+                let value: Result<EffectResult, String> = async {
+                    if model.streaming {
+                        let mut stream = response;
+                        let mut parser = SseAccumulator::new(self.reliability.max_response_bytes);
+                        while let Some(chunk) = stream.chunk().await.map_err(|e| e.to_string())? {
+                            parser.feed(&chunk)?;
+                            if parser.done {
+                                break;
+                            }
+                        }
+                        parser.finish(&model.model)
+                    } else {
+                        let body =
+                            bounded_bytes(response, self.reliability.max_response_bytes).await?;
+                        let payload: serde_json::Value = serde_json::from_slice(&body)
+                            .map_err(|e| format!("invalid JSON completion: {e}"))?;
+                        if payload.get("error").is_some_and(|v| !v.is_null()) {
+                            return Err("provider returned JSON error body".into());
+                        }
+                        if has_tool_calls(payload.pointer("/choices/0/message/tool_calls")) {
+                            return Err(
+                                "tool calls unsupported without an explicitly approved executor"
+                                    .into(),
+                            );
+                        }
+                        let content = payload
+                            .pointer("/choices/0/message/content")
+                            .and_then(|v| v.as_str())
+                            .ok_or("missing chat completion content")?;
+                        Ok(EffectResult::Model {
+                            content: content.into(),
+                            effective_model: payload
+                                .get("model")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(&model.model)
+                                .into(),
+                            usage: parse_usage(&payload),
+                        })
+                    }
+                }
+                .await;
+                if value.is_ok() {
+                    self.successful().await;
+                } else {
+                    self.failure().await;
+                }
+                return value;
+            }
+            Err("unexpected HTTP retry exit".into())
         })
     }
 }
@@ -719,6 +1125,114 @@ mod batch_regression_tests {
     }
 }
 
+#[cfg(test)]
+mod r3_replay_billing_regressions {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TEST_ID: AtomicU64 = AtomicU64::new(0);
+    struct Untrusted;
+    impl Backend for Untrusted {
+        fn resolve<'a>(&'a self, _: &'a EffectSpec) -> BoxResult<'a> {
+            Box::pin(async {
+                Ok(EffectResult::UnsupportedCapability {
+                    capability: "unsupported after uncertain dispatch".into(),
+                })
+            })
+        }
+    }
+    fn dir() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "hiyal-r3-ledger-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+    #[tokio::test]
+    async fn ambiguous_unsupported_results_remain_unknown_on_disk() {
+        let path = dir();
+        let mut ledger = EffectJournal::open(&path).unwrap();
+        ledger.bind_trial("test").unwrap();
+        let spec = sample_request("ambiguous");
+        let key = spec.key("test", 0, AgentId(0), 0).unwrap();
+        let record = ledger
+            .resolve_all(
+                vec![(key, spec)],
+                Arc::new(Untrusted),
+                1,
+                Duration::from_millis(500),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(record[0].billing, BillingDisposition::Unknown);
+        drop(ledger);
+        assert_eq!(EffectJournal::inspect_read_only(&path, "test").unwrap(), 1);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[tokio::test]
+    async fn historical_oversized_batches_replay_without_launch() {
+        let path = dir();
+        let mut ledger = EffectJournal::open(&path).unwrap();
+        ledger.bind_trial("historic").unwrap();
+        let mut items = vec![];
+        for i in 0..33 {
+            let spec = sample_request("historical");
+            let key = spec.key("historic", 0, AgentId(0), i).unwrap();
+            ledger
+                .resolve_all(
+                    vec![(key.clone(), spec.clone())],
+                    Arc::new(ScriptedBackend),
+                    1,
+                    Duration::from_secs(1),
+                    false,
+                )
+                .await
+                .unwrap();
+            items.push((key, spec));
+        }
+        assert_eq!(
+            ledger
+                .resolve_all(
+                    items.clone(),
+                    Arc::new(ScriptedBackend),
+                    1,
+                    Duration::from_secs(1),
+                    true
+                )
+                .await
+                .unwrap()
+                .len(),
+            33
+        );
+        let other = items
+            .iter()
+            .enumerate()
+            .map(|(i, (_, s))| {
+                (
+                    s.key("historic", 1, AgentId(0), i as u32).unwrap(),
+                    s.clone(),
+                )
+            })
+            .collect();
+        assert!(
+            ledger
+                .resolve_all(
+                    other,
+                    Arc::new(ScriptedBackend),
+                    1,
+                    Duration::from_secs(1),
+                    false
+                )
+                .await
+                .is_err()
+        );
+        drop(ledger);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
 #[cfg(all(test, feature = "live-http"))]
 mod http_tests {
     use super::*;
@@ -745,6 +1259,408 @@ mod http_tests {
         assert!(OpenAiCompatible::new("http://192.168.1.10/chat".into(), "token".into()).is_err());
         assert!(OpenAiCompatible::new("http://127.0.0.1:3333/chat".into(), "token".into()).is_ok());
     }
+    #[test]
+    fn sse_parser_handles_fragmented_frames_and_rejects_truncation() {
+        let mut p = SseAccumulator::new(4096);
+        p.feed(b"data: {\"model\":\"v2\",\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n")
+            .unwrap();
+        p.feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"B\"}}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n").unwrap();
+        p.feed(b"data: [DO").unwrap();
+        p.feed(b"NE]\n\n").unwrap();
+        assert_eq!(
+            p.finish("fallback").unwrap(),
+            EffectResult::Model {
+                content: "AB".into(),
+                effective_model: "v2".into(),
+                usage: Some(Usage {
+                    input_tokens: Some(4),
+                    output_tokens: Some(2),
+                    billed_cost: None,
+                    currency: None
+                }),
+            }
+        );
+        let mut truncated = SseAccumulator::new(4096);
+        truncated.feed(b"data: {\"choices\":[]}\n\n").unwrap();
+        assert!(truncated.finish("fallback").is_err());
+        let mut oversized = SseAccumulator::new(3);
+        assert!(oversized.feed(b"data: content\\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn circuit_opened_during_retry_preserves_unknown_billing_and_reservation() {
+        use crate::guard::{BudgetConfig, GovernedBackend};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).unwrap();
+            write!(
+                socket,
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let _ = sent.send(());
+        });
+        let http = Arc::new(
+            OpenAiCompatible::new(format!("http://{addr}/chat"), "secret".into())
+                .unwrap()
+                .with_reliability(HttpReliability {
+                    retry_429: 1,
+                    retry_delay: Duration::from_millis(500),
+                    circuit_threshold: 1,
+                    circuit_cooldown: Duration::from_secs(10),
+                    ..HttpReliability::default()
+                })
+                .unwrap(),
+        );
+        let governed = Arc::new(
+            GovernedBackend::new(http.clone(), 1).with_budget(BudgetConfig {
+                maximum_micro_usd: 1_000_000,
+                prompt_micro_usd_per_token: 1,
+                output_micro_usd_per_token: 1,
+                max_input_bytes: 4096,
+                max_output_tokens: 2048,
+            }),
+        );
+        let request = sample_request("mid-retry circuit");
+        let key = request.key("retry-trial", 0, AgentId(0), 0).unwrap();
+        let dir = std::env::temp_dir().join(format!("hiyal-r3-mid-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut journal = EffectJournal::open(&dir).unwrap();
+        journal.bind_trial("retry-trial").unwrap();
+        let worker = {
+            let governed = governed.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                journal
+                    .resolve_all(
+                        vec![(key, request)],
+                        governed,
+                        1,
+                        Duration::from_secs(3),
+                        false,
+                    )
+                    .await
+            })
+        };
+        received.await.unwrap();
+        // Model a different in-flight request tripping the shared breaker.
+        // The first call has received 429 and is still in its retry backoff.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        http.failure().await;
+
+        let receipts = worker.await.unwrap().unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].billing, BillingDisposition::Unknown);
+        assert!(matches!(
+            &receipts[0].result,
+            EffectResult::Failed { category, message }
+                if category == "backend" && message.contains("after provider dispatch")
+        ));
+        assert!(governed.remaining_micro_usd().unwrap() < 1_000_000);
+        assert!(matches!(
+            governed.resolve(&request).await.unwrap(),
+            EffectResult::UnsupportedCapability { capability }
+                if capability.contains("quota")
+        ));
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn retries_only_explicit_429_and_never_500() {
+        fn server(
+            first_status: &'static str,
+            requests: usize,
+        ) -> (String, std::thread::JoinHandle<usize>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/completions", listener.local_addr().unwrap());
+            let thread = thread::spawn(move || {
+                for i in 0..requests {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut bytes = [0u8; 4096];
+                    let _ = socket.read(&mut bytes).unwrap();
+                    let ok = i > 0;
+                    let status = if ok { "200 OK" } else { first_status };
+                    let body = if ok {
+                        r#"{"choices":[{"message":{"content":"fine"}}],"model":"stub"}"#
+                    } else {
+                        ""
+                    };
+                    write!(socket,"HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                }
+                requests
+            });
+            (url, thread)
+        }
+        let (url, handle) = server("429 Too Many Requests", 2);
+        let http = OpenAiCompatible::new(url, "secret".into())
+            .unwrap()
+            .with_reliability(HttpReliability {
+                retry_429: 1,
+                retry_delay: Duration::from_millis(1),
+                circuit_threshold: 1,
+                ..HttpReliability::default()
+            })
+            .unwrap();
+        assert!(matches!(
+            http.resolve(&sample_request("ping")).await.unwrap(),
+            EffectResult::Model { .. }
+        ));
+        assert_eq!(handle.join().unwrap(), 2);
+
+        let (url, handle) = server("500 Server Error", 1);
+        let no_retry = OpenAiCompatible::new(url, "secret".into())
+            .unwrap()
+            .with_reliability(HttpReliability {
+                retry_429: 2,
+                retry_delay: Duration::from_millis(1),
+                circuit_threshold: 1,
+                ..HttpReliability::default()
+            })
+            .unwrap();
+        assert!(no_retry.resolve(&sample_request("fail")).await.is_err());
+        assert!(
+            matches!(no_retry.resolve(&sample_request("fail")).await.unwrap(),
+            EffectResult::UnsupportedCapability{capability} if capability.contains("circuit"))
+        );
+        assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn null_and_empty_tool_calls_do_not_reject_normal_completions() {
+        assert!(!has_tool_calls(None));
+        assert!(!has_tool_calls(Some(&serde_json::Value::Null)));
+        assert!(!has_tool_calls(Some(&serde_json::json!([]))));
+        assert!(has_tool_calls(Some(&serde_json::json!([{"id":"call"}]))));
+    }
+
+    #[tokio::test]
+    async fn journal_timeout_records_unknown_billing_and_opens_live_circuit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut packet = [0u8; 4096];
+            let _ = socket.read(&mut packet).unwrap();
+            thread::sleep(Duration::from_millis(250));
+            let _ = write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+        });
+        let live = Arc::new(
+            OpenAiCompatible::new(format!("http://{addr}/chat"), "token".into())
+                .unwrap()
+                .with_reliability(HttpReliability {
+                    circuit_threshold: 1,
+                    ..HttpReliability::default()
+                })
+                .unwrap(),
+        );
+        let dir = std::env::temp_dir().join(format!("hiyal-r3-timeout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let request = sample_request("slow");
+        let key = request.key("timeout-trial", 0, AgentId(0), 0).unwrap();
+        let mut journal = EffectJournal::open(&dir).unwrap();
+        journal.bind_trial("timeout-trial").unwrap();
+        let receipts = journal
+            .resolve_all(
+                vec![(key, request.clone())],
+                live.clone(),
+                1,
+                Duration::from_millis(100),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipts[0].billing, BillingDisposition::Unknown);
+        assert!(
+            matches!(receipts[0].result,EffectResult::Failed{ref category,..} if category=="timeout")
+        );
+        assert!(matches!(
+            live.resolve(&request).await.unwrap(),
+            EffectResult::UnsupportedCapability { .. }
+        ));
+        drop(journal);
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_200_response_opens_circuit_without_retry() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/completions", listener.local_addr().unwrap());
+        let thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut ignored = [0u8; 4096];
+            let _ = stream.read(&mut ignored).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            )
+            .unwrap();
+        });
+        let http = OpenAiCompatible::new(url, "secret".into())
+            .unwrap()
+            .with_reliability(HttpReliability {
+                circuit_threshold: 1,
+                ..HttpReliability::default()
+            })
+            .unwrap();
+        assert!(http.resolve(&sample_request("bad")).await.is_err());
+        assert!(matches!(
+            http.resolve(&sample_request("bad")).await.unwrap(),
+            EffectResult::UnsupportedCapability { .. }
+        ));
+        thread.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stream_over_loopback_collects_fragmented_sse_and_usage() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut received = vec![];
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break;
+                }
+                received.extend_from_slice(&chunk[..n]);
+                if let Some(header) = received.windows(4).position(|c| c == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&received[..header]);
+                    let len = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|c| c.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if received.len() >= header + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let message = concat!(
+                "data: {\"model\":\"v2\",\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"B\"}}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":2}}\n\n",
+                "data: [DONE]\n\n"
+            );
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",message.len(),message).unwrap();
+            String::from_utf8(received).unwrap()
+        });
+        let http = OpenAiCompatible::new(
+            format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            "test".into(),
+        )
+        .unwrap()
+        .with_reliability(HttpReliability {
+            include_stream_usage: true,
+            ..HttpReliability::default()
+        })
+        .unwrap();
+        let mut spec = sample_request("stream");
+        if let EffectSpec::Model(ref mut m) = spec {
+            m.streaming = true;
+        }
+        assert_eq!(
+            http.resolve(&spec).await.unwrap(),
+            EffectResult::Model {
+                content: "AB".into(),
+                effective_model: "v2".into(),
+                usage: Some(Usage {
+                    input_tokens: Some(2),
+                    output_tokens: Some(2),
+                    billed_cost: None,
+                    currency: None
+                }),
+            }
+        );
+        let wire = server.join().unwrap();
+        assert!(wire.contains("\"stream\":true"));
+        assert!(wire.contains("stream_options"));
+    }
+
+    #[test]
+    fn provider_error_frame_invalidates_partial_stream() {
+        let mut parser = SseAccumulator::new(4096);
+        parser
+            .feed(
+                br#"data: {"choices":[{"delta":{"content":"partial"}}]}
+
+"#,
+            )
+            .unwrap();
+        assert!(
+            parser
+                .feed(
+                    br#"data: {"error":{"message":"overloaded"}}
+
+"#
+                )
+                .is_err()
+        );
+        assert!(serde_json::json!({"error":{"message":"bad"},"choices":[{"message":{"content":"bad"}}]})
+            .get("error").is_some());
+    }
+
+    #[test]
+    fn simulated_timeout_is_scoped_to_model_calls() {
+        let http = OpenAiCompatible::new("http://127.0.0.1:1/chat".into(), "test".into())
+            .unwrap()
+            .with_reliability(HttpReliability {
+                circuit_threshold: 1,
+                ..HttpReliability::default()
+            })
+            .unwrap();
+        let tool = EffectSpec::Tool {
+            name: "slow".into(),
+            input: serde_json::json!({}),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let guarded = crate::guard::GovernedBackend::new(Arc::new(http), 5);
+            guarded.on_timeout(&tool).await;
+            let model = sample_request("check");
+            // The backend was never reached by the tool timeout.
+            // A still-healthy model backend tries transport, not circuit rejection.
+            let outcome = guarded.resolve(&model).await;
+            assert!(
+                outcome.is_err()
+                    || !matches!(outcome.unwrap(),
+                EffectResult::UnsupportedCapability {capability} if capability.contains("circuit"))
+            );
+        });
+    }
+
     #[tokio::test]
     async fn opt_in_http_chat_adapter_parses_model_and_usage_from_loopback() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

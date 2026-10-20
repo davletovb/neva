@@ -162,37 +162,68 @@ where
         let result = match self.store.world.observe(actor) {
             Ok(obs) => match self.policy.requests(actor, &obs) {
                 Ok(specs) => {
-                    let mut keyed = Vec::new();
-                    for (index, spec) in specs.into_iter().enumerate() {
-                        let index = u32::try_from(index).map_err(|_| "too many effect calls")?;
-                        let key = spec.key(
-                            &self.store.genesis.trial_id,
-                            self.store.sequence,
-                            actor,
-                            index,
-                        )?;
-                        keyed.push((key, spec));
-                    }
-                    let receipts = self
-                        .effects
-                        .resolve_all(
-                            keyed,
-                            self.backend.clone(),
-                            self.concurrency,
-                            self.timeout,
-                            self.replay_only,
-                        )
-                        .await?; // Storage, replay-integrity and task failures are fatal.
-                    if receipts.iter().any(|r| {
-                        matches!(
-                            &r.result,
-                            crate::effects::EffectResult::Failed { .. }
-                                | crate::effects::EffectResult::UnsupportedCapability { .. }
-                        )
-                    }) {
-                        Err("effect failed or capability unsupported".into())
+                    // Reject oversized *new* policies as a committed attempt
+                    // rejection, but permit complete historic ledger replays.
+                    let over_limit = specs.len() > 32
+                        || specs
+                            .iter()
+                            .filter(|s| matches!(s, crate::runtime::EffectSpec::Tool { .. }))
+                            .count()
+                            > 8;
+                    let all_recorded = over_limit
+                        && specs.iter().enumerate().all(|(i, spec)| {
+                            let Ok(index) = u32::try_from(i) else {
+                                return false;
+                            };
+                            let Ok(key) = spec.key(
+                                &self.store.genesis.trial_id,
+                                self.store.sequence,
+                                actor,
+                                index,
+                            ) else {
+                                return false;
+                            };
+                            self.effects
+                                .receipts()
+                                .get(&key)
+                                .is_some_and(|r| r.spec == *spec)
+                        });
+                    if over_limit && !all_recorded {
+                        Err("policy exceeded 32 effects or 8 tool calls; no external calls launched".into())
                     } else {
-                        self.policy.decide(actor, &obs, &receipts)
+                        let mut keyed = Vec::new();
+                        for (index, spec) in specs.into_iter().enumerate() {
+                            let index =
+                                u32::try_from(index).map_err(|_| "too many effect calls")?;
+                            let key = spec.key(
+                                &self.store.genesis.trial_id,
+                                self.store.sequence,
+                                actor,
+                                index,
+                            )?;
+                            keyed.push((key, spec));
+                        }
+                        let receipts = self
+                            .effects
+                            .resolve_all(
+                                keyed,
+                                self.backend.clone(),
+                                self.concurrency,
+                                self.timeout,
+                                self.replay_only,
+                            )
+                            .await?; // Storage, replay-integrity and task failures are fatal.
+                        if receipts.iter().any(|r| {
+                            matches!(
+                                &r.result,
+                                crate::effects::EffectResult::Failed { .. }
+                                    | crate::effects::EffectResult::UnsupportedCapability { .. }
+                            )
+                        }) {
+                            Err("effect failed or capability unsupported".into())
+                        } else {
+                            self.policy.decide(actor, &obs, &receipts)
+                        }
                     }
                 }
                 Err(e) => Err(e),

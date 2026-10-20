@@ -10,6 +10,17 @@ models; JSONL and later open-data exports let Python, R, Julia, Rust and DuckDB
 analyze the results independently. No Python runtime or bindings are required
 by the Rust engine.
 
+## Guarded provider and tool boundaries (R3)
+
+The optional `live-http` feature supports bounded OpenAI-compatible JSON/SSE
+responses, conservative HTTP retry classification, circuit breaking, and
+captured model/usage metadata. By default no live network or tool execution
+occurs. `guard::GovernedBackend` enforces process-local micro-USD reservations,
+request/output limits, a bounded total effect count, explicit tool validators,
+and call-key-scoped one-time approvals for potentially side-effecting tools.
+The Rust CLI's `--live` mode requires explicit token prices and a spend cap.
+See [R3 behavior and deferred contracts](docs/r3-reliability.md).
+
 ## Research workflows (R2)
 
 R2 adds reproducible parameter sweeps, bounded Rust-native trial concurrency,
