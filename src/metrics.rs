@@ -97,7 +97,9 @@ where
             let mut read_bytes = 0u64;
             loop {
                 let count = read_record_limited(&mut reader, &mut line)?;
-                if count == 0 { break; }
+                if count == 0 {
+                    break;
+                }
                 if !line.ends_with(b"\n") {
                     return Err("incomplete event record during metrics recovery".into());
                 }
