@@ -12,15 +12,26 @@ use hiyal::{
     scheduler::Scheduling,
 };
 use serde_json::json;
-use std::{env, fs, path::Path, sync::Arc, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{
+    env, fs,
+    path::Path,
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 fn rss_bytes() -> Option<u64> {
     let status = fs::read_to_string("/proc/self/status").ok()?;
     let line = status.lines().find(|line| line.starts_with("VmRSS:"))?;
-    line.split_whitespace().nth(1)?.parse::<u64>().ok()?.checked_mul(1024)
+    line.split_whitespace()
+        .nth(1)?
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(1024)
 }
 fn percentile_ns(values: &[u128], numerator: usize, denominator: usize) -> u128 {
-    if values.is_empty() { return 0; }
+    if values.is_empty() {
+        return 0;
+    }
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     let index = ((sorted.len() * numerator).div_ceil(denominator)).saturating_sub(1);
@@ -34,21 +45,36 @@ async fn run() -> Result<(), String> {
     let actors = args[0].parse::<u64>().map_err(|e| e.to_string())?;
     let steps = args[1].parse::<u64>().map_err(|e| e.to_string())?;
     let observe = args[2].as_str();
-    if !(1..=1000).contains(&actors) || !(1..=100000).contains(&steps)
-        || !matches!(observe, "on" | "off") {
+    if !(1..=1000).contains(&actors)
+        || !(1..=100000).contains(&steps)
+        || !matches!(observe, "on" | "off")
+    {
         return Err("out-of-range benchmark arguments".into());
     }
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
     let root = env::temp_dir().join(format!("hiyal-bench-{}-{nonce}", std::process::id()));
-    if root.exists() { return Err("benchmark path collision".into()); }
+    if root.exists() {
+        return Err("benchmark path collision".into());
+    }
     let kind = kind(1, false, "fixed-v1", "scripted")?;
     let setup = Instant::now();
     let mut trial = Trial::create(
-        &root, "benchmark-counter", 1, &kind, Counter { total: 0 },
+        &root,
+        "benchmark-counter",
+        1,
+        &kind,
+        Counter { total: 0 },
         Increment {
-            amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into()
+            amount: 1,
+            model: false,
+            model_id: "fixed-v1".into(),
+            provider: "scripted".into(),
         },
-        Arc::new(ScriptedBackend), (0..actors).map(AgentId).collect(),
+        Arc::new(ScriptedBackend),
+        (0..actors).map(AgentId).collect(),
         Scheduling::RoundRobin,
     )?;
     if observe == "on" {
@@ -94,7 +120,10 @@ async fn run() -> Result<(), String> {
         "semantics": "disk-backed hash-chained world commits, no provider, observers project JSONL and CSV",
         "comparison_warning": "NOT the same unit of work as the historical Python BasicEnvironment.step; no speedup inference"
     });
-    println!("{}", serde_json::to_string(&result).map_err(|e| e.to_string())?);
+    println!(
+        "{}",
+        serde_json::to_string(&result).map_err(|e| e.to_string())?
+    );
     drop(trial);
     cleanup(&root)?;
     Ok(())
