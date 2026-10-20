@@ -9,7 +9,7 @@ use hiyal::{
     research::{CounterMetrics, Sweep, ensure_observer_health, paired_forks, verify_fork},
     runtime::{Backend, ScriptedBackend},
     scheduler::Scheduling,
-    storage::Store,
+    storage::{Store, Durability},
 };
 use serde::Deserialize;
 use std::{env, fs, path::Path, sync::Arc};
@@ -25,10 +25,12 @@ struct Config {
     scheduler: Scheduling,
     model: bool,
     model_id: Option<String>,
+    #[serde(default)]
+    durability: Durability,
 }
 fn help() -> &'static str {
     "hiyal run <config.toml> <trial-dir> [--live]\n\
-     hiyal resume <trial-dir> <attempts> [--live]\n\
+     hiyal resume <trial-dir> <attempts> [--live] [--trusted-snapshot] [--checkpoint-durability]\n\
      hiyal inspect <trial-dir>\n\
      hiyal validate <trial-dir>\n\
      hiyal export <trial-dir> <output.jsonl>\n\
@@ -186,6 +188,7 @@ async fn launch() -> Result<(), String> {
                 agents,
                 cfg.scheduler,
             )?;
+            trial.store.set_durability(cfg.durability)?;
             trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(cfg.attempts).await?;
             trial.checkpoint()?;
@@ -210,8 +213,13 @@ async fn launch() -> Result<(), String> {
                 .ok_or(help())?
                 .parse::<u64>()
                 .map_err(|e| e.to_string())?;
-            let live = args.get(3).is_some_and(|s| s == "--live");
-            if args.len() > 4 || (args.len() == 4 && !live) {
+            let opts = &args[3..];
+            let live = opts.iter().any(|o| o == "--live");
+            let trusted = opts.iter().any(|o| o == "--trusted-snapshot");
+            let checkpoint_durability = opts.iter().any(|o| o == "--checkpoint-durability");
+            if opts.len() > 3 || opts.iter().any(|o| !matches!(o.as_str(),
+                "--live" | "--trusted-snapshot" | "--checkpoint-durability"))
+                || opts.iter().collect::<std::collections::BTreeSet<_>>().len() != opts.len() {
                 return Err(help().into());
             }
             let kind = read_kind(dir)?;
@@ -225,7 +233,17 @@ async fn launch() -> Result<(), String> {
             {
                 return Err("resume backend differs from saved trial provider".into());
             }
-            let mut trial = Trial::resume(dir, &kind, policy, backend(live)?, false)?;
+            let backend = backend(live)?;
+            let mut trial = if trusted {
+                Trial::resume_trusted(dir, &kind, policy, backend, false)?
+            } else {
+                Trial::resume(dir, &kind, policy, backend, false)?
+            };
+            if checkpoint_durability {
+                trial.store.set_durability(Durability::AtCheckpoint)?;
+            }
+            // Derived observability remains independently verifiable; it
+            // reconstructs projections from all committed records.
             trial.observe_with(Arc::new(JsonlObserver::recover(dir)?));
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
