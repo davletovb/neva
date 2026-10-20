@@ -16,9 +16,11 @@ fn main() {
         "Rust compiler --version failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let version = String::from_utf8(output.stdout)
-        .expect("Rust compiler version is not UTF-8");
+    let version = String::from_utf8(output.stdout).expect("Rust compiler version is not UTF-8");
     let version = version.trim();
-    assert!(!version.is_empty(), "Rust compiler version must not be empty");
+    assert!(
+        !version.is_empty(),
+        "Rust compiler version must not be empty"
+    );
     println!("cargo:rustc-env=HIYAL_RUSTC_VERSION={version}");
 }
