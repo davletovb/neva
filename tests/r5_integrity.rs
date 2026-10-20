@@ -302,30 +302,40 @@ fn event_record_reader_refuses_excessive_memory_growth() {
 
 #[tokio::test]
 async fn effects_ledger_detects_corruption_and_never_repairs_during_inspection() {
-    use hiyal::runtime::{sample_request, EffectJournal};
+    use hiyal::runtime::{EffectJournal, sample_request};
     use std::time::Duration;
     let dir = trial_dir("effect-ledger");
     fs::create_dir_all(&dir).unwrap();
     let mut journal = EffectJournal::open(&dir).unwrap();
     let spec = sample_request("sensitive-private-prompt-913");
     let key = spec.key("effect-trial", 0, AgentId(0), 0).unwrap();
-    journal.resolve_all(
-        vec![(key.clone(), spec)],
-        Arc::new(ScriptedBackend),
-        1,
-        Duration::from_secs(2),
-        false,
-    ).await.unwrap();
+    journal
+        .resolve_all(
+            vec![(key.clone(), spec)],
+            Arc::new(ScriptedBackend),
+            1,
+            Duration::from_secs(2),
+            false,
+        )
+        .await
+        .unwrap();
     drop(journal);
     let path = dir.join("effects.jsonl");
     let original = fs::read(&path).unwrap();
-    assert_eq!(EffectJournal::inspect_read_only(&dir, "effect-trial").unwrap(), 1);
-    for flip in [0usize, original.len()/2, original.len()-2] {
+    assert_eq!(
+        EffectJournal::inspect_read_only(&dir, "effect-trial").unwrap(),
+        1
+    );
+    for flip in [0usize, original.len() / 2, original.len() - 2] {
         let mut mutated = original.clone();
         mutated[flip] ^= 1;
         fs::write(&path, &mutated).unwrap();
         assert!(EffectJournal::inspect_read_only(&dir, "effect-trial").is_err());
-        assert_eq!(fs::read(&path).unwrap(), mutated, "inspect must never modify corrupt receipts");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            mutated,
+            "inspect must never modify corrupt receipts"
+        );
         assert!(EffectJournal::open_existing(&dir).is_err());
     }
     fs::write(&path, &original).unwrap();
@@ -347,10 +357,10 @@ fn effect_reader_caps_single_record_without_unbounded_allocations() {
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("effects.jsonl");
     let f = fs::File::create(&path).unwrap();
-    f.set_len((hiyal::storage::MAX_EVENT_RECORD_BYTES + 2) as u64).unwrap();
+    f.set_len((hiyal::storage::MAX_EVENT_RECORD_BYTES + 2) as u64)
+        .unwrap();
     drop(f);
-    let error = hiyal::runtime::EffectJournal::inspect_read_only(&dir, "effect-trial")
-        .unwrap_err();
+    let error = hiyal::runtime::EffectJournal::inspect_read_only(&dir, "effect-trial").unwrap_err();
     assert!(error.contains("size limit"), "{error}");
     fs::remove_dir_all(dir).unwrap();
 }
@@ -359,20 +369,34 @@ fn effect_reader_caps_single_record_without_unbounded_allocations() {
 /// structural bytes changes integrity or JSON validity, never a valid receipt.
 #[tokio::test]
 async fn effect_receipt_mutation_matrix_is_detected() {
-    use hiyal::runtime::{sample_request, EffectJournal};
+    use hiyal::runtime::{EffectJournal, sample_request};
     use std::time::Duration;
     let dir = trial_dir("mutation-matrix");
     fs::create_dir_all(&dir).unwrap();
     let mut journal = EffectJournal::open(&dir).unwrap();
     let spec = sample_request("opaque-secret-c7d");
     let key = spec.key("mutations", 0, AgentId(0), 0).unwrap();
-    journal.resolve_all(vec![(key, spec)], Arc::new(ScriptedBackend), 1, Duration::from_secs(2), false)
-        .await.unwrap();
+    journal
+        .resolve_all(
+            vec![(key, spec)],
+            Arc::new(ScriptedBackend),
+            1,
+            Duration::from_secs(2),
+            false,
+        )
+        .await
+        .unwrap();
     drop(journal);
     let path = dir.join("effects.jsonl");
     let original = fs::read(&path).unwrap();
-    let sample_positions = [0, 1, original.len()/4, original.len()/2,
-        original.len()*3/4, original.len()-3];
+    let sample_positions = [
+        0,
+        1,
+        original.len() / 4,
+        original.len() / 2,
+        original.len() * 3 / 4,
+        original.len() - 3,
+    ];
     for pos in sample_positions {
         let mut mutated = original.clone();
         // Force invalid UTF-8 while preserving line delimiters.
