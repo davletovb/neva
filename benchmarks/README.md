@@ -9,7 +9,8 @@ To keep the user-deferred benchmarking reproducible, check out that archived
 source in a **separate worktree** and set `HIYAL_LEGACY_SOURCE`:
 
 ```sh
-git worktree add --detach ../hiyal-python-reference archive/hiyal-python-pre-r5
+git fetch origin archive/hiyal-python-pre-r5
+git worktree add --detach ../hiyal-python-reference FETCH_HEAD
 export HIYAL_LEGACY_SOURCE="$(cd ../hiyal-python-reference/hiyal-python && pwd)"
 ```
 
