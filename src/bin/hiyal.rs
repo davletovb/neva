@@ -103,7 +103,9 @@ fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
     let verified = Store::<Counter, u64>::inspect_read_only(dir)?;
     hiyal::runtime::EffectJournal::inspect_read_only(dir, &verified.genesis.trial_id)?;
     let trial_root = fs::canonicalize(dir).map_err(|e| e.to_string())?;
-    let parent = output.parent().filter(|p| !p.as_os_str().is_empty())
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let destination_root = fs::canonicalize(parent).map_err(|e| e.to_string())?;
     if destination_root.starts_with(&trial_root) || output.exists() {
@@ -111,17 +113,24 @@ fn export_trial(dir: &Path, output: &Path) -> Result<(), String> {
     }
     let temporary = output.with_extension("hiyal-tmp");
     let result = (|| -> Result<(), String> {
-        let mut staging = fs::OpenOptions::new().write(true).create_new(true)
-            .open(&temporary).map_err(|e| e.to_string())?;
+        let mut staging = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| e.to_string())?;
         hiyal::observe::write_summaries::<Counter>(dir, &verified, &mut staging)?;
-        staging.flush().and_then(|_| staging.sync_all()).map_err(|e| e.to_string())?;
+        staging
+            .flush()
+            .and_then(|_| staging.sync_all())
+            .map_err(|e| e.to_string())?;
         drop(staging);
         // Atomic exclusive publication; rename would overwrite a concurrent
         // exporter on Unix. Both files reside on the same filesystem.
         fs::hard_link(&temporary, output).map_err(|e| e.to_string())?;
         fs::remove_file(&temporary).map_err(|e| e.to_string())?;
         #[cfg(unix)]
-        fs::File::open(&destination_root).and_then(|f| f.sync_all())
+        fs::File::open(&destination_root)
+            .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())?;
         Ok(())
     })();
@@ -429,19 +438,30 @@ mod export_tests {
     #[tokio::test]
     async fn exported_jsonl_is_valid_verified_and_non_clobbering() {
         let root = env::temp_dir().join(format!(
-            "hiyal-r4-export-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)
+            "hiyal-r4-export-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         let dir = root.join("trial");
         fs::create_dir_all(&root).unwrap();
         {
             let mut trial = Trial::create(
-                &dir, "export-regression", 33,
+                &dir,
+                "export-regression",
+                33,
                 &kind(1, false, "fixed-v1", "scripted").unwrap(),
                 Counter { total: 0 },
-                Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
                 Arc::new(ScriptedBackend),
-                vec![AgentId(0)], Scheduling::RoundRobin,
-            ).unwrap();
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             trial.run_attempts(3).await.unwrap();
             trial.checkpoint().unwrap();
         }
@@ -466,18 +486,29 @@ mod export_tests {
     #[tokio::test]
     async fn summary_writer_stops_at_verified_boundary() {
         let root = env::temp_dir().join(format!(
-            "hiyal-r4-boundary-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)
+            "hiyal-r4-boundary-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         let dir = root.join("trial");
         fs::create_dir_all(&root).unwrap();
         let mut trial = Trial::create(
-            &dir, "verified-boundary", 22,
+            &dir,
+            "verified-boundary",
+            22,
             &kind(1, false, "fixed-v1", "scripted").unwrap(),
             Counter { total: 0 },
-            Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
+            Increment {
+                amount: 1,
+                model: false,
+                model_id: "fixed-v1".into(),
+                provider: "scripted".into(),
+            },
             Arc::new(ScriptedBackend),
-            vec![AgentId(0)], Scheduling::RoundRobin,
-        ).unwrap();
+            vec![AgentId(0)],
+            Scheduling::RoundRobin,
+        )
+        .unwrap();
         trial.run_attempts(2).await.unwrap();
         let prior = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
         trial.run_attempts(2).await.unwrap();
