@@ -13,6 +13,34 @@ use std::{
 };
 
 pub const SCHEMA: u32 = 1;
+/// Per-record limit bounds corrupted or hostile files during streaming replay.
+pub const MAX_EVENT_RECORD_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
+
+fn read_metadata_limited(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    if metadata.len() > MAX_METADATA_BYTES as u64 {
+        return Err("manifest or snapshot exceeds portable size limit".into());
+    }
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err("manifest or snapshot grew beyond size limit".into());
+    }
+    Ok(bytes)
+}
+
+fn read_record_limited(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Result<usize, String> {
+    use std::io::Read;
+    line.clear();
+    let count = reader
+        .take(MAX_EVENT_RECORD_BYTES as u64 + 1)
+        .read_until(b'\n', line)
+        .map_err(|e| e.to_string())?;
+    if count > MAX_EVENT_RECORD_BYTES {
+        return Err("event record exceeds portable size limit".into());
+    }
+    Ok(count)
+}
 
 /// Stable UTF-8 JSON with lexically sorted keys, including nested maps. This is
 /// a documented interim profile, NOT a claim of full RFC 8785 compliance.
@@ -264,6 +292,9 @@ where
         }
         genesis.initial_schedule.validate()?;
         let raw = stable_bytes(&genesis)?;
+        if raw.len() > MAX_METADATA_BYTES {
+            return Err("manifest exceeds portable size limit".into());
+        }
         save_atomic(&dir.join("manifest.json"), &raw)?;
         File::create(dir.join("events.jsonl"))
             .and_then(|f| f.sync_all())
@@ -290,7 +321,7 @@ where
     pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
         let dir = dir.as_ref();
         let genesis: Genesis<W> = serde_json::from_slice(
-            &fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?,
+            &read_metadata_limited(&dir.join("manifest.json"))?,
         )
         .map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
@@ -305,7 +336,7 @@ where
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
             Some(
-                serde_json::from_slice(&fs::read(snap_path).map_err(|e| e.to_string())?)
+                serde_json::from_slice(&read_metadata_limited(&snap_path)?)
                     .map_err(|e| e.to_string())?,
             )
         } else {
@@ -327,10 +358,7 @@ where
         let mut offset = 0u64;
         let mut line = Vec::new();
         loop {
-            line.clear();
-            let count = reader
-                .read_until(b'\n', &mut line)
-                .map_err(|e| e.to_string())?;
+            let count = read_record_limited(&mut reader, &mut line)?;
             if count == 0 {
                 break;
             }
@@ -379,7 +407,7 @@ where
         if uncommitted.exists() {
             fs::remove_file(&uncommitted).map_err(|e| e.to_string())?;
         }
-        let raw = fs::read(dir.join("manifest.json")).map_err(|e| e.to_string())?;
+        let raw = read_metadata_limited(&dir.join("manifest.json"))?;
         let genesis: Genesis<W> = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
             return Err("unsupported manifest/trial schema".into());
@@ -393,18 +421,15 @@ where
             logical_step: 0,
             chain_head: digest(&genesis)?,
         };
-        let data = fs::read(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
-        let durable_length = data
-            .iter()
-            .rposition(|b| *b == b'\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        // Read the one snapshot *before* replay. Keep at most one matching projection,
-        // never a clone of every event's entire world.
+        let mut reader = BufReader::new(
+            File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?,
+        );
+        // Always replay all committed records rather than trusting snapshots.
+        // Stream each record: memory is bounded by the largest valid event.
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
             Some(
-                serde_json::from_slice(&fs::read(&snap_path).map_err(|e| e.to_string())?)
+                serde_json::from_slice(&read_metadata_limited(&snap_path)?)
                     .map_err(|e| e.to_string())?,
             )
         } else {
@@ -416,19 +441,28 @@ where
         } else {
             None
         };
-        let mut cursor = 0usize;
-        for raw_line in data[..durable_length].split_inclusive(|b| *b == b'\n') {
-            let entry: Entry<W, A> = serde_json::from_slice(raw_line)
+        let mut durable_length = 0u64;
+        let mut line = Vec::new();
+        loop {
+            let count = read_record_limited(&mut reader, &mut line)?;
+            if count == 0 {
+                break;
+            }
+            if !line.ends_with(b"\n") {
+                // Only an uncommitted final fragment is eligible for repair.
+                // A corrupt newline-terminated record always fails closed.
+                break;
+            }
+            let entry: Entry<W, A> = serde_json::from_slice(&line)
                 .map_err(|e| format!("corrupt committed log: {e}"))?;
             Self::validate_entry(&genesis, &mut projected, &entry)?;
-            cursor += raw_line.len();
-            if snapshot
-                .as_ref()
-                .is_some_and(|s| s.log_bytes == cursor as u64)
-            {
+            durable_length = durable_length.checked_add(count as u64)
+                .ok_or("committed log offset overflow")?;
+            if snapshot.as_ref().is_some_and(|s| s.log_bytes == durable_length) {
                 matched = Some(projected.clone());
             }
         }
+        let file_length = reader.get_ref().metadata().map_err(|e| e.to_string())?.len();
         if let Some(snapshot) = snapshot {
             let expected = matched.ok_or("snapshot offset not on a committed boundary")?;
             if snapshot.schema != SCHEMA
@@ -443,14 +477,14 @@ where
                 return Err("snapshot failed independent log validation".into());
             }
         }
-        if durable_length < data.len() {
+        if durable_length < file_length {
             // Drop only an uncommitted final fragment; all newline-terminated
             // entries have been fully validated before modifying any file.
             let f = OpenOptions::new()
                 .write(true)
                 .open(dir.join("events.jsonl"))
                 .map_err(|e| e.to_string())?;
-            f.set_len(durable_length as u64)
+            f.set_len(durable_length)
                 .and_then(|_| f.sync_all())
                 .map_err(|e| e.to_string())?;
         }
@@ -463,7 +497,7 @@ where
             sequence: projected.sequence,
             logical_step: projected.logical_step,
             chain_head: projected.chain_head,
-            log_bytes: durable_length as u64,
+            log_bytes: durable_length,
             poisoned: false,
             _lock: lock,
             _action: std::marker::PhantomData,
@@ -593,6 +627,9 @@ where
         event.hash = event.compute_hash()?;
         let mut encoded = stable_bytes(&event)?;
         encoded.push(b'\n');
+        if encoded.len() > MAX_EVENT_RECORD_BYTES {
+            return Err("event record exceeds portable size limit".into());
+        }
         let write_result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .append(true)
@@ -671,7 +708,11 @@ where
             schedule: self.schedule.clone(),
             streams: self.streams.clone(),
         };
-        save_atomic(&self.dir.join("snapshot.json"), &stable_bytes(&snapshot)?)
+        let bytes = stable_bytes(&snapshot)?;
+        if bytes.len() > MAX_METADATA_BYTES {
+            return Err("snapshot exceeds portable size limit".into());
+        }
+        save_atomic(&self.dir.join("snapshot.json"), &bytes)
     }
 
     pub fn read_events(&self) -> Result<Vec<Entry<W, A>>, String> {
