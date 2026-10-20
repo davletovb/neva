@@ -320,10 +320,9 @@ where
     /// A concurrent incomplete append returns an error rather than truncating it.
     pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
         let dir = dir.as_ref();
-        let genesis: Genesis<W> = serde_json::from_slice(
-            &read_metadata_limited(&dir.join("manifest.json"))?,
-        )
-        .map_err(|e| e.to_string())?;
+        let genesis: Genesis<W> =
+            serde_json::from_slice(&read_metadata_limited(&dir.join("manifest.json"))?)
+                .map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
             return Err("invalid read-only manifest".into());
         }
@@ -421,9 +420,8 @@ where
             logical_step: 0,
             chain_head: digest(&genesis)?,
         };
-        let mut reader = BufReader::new(
-            File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?,
-        );
+        let mut reader =
+            BufReader::new(File::open(dir.join("events.jsonl")).map_err(|e| e.to_string())?);
         // Always replay all committed records rather than trusting snapshots.
         // Stream each record: memory is bounded by the largest valid event.
         let snap_path = dir.join("snapshot.json");
@@ -453,16 +451,24 @@ where
                 // A corrupt newline-terminated record always fails closed.
                 break;
             }
-            let entry: Entry<W, A> = serde_json::from_slice(&line)
-                .map_err(|e| format!("corrupt committed log: {e}"))?;
+            let entry: Entry<W, A> =
+                serde_json::from_slice(&line).map_err(|e| format!("corrupt committed log: {e}"))?;
             Self::validate_entry(&genesis, &mut projected, &entry)?;
-            durable_length = durable_length.checked_add(count as u64)
+            durable_length = durable_length
+                .checked_add(count as u64)
                 .ok_or("committed log offset overflow")?;
-            if snapshot.as_ref().is_some_and(|s| s.log_bytes == durable_length) {
+            if snapshot
+                .as_ref()
+                .is_some_and(|s| s.log_bytes == durable_length)
+            {
                 matched = Some(projected.clone());
             }
         }
-        let file_length = reader.get_ref().metadata().map_err(|e| e.to_string())?.len();
+        let file_length = reader
+            .get_ref()
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .len();
         if let Some(snapshot) = snapshot {
             let expected = matched.ok_or("snapshot offset not on a committed boundary")?;
             if snapshot.schema != SCHEMA
