@@ -7,9 +7,11 @@ Install cargo-fuzz and use a nightly Rust toolchain on an isolated host:
 cd fuzz
 cargo +nightly fuzz run memory -- -max_len=1048576
 cargo +nightly fuzz run bounded_events -- -max_len=1048576
+cargo +nightly fuzz run compact_events -- -max_len=1048576
 ```
 
-Targets stress validated `MemoryBank` deserialization and bounded newline
+Targets stress validated `MemoryBank` deserialization, compact/legacy
+accepted-event parsing (including explicit-null worlds), and bounded newline
 reader parsing, including malformed JSON and oversized nested data. Neither
 target validates full journal hash-chain or OS-level crash behavior.
 A passing compilation or short run is not evidence of comprehensive fuzzing;
