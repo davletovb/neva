@@ -1,8 +1,8 @@
 //! Deterministic, bounded, application-owned structured memory.
-//! Embed MemoryBank in a World to include it in that world's event log,
-//! snapshots, replay, and forks. No embeddings, network, or hidden globals.
+//! Embed MemoryBank in a World to include it in event logs and snapshots.
+//! No embeddings, network, or global mutation.
 use crate::core::AgentId;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -20,18 +20,44 @@ pub struct MemoryRecord {
     pub accessed_step: u64,
     pub importance: u16,
     pub accesses: u32,
-    /// Exclusive expiry step; None means durable.
+    /// Exclusive expiry step. None means durable.
     pub expires_at: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MemoryBank {
-    pub schema: u32,
-    pub capacity: usize,
-    pub max_payload_bytes: usize,
-    /// Keys are unambiguous decimal agent IDs followed by ':' and a user key.
+    schema: u32,
+    capacity: usize,
+    max_payload_bytes: usize,
+    /// All mutating and read operations use one monotonic logical clock.
+    last_step: u64,
+    /// Keys: canonical decimal agent ID + ':' + user key.
     records: BTreeMap<String, MemoryRecord>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryBankWire {
+    schema: u32,
+    capacity: usize,
+    max_payload_bytes: usize,
+    last_step: u64,
+    records: BTreeMap<String, MemoryRecord>,
+}
+
+impl<'de> Deserialize<'de> for MemoryBank {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let data = MemoryBankWire::deserialize(deserializer)?;
+        let bank = Self {
+            schema: data.schema,
+            capacity: data.capacity,
+            max_payload_bytes: data.max_payload_bytes,
+            last_step: data.last_step,
+            records: data.records,
+        };
+        bank.validate().map_err(D::Error::custom)?;
+        Ok(bank)
+    }
 }
 
 fn valid_key(key: &str) -> bool {
@@ -57,11 +83,28 @@ impl MemoryBank {
             schema: MEMORY_SCHEMA,
             capacity,
             max_payload_bytes,
+            last_step: 0,
             records: BTreeMap::new(),
         })
     }
 
-    /// Validate deserialized memory before accepting untrusted snapshots.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+    pub fn max_payload_bytes(&self) -> usize {
+        self.max_payload_bytes
+    }
+    pub fn last_step(&self) -> u64 {
+        self.last_step
+    }
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// Used by Deserialize, or manually after application-owned migrations.
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != MEMORY_SCHEMA
             || !(1..=MAX_RECORDS).contains(&self.capacity)
@@ -74,7 +117,8 @@ impl MemoryBank {
             if !valid_key(&record.key)
                 || id != &record_id(record.agent, &record.key)
                 || record.importance > 1000
-                || record.accessed_step < record.created_step
+                || record.created_step > record.accessed_step
+                || record.accessed_step > self.last_step
                 || record
                     .expires_at
                     .is_some_and(|expiry| expiry <= record.created_step)
@@ -89,21 +133,27 @@ impl MemoryBank {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
-        self.records.len()
+    fn check_time(&self, now: u64) -> Result<(), String> {
+        if now < self.last_step {
+            Err("memory logical clock went backwards".into())
+        } else {
+            Ok(())
+        }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
-    }
-
-    pub fn prune(&mut self, now: u64) {
+    /// Explicit O(n) maintenance. Ordinary lookups never scan all agents.
+    pub fn prune(&mut self, now: u64) -> Result<usize, String> {
+        self.check_time(now)?;
+        let previous = self.records.len();
         self.records
-            .retain(|_, value| value.expires_at.is_none_or(|expiry| now < expiry));
+            .retain(|_, record| record.expires_at.is_none_or(|expiry| now < expiry));
+        self.last_step = now;
+        Ok(previous - self.records.len())
     }
 
-    /// Upsert with deterministic LRU/importance eviction. Time is a logical
-    /// simulation step, never system time. TTL is expressed in logical steps.
+    /// Upsert with deterministic importance/LRU eviction. TTL uses logical steps.
+    /// Validation happens before mutation. Full-bank pruning runs only on
+    /// insertion at the capacity boundary.
     pub fn put(
         &mut self,
         agent: AgentId,
@@ -113,11 +163,13 @@ impl MemoryBank {
         importance: u16,
         ttl: Option<u64>,
     ) -> Result<(), String> {
+        self.check_time(now)?;
         if !valid_key(key) || importance > 1000 {
             return Err("invalid memory key or importance".into());
         }
-        let bytes = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-        if bytes.len() > self.max_payload_bytes {
+        if serde_json::to_vec(&payload).map_err(|e| e.to_string())?.len()
+            > self.max_payload_bytes
+        {
             return Err("memory payload exceeds configured limit".into());
         }
         let expires_at = match ttl {
@@ -126,64 +178,72 @@ impl MemoryBank {
             None => None,
         };
         let id = record_id(agent, key);
-        if let Some(prior) = self.records.get(&id) {
-            if now < prior.accessed_step {
-                return Err("memory logical clock went backwards".into());
+        // Old expired entries are not "updates": restart their creation time.
+        if self
+            .records
+            .get(&id)
+            .is_some_and(|r| r.expires_at.is_some_and(|expiry| now >= expiry))
+        {
+            self.records.remove(&id);
+        }
+        if !self.records.contains_key(&id) && self.records.len() >= self.capacity {
+            self.prune(now)?;
+            while self.records.len() >= self.capacity {
+                let victim = self
+                    .records
+                    .iter()
+                    .min_by_key(|(key, r)| (r.importance, r.accessed_step, *key))
+                    .map(|(key, _)| key.clone())
+                    .ok_or("memory has no eviction candidate")?;
+                self.records.remove(&victim);
             }
         }
-        // Validate first; errors do not mutate or evict any records.
-        self.prune(now);
         let created_step = self.records.get(&id).map_or(now, |r| r.created_step);
         let accesses = self.records.get(&id).map_or(0, |r| r.accesses);
-        if !self.records.contains_key(&id) && self.records.len() == self.capacity {
-            let victim = self
-                .records
-                .iter()
-                .min_by_key(|(key, item)| (item.importance, item.accessed_step, *key))
-                .map(|(key, _)| key.clone())
-                .ok_or("memory is full but has no eviction candidate")?;
-            self.records.remove(&victim);
-        }
-        self.records.insert(
-            id,
-            MemoryRecord {
-                agent,
-                key: key.to_owned(),
-                payload,
-                created_step,
-                accessed_step: now,
-                importance,
-                accesses,
-                expires_at,
-            },
-        );
+        self.records.insert(id, MemoryRecord {
+            agent,
+            key: key.to_owned(),
+            payload,
+            created_step,
+            accessed_step: now,
+            importance,
+            accesses,
+            expires_at,
+        });
+        self.last_step = now;
         Ok(())
     }
 
-    /// Exact-key recall; expired memories are not returned or reinforced.
+    /// Exact-key recall; expired records are removed lazily on touch.
     pub fn get(
         &mut self,
         agent: AgentId,
         key: &str,
         now: u64,
     ) -> Result<Option<MemoryRecord>, String> {
+        self.check_time(now)?;
         if !valid_key(key) {
             return Err("invalid memory key".into());
         }
-        self.prune(now);
-        let Some(record) = self.records.get_mut(&record_id(agent, key)) else {
+        let id = record_id(agent, key);
+        if self
+            .records
+            .get(&id)
+            .is_some_and(|r| r.expires_at.is_some_and(|expiry| now >= expiry))
+        {
+            self.records.remove(&id);
+        }
+        self.last_step = now;
+        let Some(record) = self.records.get_mut(&id) else {
             return Ok(None);
         };
-        if now < record.accessed_step {
-            return Err("memory logical clock went backwards".into());
-        }
         record.accessed_step = now;
         record.accesses = record.accesses.saturating_add(1);
         Ok(Some(record.clone()))
     }
 
-    /// Stable ranking by importance, then use count, recent access, and key.
-    /// Prefix recall is exact lexical matching, NOT vector/semantic recall.
+    /// Stable ranking by importance, use count, recency and key. Prefix
+    /// filtering uses the agent-key BTreeMap range; only results are cloned.
     pub fn recall_prefix(
         &self,
         agent: AgentId,
@@ -191,31 +251,30 @@ impl MemoryBank {
         now: u64,
         limit: usize,
     ) -> Result<Vec<MemoryRecord>, String> {
+        self.check_time(now)?;
         if limit > self.capacity || prefix.len() > 128 {
             return Err("invalid recall limit or prefix".into());
         }
-        let mut matches: Vec<_> = self
-            .records
-            .values()
-            .filter(|r| {
-                r.agent == agent
-                    && r.key.starts_with(prefix)
-                    && r.expires_at.is_none_or(|expiry| now < expiry)
-            })
-            .cloned()
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let seek = record_id(agent, prefix);
+        let mut matches: Vec<_> = self.records
+            .range(seek.clone()..)
+            .take_while(|(id, _)| id.starts_with(&seek))
+            .map(|(_, record)| record)
+            .filter(|r| r.expires_at.is_none_or(|expiry| now < expiry))
             .collect();
         matches.sort_by(|a, b| {
-            b.importance
-                .cmp(&a.importance)
+            b.importance.cmp(&a.importance)
                 .then_with(|| b.accesses.cmp(&a.accesses))
                 .then_with(|| b.accessed_step.cmp(&a.accessed_step))
                 .then_with(|| a.key.cmp(&b.key))
         });
-        matches.truncate(limit);
-        Ok(matches)
+        Ok(matches.into_iter().take(limit).cloned().collect())
     }
 
-    /// Explicit, deterministic adaptive salience adjustment (0..=1000).
+    /// Adaptive importance: explicit, saturating reinforcement.
     pub fn reinforce(
         &mut self,
         agent: AgentId,
@@ -223,16 +282,22 @@ impl MemoryBank {
         now: u64,
         increment: u16,
     ) -> Result<bool, String> {
+        self.check_time(now)?;
         if increment > 1000 || !valid_key(key) {
             return Err("invalid reinforcement".into());
         }
-        self.prune(now);
-        let Some(record) = self.records.get_mut(&record_id(agent, key)) else {
+        let id = record_id(agent, key);
+        if self
+            .records
+            .get(&id)
+            .is_some_and(|r| r.expires_at.is_some_and(|expiry| now >= expiry))
+        {
+            self.records.remove(&id);
+        }
+        self.last_step = now;
+        let Some(record) = self.records.get_mut(&id) else {
             return Ok(false);
         };
-        if now < record.accessed_step {
-            return Err("memory logical clock went backwards".into());
-        }
         record.importance = record.importance.saturating_add(increment).min(1000);
         record.accessed_step = now;
         record.accesses = record.accesses.saturating_add(1);
@@ -248,24 +313,14 @@ mod tests {
     #[test]
     fn deterministic_order_expiry_and_agent_separation() {
         let mut m = MemoryBank::new(3, 1024).unwrap();
-        m.put(AgentId(1), "belief/a", json!({"v": 1}), 0, 10, Some(2))
-            .unwrap();
-        m.put(AgentId(2), "belief/a", json!({"v": 2}), 0, 10, None)
-            .unwrap();
-        m.put(AgentId(1), "belief/b", json!({"v": 3}), 1, 11, None)
-            .unwrap();
-        assert_eq!(
-            m.recall_prefix(AgentId(1), "belief/", 1, 3).unwrap()[0].key,
-            "belief/b"
-        );
+        m.put(AgentId(1), "belief/a", json!({"v": 1}), 0, 10, Some(2)).unwrap();
+        m.put(AgentId(2), "belief/a", json!({"v": 2}), 0, 10, None).unwrap();
+        m.put(AgentId(1), "belief/b", json!({"v": 3}), 1, 11, None).unwrap();
+        assert_eq!(m.recall_prefix(AgentId(1), "belief/", 1, 3).unwrap()[0].key, "belief/b");
         assert!(m.get(AgentId(1), "belief/a", 2).unwrap().is_none());
-        assert_eq!(
-            m.get(AgentId(2), "belief/a", 2).unwrap().unwrap().payload,
-            json!({"v":2})
-        );
+        assert_eq!(m.get(AgentId(2), "belief/a", 2).unwrap().unwrap().payload, json!({"v":2}));
         m.validate().unwrap();
-        let restored: MemoryBank =
-            serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
+        let restored: MemoryBank = serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
         assert_eq!(restored, m);
     }
 
@@ -281,19 +336,40 @@ mod tests {
     }
 
     #[test]
-    fn invalid_upsert_does_not_mutate() {
-        let mut m = MemoryBank::new(1, 4).unwrap();
-        m.put(AgentId(0), "a", json!(1), 2, 1, None).unwrap();
-        let original = m.clone();
-        assert!(
-            m.put(AgentId(0), "b", json!("oversized"), 4, 1, None)
-                .is_err()
-        );
-        assert!(m.put(AgentId(0), "a", json!(2), 1, 1, None).is_err());
-        assert!(m.put(AgentId(0), "a", json!(2), 4, 1, Some(0)).is_err());
-        assert_eq!(m, original);
-        let mut invalid = m.clone();
-        invalid.capacity = 0;
-        assert!(invalid.validate().is_err());
+    fn invalid_calls_leave_bank_unchanged_and_clock_is_global() {
+        let mut m = MemoryBank::new(3, 32).unwrap();
+        m.put(AgentId(1), "expires", json!(1), 10, 1, Some(2)).unwrap();
+        m.put(AgentId(2), "new", json!(2), 10, 1, None).unwrap();
+        let prior = m.clone();
+        assert!(m.get(AgentId(1), "expires", 9).is_err());
+        assert!(m.reinforce(AgentId(1), "expires", 9, 2).is_err());
+        assert!(m.put(AgentId(3), "new", json!(3), 9, 1, None).is_err());
+        assert!(m.prune(9).is_err());
+        assert!(m.put(AgentId(1), "b", json!("oversized oversized oversized"), 12, 1, None).is_err());
+        assert_eq!(m, prior);
+        assert_eq!(m.get(AgentId(1), "expires", 12).unwrap(), None);
+    }
+
+    #[test]
+    fn untrusted_deserialization_rejects_malformed_limits_and_clocks() {
+        let m = MemoryBank::new(1, 32).unwrap();
+        let mut wire = serde_json::to_value(&m).unwrap();
+        wire["capacity"] = json!(0);
+        assert!(serde_json::from_value::<MemoryBank>(wire).is_err());
+        let mut m = m;
+        m.put(AgentId(1), "x", json!(1), 10, 1, None).unwrap();
+        let mut wire = serde_json::to_value(&m).unwrap();
+        wire["last_step"] = json!(5);
+        assert!(serde_json::from_value::<MemoryBank>(wire).is_err());
+    }
+
+    #[test]
+    fn scoped_prefix_does_not_match_other_agents_or_clone_all() {
+        let mut m = MemoryBank::new(10, 32).unwrap();
+        m.put(AgentId(1), "p/a", json!(1), 0, 1, None).unwrap();
+        m.put(AgentId(11), "p/b", json!(2), 0, 100, None).unwrap();
+        m.put(AgentId(1), "p/c", json!(3), 0, 2, None).unwrap();
+        assert_eq!(m.recall_prefix(AgentId(1), "p/", 0, 1).unwrap()[0].key, "p/c");
+        assert!(m.recall_prefix(AgentId(1), "p/b", 0, 1).unwrap().is_empty());
     }
 }
