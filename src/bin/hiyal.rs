@@ -59,9 +59,10 @@ fn backend(live: bool) -> Result<Arc<dyn Backend>, String> {
                 return Err("live spend cap and declared token rates must be positive".into());
             }
             let http = Arc::new(hiyal::runtime::OpenAiCompatible::new(url, api)?);
-            let max_effects=env::var("HIYAL_LIVE_MAX_EFFECTS")
-                .unwrap_or_else(|_|"100".into()).parse::<u64>()
-                .map_err(|_|"invalid HIYAL_LIVE_MAX_EFFECTS")?;
+            let max_effects = env::var("HIYAL_LIVE_MAX_EFFECTS")
+                .unwrap_or_else(|_| "100".into())
+                .parse::<u64>()
+                .map_err(|_| "invalid HIYAL_LIVE_MAX_EFFECTS")?;
             if !(1..=100_000).contains(&max_effects) {
                 return Err("HIYAL_LIVE_MAX_EFFECTS must be 1..=100000".into());
             }
@@ -134,7 +135,10 @@ async fn launch() -> Result<(), String> {
             let accepted = trial.run_attempts(cfg.attempts).await?;
             trial.checkpoint()?;
             if live && accepted != cfg.attempts {
-                return Err(format!("live run incomplete: accepted {accepted}/{} requested attempts; inspect trial rejections and budget quota",cfg.attempts));
+                return Err(format!(
+                    "live run incomplete: accepted {accepted}/{} requested attempts; inspect trial rejections and budget quota",
+                    cfg.attempts
+                ));
             }
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",
@@ -169,7 +173,9 @@ async fn launch() -> Result<(), String> {
             let accepted = trial.run_attempts(attempts).await?;
             trial.checkpoint()?;
             if live && accepted != attempts {
-                return Err(format!("live resume incomplete: accepted {accepted}/{attempts}; inspect trial rejections, spend and quota"));
+                return Err(format!(
+                    "live resume incomplete: accepted {accepted}/{attempts}; inspect trial rejections, spend and quota"
+                ));
             }
             println!(
                 "accepted={accepted} attempts={} total={} hash={}",

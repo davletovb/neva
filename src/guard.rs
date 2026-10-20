@@ -226,7 +226,7 @@ impl GovernedBackend {
             Err(reason) => {
                 self.started.fetch_sub(1, Ordering::SeqCst);
                 return Ok(EffectResult::UnsupportedCapability { capability: reason });
-            },
+            }
         };
         match spec {
             EffectSpec::Model(_) => {
@@ -253,22 +253,27 @@ impl GovernedBackend {
     }
 }
 impl Backend for GovernedBackend {
-    fn on_timeout<'a>(&'a self, spec: &'a EffectSpec)
-        -> std::pin::Pin<Box<dyn std::future::Future<Output=()>+Send+'a>> {
-        if matches!(spec,EffectSpec::Model(_)) {
+    fn on_timeout<'a>(
+        &'a self,
+        spec: &'a EffectSpec,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        if matches!(spec, EffectSpec::Model(_)) {
             self.backend.on_timeout(spec)
         } else {
             Box::pin(async {})
         }
     }
-    fn unsupported_is_pre_dispatch(&self)->bool {
+    fn unsupported_is_pre_dispatch(&self) -> bool {
         self.backend.unsupported_is_pre_dispatch()
     }
-    fn billing_disposition(&self,spec:&EffectSpec,result:&EffectResult)
-        -> crate::runtime::BillingDisposition {
-        if matches!(spec,EffectSpec::Model(_)) {
-            self.backend.billing_disposition(spec,result)
-        } else if matches!(result,EffectResult::UnsupportedCapability{..}) {
+    fn billing_disposition(
+        &self,
+        spec: &EffectSpec,
+        result: &EffectResult,
+    ) -> crate::runtime::BillingDisposition {
+        if matches!(spec, EffectSpec::Model(_)) {
+            self.backend.billing_disposition(spec, result)
+        } else if matches!(result, EffectResult::UnsupportedCapability { .. }) {
             // Could be a purely local denial OR untrusted remote tool.
             // Without a persisted per-call admission outcome, stay conservative.
             crate::runtime::BillingDisposition::Unknown
@@ -418,18 +423,26 @@ mod tests {
 
     #[tokio::test]
     async fn local_denials_do_not_consume_execution_slots() {
-        let guarded=GovernedBackend::new(Arc::new(ScriptedBackend),1);
-        let refused=EffectSpec::Tool{name:"not-authorized".into(),
-            input:serde_json::json!({"a":1})};
+        let guarded = GovernedBackend::new(Arc::new(ScriptedBackend), 1);
+        let refused = EffectSpec::Tool {
+            name: "not-authorized".into(),
+            input: serde_json::json!({"a":1}),
+        };
         for _ in 0..3 {
-            assert!(matches!(guarded.resolve(&refused).await.unwrap(),
-                EffectResult::UnsupportedCapability {..}));
+            assert!(matches!(
+                guarded.resolve(&refused).await.unwrap(),
+                EffectResult::UnsupportedCapability { .. }
+            ));
         }
-        let model=sample_request("valid");
-        assert!(matches!(guarded.resolve(&model).await.unwrap(),
-            EffectResult::Model{..}));
-        assert!(matches!(guarded.resolve(&model).await.unwrap(),
-            EffectResult::UnsupportedCapability {..}));
+        let model = sample_request("valid");
+        assert!(matches!(
+            guarded.resolve(&model).await.unwrap(),
+            EffectResult::Model { .. }
+        ));
+        assert!(matches!(
+            guarded.resolve(&model).await.unwrap(),
+            EffectResult::UnsupportedCapability { .. }
+        ));
     }
 
     #[tokio::test]
