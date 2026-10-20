@@ -1,8 +1,18 @@
 //! Privacy-safe structured event projection. This non-authoritative JSONL
 //! stream contains no actions, world snapshots, messages or prompt bodies.
-use crate::{core::World, experiment::Observer, storage::{Entry, Outcome, Store, atomic_write_with}};
+use crate::{
+    core::World,
+    experiment::Observer,
+    storage::{Entry, Outcome, Store, atomic_write_with},
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{fs::{File, OpenOptions}, io::{BufRead, BufReader, Write}, marker::PhantomData, path::{Path, PathBuf}, sync::Mutex};
+use std::{
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader, Write},
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 pub const OBSERVATION_SCHEMA: u32 = 1;
 
@@ -68,15 +78,22 @@ where
                 if line.is_empty() {
                     return Err("empty committed event".into());
                 }
-                let event: Entry<W, W::Action> = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+                let event: Entry<W, W::Action> =
+                    serde_json::from_str(&line).map_err(|e| e.to_string())?;
                 let summary = EventSummary::from_entry(&event);
                 serde_json::to_writer(&mut *out, &summary).map_err(|e| e.to_string())?;
                 out.write_all(b"\n").map_err(|e| e.to_string())?;
             }
             Ok(())
         })?;
-        let file = OpenOptions::new().append(true).open(path).map_err(|e| e.to_string())?;
-        Ok(Self { file: Mutex::new(file), _world: PhantomData })
+        let file = OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            file: Mutex::new(file),
+            _world: PhantomData,
+        })
     }
 }
 
@@ -86,17 +103,29 @@ where
     W::Action: Serialize + DeserializeOwned + Clone,
 {
     fn committed(&self, entry: &Entry<W, W::Action>) -> Result<(), String> {
-        let mut output = self.file.lock().map_err(|_| "observability lock poisoned")?;
-        serde_json::to_writer(&mut *output, &EventSummary::from_entry(entry)).map_err(|e| e.to_string())?;
-        output.write_all(b"\n").and_then(|_| output.flush()).map_err(|e| e.to_string())
+        let mut output = self
+            .file
+            .lock()
+            .map_err(|_| "observability lock poisoned")?;
+        serde_json::to_writer(&mut *output, &EventSummary::from_entry(entry))
+            .map_err(|e| e.to_string())?;
+        output
+            .write_all(b"\n")
+            .and_then(|_| output.flush())
+            .map_err(|e| e.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{builtins::{Counter, Increment, kind}, core::AgentId, experiment::Trial,
-        runtime::ScriptedBackend, scheduler::Scheduling};
+    use crate::{
+        builtins::{Counter, Increment, kind},
+        core::AgentId,
+        experiment::Trial,
+        runtime::ScriptedBackend,
+        scheduler::Scheduling,
+    };
     use std::{fs, sync::Arc};
 
     #[tokio::test]
@@ -104,11 +133,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hiyal-r4-observe-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         {
-            let mut trial = Trial::create(&dir, "observation", 1,
+            let mut trial = Trial::create(
+                &dir,
+                "observation",
+                1,
                 &kind(1, false, "fixed-v1", "scripted").unwrap(),
                 Counter { total: 0 },
-                Increment { amount: 1, model: false, model_id: "fixed-v1".into(), provider: "scripted".into() },
-                Arc::new(ScriptedBackend), vec![AgentId(0)], Scheduling::RoundRobin).unwrap();
+                Increment {
+                    amount: 1,
+                    model: false,
+                    model_id: "fixed-v1".into(),
+                    provider: "scripted".into(),
+                },
+                Arc::new(ScriptedBackend),
+                vec![AgentId(0)],
+                Scheduling::RoundRobin,
+            )
+            .unwrap();
             trial.observe_with(Arc::new(JsonlObserver::recover(&dir).unwrap()));
             trial.run_attempts(3).await.unwrap();
             trial.checkpoint().unwrap();
@@ -120,7 +161,10 @@ mod tests {
         assert!(!text.contains("world"));
         assert!(!text.contains("prompt"));
         let _observer = JsonlObserver::<Counter>::recover(&dir).unwrap();
-        assert_eq!(fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(), first);
+        assert_eq!(
+            fs::read(JsonlObserver::<Counter>::path(&dir)).unwrap(),
+            first
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
