@@ -1,0 +1,48 @@
+# Explicit release validation only: not on ordinary pushes or PR edits.
+name: Native distribution
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Rust test
+        run: cargo test --workspace --locked
+      - name: Build release binary
+        run: cargo build --locked --release --bin hiyal
+      - name: Stage portable package
+        shell: bash
+        run: |
+          mkdir -p dist
+          binary="target/release/hiyal"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then binary="${binary}.exe"; fi
+          cp "$binary" "dist/"
+          cp README.md LICENSE "dist/"
+          cp docs/r4-native.md "dist/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hiyal-${{ matrix.triple }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
