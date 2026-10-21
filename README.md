@@ -1,4 +1,5 @@
-# Hiyal
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/58c57917-5867-4b9a-ba50-847a2c7fe74d" />
+
 
 **Hiyal** (Arabic *ḥiyal*, roughly "hee-YAHL") refers to ingenious devices
 and automata. It is being built as a reproducible, extensible **Rust-native
