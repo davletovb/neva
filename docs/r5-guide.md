@@ -27,6 +27,10 @@ Rust executables using the public SDK.
 - Implement `core::World` with `Clone`, `observe(actor)` and pure
   `apply(actor, action)`. The world/action must implement serde for durable
   `experiment::Trial`. `apply` must not perform I/O or mutate global state.
+  Worlds and actions may hold `f64`: Hiyal parses JSON floats exactly
+  (serde_json's `float_roundtrip`), so replay reproduces them bit for bit.
+  Keep them finite; JSON writes NaN and infinities as `null`, which does not
+  parse back as a float.
 - Implement `experiment::EffectPolicy<W>`: `requests` declares typed
   `runtime::EffectSpec` requests and `decide` consumes ordered receipts to
   return an action. For policies without external effects, `Rules<P>` adapts
