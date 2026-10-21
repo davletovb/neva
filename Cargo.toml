@@ -15,7 +15,9 @@ live-http = ["dep:reqwest"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Exact float parsing: replay re-hashes parsed state, so a float that parses
+# one ulp away breaks the chain for any world or action holding f64.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 rand_chacha = "0.9"
 rand_core = "0.9"
