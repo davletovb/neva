@@ -110,6 +110,51 @@ impl RoundPlan {
     }
 }
 
+/// Stream family a [`Trial::create_with_setup`] closure may draw from.
+pub const SETUP_STREAM_FAMILY: &str = "setup";
+
+/// Run `setup` on a fresh trial stream set and check it advanced only the
+/// setup family.
+fn run_setup<W, F>(trial: &str, seed: u64, setup: F) -> Result<(W, Streams), String>
+where
+    F: FnOnce(&mut Streams) -> Result<W, String>,
+{
+    let origin = Streams::new(trial.to_owned(), seed);
+    let mut streams = origin.clone();
+    let world = setup(&mut streams)?;
+    streams.checked_scope_progress(&origin, SETUP_STREAM_FAMILY)?;
+    Ok((world, streams))
+}
+
+/// Re-run the setup closure of a trial made by [`Trial::create_with_setup`]
+/// from its recorded trial ID and seed, and check that it reproduces the
+/// genesis world and RNG state exactly.
+///
+/// This checks only the setup recorded in `manifest.json`: it does **not**
+/// authenticate the event journal, snapshots or fork ancestry. Also run
+/// `Store::inspect_read_only` (and `research::verify_fork` for forks) before
+/// treating a trial as verified evidence.
+pub fn verify_setup<W, F>(dir: impl AsRef<Path>, setup: F) -> Result<(), String>
+where
+    W: World + Serialize + DeserializeOwned,
+    F: FnOnce(&mut Streams) -> Result<W, String>,
+{
+    let genesis: Genesis<W> = serde_json::from_slice(&crate::storage::read_metadata_limited(
+        &dir.as_ref().join("manifest.json"),
+    )?)
+    .map_err(|e| e.to_string())?;
+    if genesis.initial_streams.seed_domain.is_some() {
+        return Err("setup is verified on the trial that ran it, not on a fork".into());
+    }
+    let (world, streams) = run_setup(&genesis.trial_id, genesis.initial_streams.root_seed, setup)?;
+    if streams != genesis.initial_streams
+        || crate::storage::digest(&world)? != crate::storage::digest(&genesis.initial_world)?
+    {
+        return Err("setup does not reproduce the recorded genesis world and RNG state".into());
+    }
+    Ok(())
+}
+
 pub struct Trial<W, P>
 where
     W: World + Serialize + DeserializeOwned,
@@ -154,21 +199,50 @@ where
             world_kind: kind.into(),
             build: Some(BuildProvenance::current()),
         };
-        let store = Store::create(&dir, genesis)?;
-        let mut effects = EffectJournal::open(&dir)?;
-        effects.bind_trial(&store.genesis.trial_id)?;
-        backend.recover_admission(dir.as_ref(), effects.receipts())?;
-        Ok(Self {
-            store,
-            effects,
-            policy,
-            backend,
-            replay_only: false,
-            concurrency: 4,
-            timeout: Duration::from_secs(15),
-            observers: vec![],
-            diagnostics: vec![],
-        })
+        Self::create_from_genesis(dir, genesis, policy, backend)
+    }
+    /// Create a trial whose initial world is drawn from the trial's own named
+    /// RNG streams, so randomized setup (initial labels, graphs, ...) is part of
+    /// the audited genesis and reproducible from `name` and `seed` alone.
+    ///
+    /// `setup` may draw only from the [`SETUP_STREAM_FAMILY`] streams
+    /// (`setup` or `setup/<name>`). The scheduler, agent and world streams
+    /// stay at their origin, so setup never shifts a trial's later draws. The
+    /// advanced setup positions are written to genesis, carried into forks,
+    /// and can be re-derived with [`verify_setup`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_setup<F>(
+        dir: impl AsRef<Path>,
+        name: &str,
+        seed: u64,
+        kind: &str,
+        setup: F,
+        policy: P,
+        backend: Arc<dyn Backend>,
+        agents: Vec<AgentId>,
+        mode: Scheduling,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce(&mut Streams) -> Result<W, String>,
+    {
+        // Cheap preflight before a possibly expensive setup; `Store::create`
+        // remains the authoritative, race-safe check.
+        if dir.as_ref().exists() {
+            return Err("trial path already exists".into());
+        }
+        let schedule = Schedule::new(mode, agents)?;
+        let trial = TrialId::new(name, seed).0;
+        let (world, streams) = run_setup(&trial, seed, setup)?;
+        let genesis = Genesis {
+            schema: SCHEMA,
+            trial_id: trial,
+            initial_world: world,
+            initial_schedule: schedule,
+            initial_streams: streams,
+            world_kind: kind.into(),
+            build: Some(BuildProvenance::current()),
+        };
+        Self::create_from_genesis(dir, genesis, policy, backend)
     }
     /// Create a trial from an independently verified research fork genesis.
     /// The schedule/RNG state can begin at a parent's committed boundary.
