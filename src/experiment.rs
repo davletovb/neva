@@ -128,8 +128,12 @@ where
 
 /// Re-run the setup closure of a trial made by [`Trial::create_with_setup`]
 /// from its recorded trial ID and seed, and check that it reproduces the
-/// genesis world and RNG state exactly. This complements
-/// `Store::inspect_read_only`, which verifies the journal against genesis.
+/// genesis world and RNG state exactly.
+///
+/// This checks only the setup recorded in `manifest.json`: it does **not**
+/// authenticate the event journal, snapshots or fork ancestry. Also run
+/// `Store::inspect_read_only` (and `research::verify_fork` for forks) before
+/// treating a trial as verified evidence.
 pub fn verify_setup<W, F>(dir: impl AsRef<Path>, setup: F) -> Result<(), String>
 where
     W: World + Serialize + DeserializeOwned,
@@ -221,13 +225,19 @@ where
     where
         F: FnOnce(&mut Streams) -> Result<W, String>,
     {
+        // Cheap preflight before a possibly expensive setup; `Store::create`
+        // remains the authoritative, race-safe check.
+        if dir.as_ref().exists() {
+            return Err("trial path already exists".into());
+        }
+        let schedule = Schedule::new(mode, agents)?;
         let trial = TrialId::new(name, seed).0;
         let (world, streams) = run_setup(&trial, seed, setup)?;
         let genesis = Genesis {
             schema: SCHEMA,
             trial_id: trial,
             initial_world: world,
-            initial_schedule: Schedule::new(mode, agents)?,
+            initial_schedule: schedule,
             initial_streams: streams,
             world_kind: kind.into(),
             build: Some(BuildProvenance::current()),

@@ -45,7 +45,10 @@ Rust executables using the public SDK.
   `setup`/`setup/<name>` streams. The advanced positions are recorded in
   genesis and carried into forks, so setup is reproducible from the name and
   seed; `experiment::verify_setup` re-runs the closure and checks it against
-  genesis. Do not hand-build a `Genesis` for this.
+  genesis. Do not hand-build a `Genesis` for this. `verify_setup` checks
+  **only** the setup: it does not authenticate the event journal, snapshots
+  or fork ancestry, so also run `Store::inspect_read_only` (and
+  `research::verify_fork` for forks) before treating a trial as verified.
 - `memory::MemoryBank` is optional explicit world state, not a hidden global.
   `JsonlObserver` and `CsvMetrics` are derived projections; errors are
   diagnostics and should be surfaced by the caller.

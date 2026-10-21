@@ -12,6 +12,7 @@ use hiyal::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::Cell,
     path::PathBuf,
     sync::{
         Arc,
@@ -229,4 +230,64 @@ fn paired_forks_carry_setup_positions() {
     assert!(verify_setup(root.join("arms/control"), setup).is_err());
     verify_setup(&parent, setup).unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn preflight_rejects_occupied_path_and_bad_schedule_before_setup() {
+    let ran = Cell::new(false);
+    let counted = |streams: &mut Streams| {
+        ran.set(true);
+        setup(streams)
+    };
+    let occupied = dir("occupied");
+    std::fs::create_dir_all(&occupied).unwrap();
+    let result: Result<Trial<Labeled, Rules<Gain>>, String> = Trial::create_with_setup(
+        &occupied,
+        "labeled",
+        41,
+        "labeled.v1",
+        counted,
+        Rules(Gain),
+        Arc::new(ScriptedBackend),
+        (0..AGENTS as u64).map(AgentId).collect(),
+        Scheduling::Random,
+    );
+    assert!(result.err().unwrap().contains("already exists"));
+    assert!(!ran.get(), "setup must not run for an occupied path");
+    std::fs::remove_dir_all(occupied).unwrap();
+
+    let p = dir("bad-schedule");
+    let result: Result<Trial<Labeled, Rules<Gain>>, String> = Trial::create_with_setup(
+        &p,
+        "labeled",
+        41,
+        "labeled.v1",
+        counted,
+        Rules(Gain),
+        Arc::new(ScriptedBackend),
+        vec![AgentId(0), AgentId(0)],
+        Scheduling::Random,
+    );
+    assert!(result.err().unwrap().contains("duplicate agent ID"));
+    assert!(!ran.get(), "setup must not run for an invalid schedule");
+    assert!(!p.exists());
+}
+
+#[tokio::test]
+async fn verify_setup_does_not_authenticate_the_journal() {
+    let p = dir("boundary");
+    let mut trial = create(&p);
+    assert_eq!(trial.run_attempts(4).await.unwrap(), 4);
+    drop(trial);
+    let events = p.join("events.jsonl");
+    let journal = std::fs::read_to_string(&events).unwrap();
+    // Forge the first recorded action without touching genesis.
+    let forged = journal.replacen("\"action\":1", "\"action\":2", 1);
+    assert_ne!(forged, journal);
+    std::fs::write(&events, forged).unwrap();
+    // Setup still reproduces, because it is all verify_setup checks...
+    verify_setup(&p, setup).unwrap();
+    // ...while the journal check catches the tampering.
+    assert!(Store::<Labeled, u64>::inspect_read_only(&p).is_err());
+    std::fs::remove_dir_all(p).unwrap();
 }
