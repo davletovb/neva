@@ -40,6 +40,12 @@ Rust executables using the public SDK.
   `checkpoint` writes a verified snapshot. `Trial::resume` recovers from
   the authoritative hash chain. `replay_only = true` forbids any new effect
   dispatch and requires recorded keyed receipts.
+- For a randomized initial world (labels, graphs), `Trial::create_with_setup`
+  builds it with a closure that draws only from the trial's own
+  `setup`/`setup/<name>` streams. The advanced positions are recorded in
+  genesis and carried into forks, so setup is reproducible from the name and
+  seed; `experiment::verify_setup` re-runs the closure and checks it against
+  genesis. Do not hand-build a `Genesis` for this.
 - `memory::MemoryBank` is optional explicit world state, not a hidden global.
   `JsonlObserver` and `CsvMetrics` are derived projections; errors are
   diagnostics and should be surfaced by the caller.
