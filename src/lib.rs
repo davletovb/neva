@@ -15,4 +15,5 @@ pub mod rng;
 pub mod runtime;
 pub mod scheduler;
 pub mod storage;
+mod tagged;
 pub mod toy;
