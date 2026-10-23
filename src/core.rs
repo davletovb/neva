@@ -97,6 +97,9 @@ pub(crate) fn hex_digest(bytes: &[u8]) -> String {
 /// Explicitly sort object keys *recursively*, independently of the global
 /// serde_json `preserve_order` Cargo feature (which downstream crates can
 /// enable through feature unification). This is NOT RFC 8785/JCS.
+/// Production code writes these bytes directly (`canonical`); this `Value`
+/// route is kept as the reference implementation for differential tests.
+#[cfg(test)]
 pub(crate) fn stable_json_bytes(
     value: &serde_json::Value,
     out: &mut Vec<u8>,
@@ -134,10 +137,7 @@ pub(crate) fn stable_json_bytes(
 /// Provisional digest of recursively ordered JSON action data. R1 will use a
 /// verified RFC 8785 canonicalizer and reject unsupported numeric shapes.
 fn action_digest<A: Serialize>(action: &A) -> Result<String, EngineError> {
-    let value = serde_json::to_value(action)
-        .map_err(|error| EngineError::Serialization(error.to_string()))?;
-    let mut bytes = Vec::new();
-    stable_json_bytes(&value, &mut bytes)
+    let bytes = crate::canonical::to_stable_bytes(action)
         .map_err(|error| EngineError::Serialization(error.to_string()))?;
     Ok(hex_digest(&Sha256::digest(bytes)))
 }

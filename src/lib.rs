@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod builtins;
+mod canonical;
 pub mod core;
 pub mod effects;
 pub mod experiment;

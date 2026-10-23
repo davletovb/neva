@@ -88,11 +88,10 @@ pub fn read_record_limited(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Res
 
 /// Stable UTF-8 JSON with lexically sorted keys, including nested maps. This is
 /// a documented interim profile, NOT a claim of full RFC 8785 compliance.
+/// Written directly, byte-identical to `serde_json::to_value` followed by a
+/// recursive key sort (see `canonical`).
 pub fn stable_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
-    let value = serde_json::to_value(value).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    crate::core::stable_json_bytes(&value, &mut out).map_err(|e| e.to_string())?;
-    Ok(out)
+    crate::canonical::to_stable_bytes(value).map_err(|e| e.to_string())
 }
 pub fn digest<T: Serialize>(value: &T) -> Result<String, String> {
     let hash = Sha256::digest(stable_bytes(value)?);
