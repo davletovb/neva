@@ -200,19 +200,26 @@ impl ser::SerializeMap for Object<'_> {
     }
 }
 
-/// serde_json encodes `arbitrary_precision` numbers and `raw_value` JSON as
-/// structs with these reserved names; its `Value` serializer turns them back
-/// into a number or parsed JSON rather than an object.
-const SERDE_JSON_PRIVATE: &str = "$serde_json::private::";
+/// The struct names serde_json reserves for `arbitrary_precision` numbers and
+/// `raw_value` JSON. With those features on, its `Value` serializer turns
+/// such a struct back into a number or parsed JSON rather than an object.
+const SERDE_JSON_SPECIAL_STRUCTS: [&str; 2] = [
+    "$serde_json::private::Number",
+    "$serde_json::private::RawValue",
+];
+
+/// serde_json's own `Value` struct serializer.
+type ValueStruct = <serde_json::value::Serializer as ser::Serializer>::SerializeStruct;
 
 enum StructSer<'a> {
     Object(Object<'a>),
-    /// A serde_json special struct, converted by serde_json's own `Value`
-    /// serializer and written with the reference key sort.
+    /// A struct with a serde_json special name: every field goes to
+    /// serde_json's own `Value` struct serializer, exactly as in the reference
+    /// route whatever the feature set, and the result is written with the
+    /// reference key sort.
     Special {
         out: &'a mut Vec<u8>,
-        name: &'static str,
-        written: bool,
+        inner: ValueStruct,
     },
 }
 
@@ -226,35 +233,16 @@ impl ser::SerializeStruct for StructSer<'_> {
     ) -> Result<(), Error> {
         match self {
             Self::Object(object) => object.entry(Cow::Borrowed(key), value),
-            Self::Special { out, name, written } => {
-                struct Special<'a, T: ?Sized> {
-                    name: &'static str,
-                    key: &'static str,
-                    value: &'a T,
-                }
-                impl<T: Serialize + ?Sized> Serialize for Special<'_, T> {
-                    fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                        use ser::SerializeStruct;
-                        let mut special = s.serialize_struct(self.name, 1)?;
-                        special.serialize_field(self.key, self.value)?;
-                        special.end()
-                    }
-                }
-                if *written {
-                    return Err(Error("serde_json special struct has several fields".into()));
-                }
-                let value = serde_json::to_value(Special { name, key, value })?;
-                crate::core::stable_json_bytes(&value, out)?;
-                *written = true;
-                Ok(())
-            }
+            Self::Special { inner, .. } => Ok(inner.serialize_field(key, value)?),
         }
     }
     fn end(self) -> Result<(), Error> {
         match self {
             Self::Object(object) => object.finish(),
-            Self::Special { written: true, .. } => Ok(()),
-            Self::Special { .. } => Err(Error("empty serde_json special struct".into())),
+            Self::Special { out, inner } => {
+                let value = ser::SerializeStruct::end(inner)?;
+                Ok(crate::core::stable_json_bytes(&value, out)?)
+            }
         }
     }
 }
@@ -428,12 +416,11 @@ impl<'a> ser::Serializer for Canonical<'a> {
     fn serialize_map(self, _: Option<usize>) -> Result<Object<'a>, Error> {
         Ok(Object::open(self.0, false))
     }
-    fn serialize_struct(self, name: &'static str, _: usize) -> Result<StructSer<'a>, Error> {
-        Ok(if name.starts_with(SERDE_JSON_PRIVATE) {
+    fn serialize_struct(self, name: &'static str, len: usize) -> Result<StructSer<'a>, Error> {
+        Ok(if SERDE_JSON_SPECIAL_STRUCTS.contains(&name) {
             StructSer::Special {
                 out: self.0,
-                name,
-                written: false,
+                inner: ser::Serializer::serialize_struct(serde_json::value::Serializer, name, len)?,
             }
         } else {
             StructSer::Object(Object::open(self.0, false))
@@ -709,6 +696,18 @@ mod tests {
             special.end()
         }
     }
+    /// A struct with a given name and several unordered fields.
+    struct Named(&'static str, &'static [(&'static str, &'static str)]);
+    impl Serialize for Named {
+        fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            use ser::SerializeStruct;
+            let mut named = s.serialize_struct(self.0, self.1.len())?;
+            for (key, value) in self.1 {
+                named.serialize_field(key, value)?;
+            }
+            named.end()
+        }
+    }
 
     #[test]
     fn serde_json_special_structs_match_reference_bytes() {
@@ -728,6 +727,24 @@ mod tests {
             same(&BTreeMap::from([("outer", Special(name, text))]));
         }
         same(&json!({"checkpoint": 200, "arm": "both", "big": 18446744073709551615u64}));
+        // Other names with the private prefix are ordinary structs, and the
+        // reserved names with extra or other fields behave as in serde_json.
+        let fields: &[(&str, &str)] = &[("zeta", "1"), ("alpha", "2")];
+        for name in [
+            "$serde_json::private::Example",
+            "$serde_json::private::",
+            NUMBER,
+            RAW,
+        ] {
+            same(&Named(name, fields));
+            // serde_json itself panics on an empty reserved-name struct when
+            // its feature is on, in either route; only test the others empty.
+            if !SERDE_JSON_SPECIAL_STRUCTS.contains(&name) {
+                same(&Named(name, &[]));
+            }
+            same(&Named(name, &[(NUMBER, "7"), ("extra", "8")]));
+            same(&Named(name, &[(RAW, "[1]"), (RAW, "[2]")]));
+        }
     }
 
     #[test]
