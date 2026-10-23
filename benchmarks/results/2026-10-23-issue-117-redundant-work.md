@@ -103,8 +103,11 @@ that is not deterministic in (world, action, streams) is therefore rejected
 at the next full replay rather than at append time. Replay re-applies every
 action and checks state hashes and RNG positions.
 `tests/replay_cache.rs::staged_commit_of_an_inconsistent_reducer_fails_fresh_replay`
-covers this. Seal evidence only after a fresh full replay in a new process,
-which is how the experiment 002 scripts already seal.
+covers this. Evidence should be sealed only after a fresh full replay in a
+new process, where the memo starts empty. The experiment 002 batch script
+already works this way. `scripts/pilot-paired-002.sh` writes `SHA256SUMS`,
+then runs `scripts/verify-002.sh` (each run's `verify` in its own process)
+under `set -euo pipefail`, and prints the seal digest only if that passes.
 
 ## Not addressed
 
