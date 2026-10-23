@@ -4,7 +4,7 @@ use crate::{
     rng::Streams,
     runtime::{Backend, EffectJournal, EffectSpec, Receipt},
     scheduler::{Schedule, Scheduling},
-    storage::{AppendError, BuildProvenance, Entry, Genesis, LegacyWorld, Outcome, SCHEMA, Store},
+    storage::{AppendError, BuildProvenance, Entry, Genesis, Outcome, SCHEMA, Store},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -512,15 +512,11 @@ where
                     self.emit(&entry);
                     return Ok(Step::Rejected { actor, reason });
                 }
-                let state_hash = crate::storage::digest(&staged)?;
-                let append = self.store.append_typed(
+                let append = self.store.append_staged(
                     actor,
-                    Outcome::Accepted {
-                        action,
-                        world: LegacyWorld::Missing,
-                        state_hash,
-                        before_apply_streams: Some(before_apply),
-                    },
+                    action,
+                    staged,
+                    before_apply,
                     sched.clone(),
                     rng.clone(),
                 );
@@ -765,15 +761,11 @@ where
                             Step::Rejected { actor, reason }
                         }
                         Ok(()) => {
-                            let state_hash = crate::storage::digest(&next)?;
-                            let accepted = self.store.append_typed(
+                            let accepted = self.store.append_staged(
                                 actor,
-                                Outcome::Accepted {
-                                    action,
-                                    world: LegacyWorld::Missing,
-                                    state_hash,
-                                    before_apply_streams: Some(before_apply),
-                                },
+                                action,
+                                next,
+                                before_apply,
                                 scheduled.clone(),
                                 rng.clone(),
                             );

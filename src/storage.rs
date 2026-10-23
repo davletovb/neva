@@ -7,6 +7,8 @@ use crate::scheduler::Schedule;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
+    any::TypeId,
+    cell::RefCell,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -295,6 +297,162 @@ pub struct ReadOnly<W> {
     pub log_bytes: u64,
 }
 
+/// Exact input bytes of one read-only replay: world/action types plus the
+/// SHA-256 of the manifest, the optional snapshot and the whole event log.
+#[derive(Clone, PartialEq, Eq)]
+struct ReplayKey {
+    types: (TypeId, TypeId),
+    manifest: [u8; 32],
+    snapshot: Option<[u8; 32]>,
+    events: [u8; 32],
+}
+
+/// A verified view stored as detached, immutable bytes. `W: Clone` does not
+/// promise a deep copy (a world may share interior-mutable state), so the
+/// cache never hands out or keeps a live value: every hit rebuilds an owned
+/// view and re-checks it against the digests recorded at verification.
+struct CachedView {
+    bytes: Vec<u8>,
+    genesis_hash: String,
+    world_hash: String,
+}
+
+#[derive(Serialize)]
+#[serde(bound(serialize = "W: Serialize"))]
+struct ViewRef<'a, W> {
+    genesis: &'a Genesis<W>,
+    world: &'a W,
+    schedule: &'a Schedule,
+    streams: &'a Streams,
+    sequence: u64,
+    logical_step: u64,
+    chain_head: &'a str,
+    log_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "W: DeserializeOwned"))]
+struct ViewOwned<W> {
+    genesis: Genesis<W>,
+    world: W,
+    schedule: Schedule,
+    streams: Streams,
+    sequence: u64,
+    logical_step: u64,
+    chain_head: String,
+    log_bytes: u64,
+}
+
+/// Process-local, content-addressed memo of successful read-only replays.
+/// Replay is deterministic in its input bytes, so a view is reused only for
+/// byte-identical evidence; any changed byte is a miss and replays in full.
+/// Keys are taken from the bytes the replay actually consumed, and failures
+/// are never cached. Nothing is persisted. Bounded per thread by entry count
+/// and by total serialized bytes; a view larger than the budget is not kept.
+const REPLAY_CACHE_LIMIT: usize = 32;
+const REPLAY_CACHE_BYTES: usize = 256 * 1024 * 1024;
+thread_local! {
+    static REPLAY_CACHE: RefCell<Vec<(ReplayKey, CachedView)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn cache_view<W: Serialize>(key: ReplayKey, view: &ReadOnly<W>) -> Result<(), String> {
+    let bytes = serde_json::to_vec(&ViewRef {
+        genesis: &view.genesis,
+        world: &view.world,
+        schedule: &view.schedule,
+        streams: &view.streams,
+        sequence: view.sequence,
+        logical_step: view.logical_step,
+        chain_head: &view.chain_head,
+        log_bytes: view.log_bytes,
+    })
+    .map_err(|e| e.to_string())?;
+    if bytes.len() > REPLAY_CACHE_BYTES {
+        return Ok(());
+    }
+    let entry = CachedView {
+        bytes,
+        genesis_hash: digest(&view.genesis)?,
+        world_hash: digest(&view.world)?,
+    };
+    REPLAY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|(k, _)| *k != key);
+        let mut total: usize = cache.iter().map(|(_, v)| v.bytes.len()).sum();
+        while !cache.is_empty()
+            && (cache.len() >= REPLAY_CACHE_LIMIT || total + entry.bytes.len() > REPLAY_CACHE_BYTES)
+        {
+            total -= cache.remove(0).1.bytes.len();
+        }
+        cache.push((key, entry));
+    });
+    Ok(())
+}
+
+/// Rebuild an owned view from cached bytes; `None` (and eviction) if the
+/// rebuilt genesis or world does not hash to what verification recorded.
+fn cached_view<W: Serialize + DeserializeOwned>(key: &ReplayKey) -> Option<ReadOnly<W>> {
+    let rebuilt = REPLAY_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let (_, entry) = cache.iter().find(|(k, _)| k == key)?;
+        let owned: ViewOwned<W> = serde_json::from_slice(&entry.bytes).ok()?;
+        let intact = digest(&owned.genesis).ok()? == entry.genesis_hash
+            && digest(&owned.world).ok()? == entry.world_hash;
+        Some(intact.then_some(owned))
+    })?;
+    let Some(owned) = rebuilt else {
+        REPLAY_CACHE.with(|cache| cache.borrow_mut().retain(|(k, _)| k != key));
+        return None;
+    };
+    Some(ReadOnly {
+        genesis: owned.genesis,
+        world: owned.world,
+        schedule: owned.schedule,
+        streams: owned.streams,
+        sequence: owned.sequence,
+        logical_step: owned.logical_step,
+        chain_head: owned.chain_head,
+        log_bytes: owned.log_bytes,
+    })
+}
+
+/// Drop every memoized read-only replay on this thread.
+pub fn clear_replay_cache() {
+    REPLAY_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+fn sha256_array(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn file_sha256_array(path: &Path) -> std::io::Result<[u8; 32]> {
+    let mut file = File::open(path)?;
+    let mut sha = Sha256::new();
+    std::io::copy(&mut file, &mut sha)?;
+    Ok(sha.finalize().into())
+}
+
+/// Hashes every byte replay reads, so a cache key names exactly what was verified.
+struct HashingReader<R> {
+    inner: R,
+    sha: Option<Sha256>,
+}
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buf)?;
+        if let Some(sha) = &mut self.sha {
+            sha.update(&buf[..count]);
+        }
+        Ok(count)
+    }
+}
+
+#[derive(Default)]
+struct ReplayInputs {
+    snapshot: Option<[u8; 32]>,
+    events: Option<[u8; 32]>,
+}
+
 pub struct Store<W: World + Serialize + DeserializeOwned, A: Serialize + DeserializeOwned + Clone>
 where
     W: World<Action = A>,
@@ -444,13 +602,15 @@ where
         genesis: &Genesis<W>,
         allow_torn_tail: bool,
         trust_snapshot: bool,
+        mut inputs: Option<&mut ReplayInputs>,
     ) -> Result<(Projection<W>, u64, u64), String> {
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
-            Some(
-                serde_json::from_slice(&read_metadata_limited(&snap_path)?)
-                    .map_err(|e| e.to_string())?,
-            )
+            let raw = read_metadata_limited(&snap_path)?;
+            if let Some(inputs) = inputs.as_deref_mut() {
+                inputs.snapshot = Some(sha256_array(&raw));
+            }
+            Some(serde_json::from_slice(&raw).map_err(|e| e.to_string())?)
         } else {
             None
         };
@@ -511,7 +671,12 @@ where
             offset = s.log_bytes;
             matched = Some(state.clone());
         }
-        let mut reader = BufReader::new(input);
+        // Only a full replay from byte zero yields a whole-log digest.
+        let hash_events = inputs.is_some() && offset == 0;
+        let mut reader = BufReader::new(HashingReader {
+            inner: input,
+            sha: hash_events.then(Sha256::new),
+        });
         let mut line = Vec::new();
         loop {
             let count = read_record_limited(&mut reader, &mut line)?;
@@ -532,11 +697,11 @@ where
                 matched = Some(state.clone());
             }
         }
-        let physical_len = reader
-            .get_ref()
-            .metadata()
-            .map_err(|e| e.to_string())?
-            .len();
+        let HashingReader { inner: input, sha } = reader.into_inner();
+        if let (Some(inputs), Some(sha)) = (inputs, sha) {
+            inputs.events = Some(sha.finalize().into());
+        }
+        let physical_len = input.metadata().map_err(|e| e.to_string())?.len();
         if let Some(snapshot) = snapshot {
             let expected = matched.ok_or("snapshot offset not on a committed event boundary")?;
             if snapshot.schema != SCHEMA
@@ -558,14 +723,69 @@ where
     /// unfinished append is not silently promoted to a committed event.
     pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
         let dir = dir.as_ref();
+        let raw_manifest = read_metadata_limited(&dir.join("manifest.json"))?;
+        Self::inspect_manifest_bytes(dir, &raw_manifest, None)
+    }
+
+    /// The same full verification as [`Self::inspect_read_only`], memoized
+    /// in-process by the SHA-256 of the exact manifest, snapshot and log bytes.
+    /// Re-inspecting byte-identical evidence (a fork's ancestry copy of its
+    /// parent, or a journal verified earlier in the same command) returns the
+    /// earlier view instead of replaying again. See [`clear_replay_cache`].
+    pub fn inspect_read_only_cached(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String>
+    where
+        W: 'static,
+        A: 'static,
+    {
+        let dir = dir.as_ref();
+        let raw_manifest = read_metadata_limited(&dir.join("manifest.json"))?;
+        let types = (TypeId::of::<W>(), TypeId::of::<A>());
+        let manifest = sha256_array(&raw_manifest);
+        let snap_path = dir.join("snapshot.json");
+        // A lookup key from the current bytes; an I/O error just skips the memo.
+        let lookup = (|| -> std::io::Result<ReplayKey> {
+            Ok(ReplayKey {
+                types,
+                manifest,
+                snapshot: if snap_path.exists() {
+                    Some(file_sha256_array(&snap_path)?)
+                } else {
+                    None
+                },
+                events: file_sha256_array(&dir.join("events.jsonl"))?,
+            })
+        })();
+        if let Ok(key) = &lookup
+            && let Some(view) = cached_view::<W>(key)
+        {
+            return Ok(view);
+        }
+        let mut inputs = ReplayInputs::default();
+        let view = Self::inspect_manifest_bytes(dir, &raw_manifest, Some(&mut inputs))?;
+        if let Some(events) = inputs.events {
+            let key = ReplayKey {
+                types,
+                manifest,
+                snapshot: inputs.snapshot,
+                events,
+            };
+            cache_view(key, &view)?;
+        }
+        Ok(view)
+    }
+
+    fn inspect_manifest_bytes(
+        dir: &Path,
+        raw_manifest: &[u8],
+        inputs: Option<&mut ReplayInputs>,
+    ) -> Result<ReadOnly<W>, String> {
         let genesis: Genesis<W> =
-            serde_json::from_slice(&read_metadata_limited(&dir.join("manifest.json"))?)
-                .map_err(|e| e.to_string())?;
+            serde_json::from_slice(raw_manifest).map_err(|e| e.to_string())?;
         if genesis.schema != SCHEMA || genesis.initial_streams.trial != genesis.trial_id {
             return Err("invalid read-only manifest".into());
         }
         genesis.initial_schedule.validate()?;
-        let (state, offset, _) = Self::replay_history(dir, &genesis, false, false)?;
+        let (state, offset, _) = Self::replay_history(dir, &genesis, false, false, inputs)?;
         Ok(ReadOnly {
             genesis,
             world: state.world,
@@ -605,7 +825,7 @@ where
         }
         genesis.initial_schedule.validate()?;
         let (projected, durable_length, file_length) =
-            Self::replay_history(dir, &genesis, true, trust_snapshot)?;
+            Self::replay_history(dir, &genesis, true, trust_snapshot, None)?;
         if durable_length < file_length {
             let f = OpenOptions::new()
                 .write(true)
@@ -734,6 +954,47 @@ where
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, AppendError> {
+        self.append_inner(actor, outcome, schedule, streams, None)
+    }
+
+    /// Commit a world the engine already staged by applying `action` to a
+    /// clone of the current world with `before_apply` streams. The state hash
+    /// is computed here from `staged`, so it matches the committed world by
+    /// construction; the store does not re-apply or re-hash it.
+    ///
+    /// Fail-fast boundary: unlike `append_typed`, this does not re-run the
+    /// reducer before committing, so a reducer that is not deterministic in
+    /// (world, action, streams) is no longer rejected at append time. It is
+    /// rejected by the next full replay (`open`, `inspect_read_only`), which
+    /// re-applies every action and compares state hashes and RNG positions.
+    /// Evidence should therefore be sealed only after a fresh full replay.
+    pub(crate) fn append_staged(
+        &mut self,
+        actor: AgentId,
+        action: A,
+        staged: W,
+        before_apply: Streams,
+        schedule: Schedule,
+        streams: Streams,
+    ) -> Result<Entry<W, A>, AppendError> {
+        let state_hash = digest(&staged)?;
+        let outcome = Outcome::Accepted {
+            action,
+            world: LegacyWorld::Missing,
+            state_hash,
+            before_apply_streams: Some(before_apply),
+        };
+        self.append_inner(actor, outcome, schedule, streams, Some(staged))
+    }
+
+    fn append_inner(
+        &mut self,
+        actor: AgentId,
+        outcome: Outcome<W, A>,
+        schedule: Schedule,
+        streams: Streams,
+        staged: Option<W>,
+    ) -> Result<Entry<W, A>, AppendError> {
         if self.poisoned {
             return Err("writer poisoned; reopen/recover".into());
         }
@@ -759,13 +1020,31 @@ where
             .checked_add(u64::from(accepted))
             .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
-        let new_world = match &outcome {
-            Outcome::Accepted {
-                action,
-                world,
-                state_hash,
-                before_apply_streams,
-            } => {
+        let new_world = match (&outcome, staged) {
+            (
+                Outcome::Accepted {
+                    before_apply_streams: Some(before),
+                    ..
+                },
+                Some(staged),
+            ) => {
+                // Same stream-scope checks as the re-applying path; the RNG
+                // equality there is implied by the caller staging with these
+                // exact streams, and replay re-checks it independently.
+                before.checked_scope_progress(&expected_streams, &format!("agent/{}", actor.0))?;
+                streams.checked_scope_progress(before, "world")?;
+                staged
+            }
+            (_, Some(_)) => return Err("staged world requires a staged accepted outcome".into()),
+            (
+                Outcome::Accepted {
+                    action,
+                    world,
+                    state_hash,
+                    before_apply_streams,
+                },
+                None,
+            ) => {
                 let mut next = self.world.clone();
                 if let Some(before) = before_apply_streams {
                     before
@@ -791,7 +1070,7 @@ where
                 }
                 next
             }
-            Outcome::Rejected { .. } | Outcome::Control { .. } => self.world.clone(),
+            (Outcome::Rejected { .. } | Outcome::Control { .. }, None) => self.world.clone(),
         };
         let mut event = Entry {
             schema: self.genesis.schema,

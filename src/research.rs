@@ -425,8 +425,8 @@ fn copy_evidence(source: &Path, dest: &Path) -> Result<(), String> {
 /// the child. Neither fork depends on the *live* parent after creation.
 pub fn verify_fork<W>(child: impl AsRef<Path>) -> Result<ForkMetadata, String>
 where
-    W: World + Serialize + DeserializeOwned,
-    W::Action: Serialize + DeserializeOwned + Clone,
+    W: World + Serialize + DeserializeOwned + 'static,
+    W::Action: Serialize + DeserializeOwned + Clone + 'static,
 {
     let child = child.as_ref();
     let raw = fs::read(child.join("fork.json")).map_err(|e| e.to_string())?;
@@ -440,8 +440,8 @@ where
     {
         return Err("parent evidence bytes altered".into());
     }
-    let parent: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(&bundle)?;
-    let branch: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(child)?;
+    let parent: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only_cached(&bundle)?;
+    let branch: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only_cached(child)?;
     if parent.genesis.trial_id != meta.parent_id
         || parent.chain_head != meta.parent_head
         || parent.sequence != meta.parent_sequence
@@ -483,8 +483,8 @@ pub fn fork_at_head<W, P, F>(
     backend: Arc<dyn Backend>,
 ) -> Result<Trial<W, P>, String>
 where
-    W: World + Serialize + DeserializeOwned,
-    W::Action: Serialize + DeserializeOwned + Clone,
+    W: World + Serialize + DeserializeOwned + 'static,
+    W::Action: Serialize + DeserializeOwned + Clone + 'static,
     P: EffectPolicy<W>,
     F: FnOnce(&mut W) -> Result<(), String>,
 {
@@ -501,7 +501,7 @@ where
     {
         return Err("branch directory must be new and independent of parent".into());
     }
-    let parent: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only(parent_dir)?;
+    let parent: ReadOnly<W> = Store::<W, W::Action>::inspect_read_only_cached(parent_dir)?;
     let before = digest(&parent.world)?;
     let mut world = parent.world.clone();
     intervene(&mut world)?;
@@ -625,8 +625,8 @@ pub fn paired_forks<W, P, F>(
     backend: Arc<dyn Backend>,
 ) -> Result<ForkPair<W, P>, String>
 where
-    W: World + Serialize + DeserializeOwned,
-    W::Action: Serialize + DeserializeOwned + Clone,
+    W: World + Serialize + DeserializeOwned + 'static,
+    W::Action: Serialize + DeserializeOwned + Clone + 'static,
     P: EffectPolicy<W>,
     F: FnOnce(&mut W) -> Result<(), String>,
 {
@@ -707,8 +707,8 @@ pub fn resume_fork<W, P>(
     replay_only: bool,
 ) -> Result<Trial<W, P>, String>
 where
-    W: World + Serialize + DeserializeOwned,
-    W::Action: Serialize + DeserializeOwned + Clone,
+    W: World + Serialize + DeserializeOwned + 'static,
+    W::Action: Serialize + DeserializeOwned + Clone + 'static,
     P: EffectPolicy<W>,
 {
     verify_fork::<W>(&dir)?;

@@ -5,7 +5,29 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+};
+
+/// Seed derivations keyed by (seed domain, root seed, stream name). The seed
+/// is a pure function of exactly these inputs, so a hit returns the same
+/// bytes `derive_stream_seed` would; the cache only skips the SHA-256.
+type SeedCache = HashMap<String, HashMap<u64, HashMap<String, [u8; 32]>>>;
+const SEED_CACHE_LIMIT: usize = 4096;
+thread_local! {
+    static SEED_CACHE: RefCell<(usize, SeedCache)> = RefCell::new((0, HashMap::new()));
+}
+
+fn derive_stream_seed(domain: &str, root_seed: u64, name: &str) -> [u8; 32] {
+    let mut sha = Sha256::new();
+    sha.update(b"hiyal:rng:v1");
+    for field in [domain, &root_seed.to_string(), name] {
+        sha.update((field.len() as u64).to_be_bytes());
+        sha.update(field.as_bytes());
+    }
+    sha.finalize().into()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Streams {
@@ -32,17 +54,30 @@ impl Streams {
     }
 
     fn stream_seed(&self, name: &str) -> [u8; 32] {
-        let mut sha = Sha256::new();
-        sha.update(b"hiyal:rng:v1");
-        for field in [
-            self.seed_domain.as_deref().unwrap_or(&self.trial),
-            &self.root_seed.to_string(),
-            name,
-        ] {
-            sha.update((field.len() as u64).to_be_bytes());
-            sha.update(field.as_bytes());
-        }
-        sha.finalize().into()
+        let domain = self.seed_domain.as_deref().unwrap_or(&self.trial);
+        SEED_CACHE.with(|cache| {
+            let (entries, cache) = &mut *cache.borrow_mut();
+            if let Some(seed) = cache
+                .get(domain)
+                .and_then(|by_root| by_root.get(&self.root_seed))
+                .and_then(|by_name| by_name.get(name))
+            {
+                return *seed;
+            }
+            if *entries >= SEED_CACHE_LIMIT {
+                cache.clear();
+                *entries = 0;
+            }
+            let seed = derive_stream_seed(domain, self.root_seed, name);
+            cache
+                .entry(domain.to_owned())
+                .or_default()
+                .entry(self.root_seed)
+                .or_default()
+                .insert(name.to_owned(), seed);
+            *entries += 1;
+            seed
+        })
     }
 
     /// Branch with a different identity but the same source random streams
@@ -192,6 +227,24 @@ mod tests {
         let old = s.clone();
         assert!(s.draw_u64("scheduler").is_ok());
         assert!(s.checked_progress(&old).is_err());
+    }
+
+    #[test]
+    fn cached_seed_matches_uncached_derivation() {
+        let mut s = Streams::new("trial".into(), 17).paired_branch("branch".into());
+        for name in ["scheduler", "agent/0", "world", "scheduler"] {
+            assert_eq!(s.stream_seed(name), derive_stream_seed("trial", 17, name));
+        }
+        s.root_seed = 18;
+        assert_eq!(
+            s.stream_seed("world"),
+            derive_stream_seed("trial", 18, "world")
+        );
+        s.seed_domain = None;
+        assert_eq!(
+            s.stream_seed("world"),
+            derive_stream_seed("branch", 18, "world")
+        );
     }
 
     #[test]

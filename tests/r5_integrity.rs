@@ -470,3 +470,44 @@ async fn effect_receipt_mutation_matrix_is_detected() {
     fs::write(&path, &original).unwrap();
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn cached_inspection_never_serves_a_view_for_changed_bytes() {
+    let dir = trial_dir("replay-cache");
+    let mut t = create(&dir);
+    t.run_attempts(3).await.unwrap();
+    t.checkpoint().unwrap();
+    let first = Store::<Counter, u64>::inspect_read_only_cached(&dir).unwrap();
+    assert_eq!(first.world.total, 6);
+    // A committed append changes the log bytes, so the old view is not reused.
+    t.run_attempts(1).await.unwrap();
+    let grown = Store::<Counter, u64>::inspect_read_only_cached(&dir).unwrap();
+    assert_eq!((grown.world.total, grown.sequence), (8, 4));
+    drop(t);
+    let original_log = fs::read(dir.join("events.jsonl")).unwrap();
+    let mut tampered = original_log.clone();
+    let at = tampered.iter().position(|b| b.is_ascii_hexdigit()).unwrap();
+    tampered[at] = if tampered[at] == b'a' { b'b' } else { b'a' };
+    fs::write(dir.join("events.jsonl"), &tampered).unwrap();
+    assert!(Store::<Counter, u64>::inspect_read_only_cached(&dir).is_err());
+    let original_snap = fs::read(dir.join("snapshot.json")).unwrap();
+    fs::write(dir.join("events.jsonl"), &original_log).unwrap();
+    fs::write(dir.join("snapshot.json"), b"{}").unwrap();
+    assert!(Store::<Counter, u64>::inspect_read_only_cached(&dir).is_err());
+    fs::write(dir.join("snapshot.json"), &original_snap).unwrap();
+    let restored = Store::<Counter, u64>::inspect_read_only_cached(&dir).unwrap();
+    let uncached = Store::<Counter, u64>::inspect_read_only(&dir).unwrap();
+    assert_eq!(
+        (
+            restored.chain_head,
+            restored.log_bytes,
+            restored.world.total
+        ),
+        (
+            uncached.chain_head,
+            uncached.log_bytes,
+            uncached.world.total
+        )
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
