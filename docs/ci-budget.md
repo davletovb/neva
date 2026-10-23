@@ -1,55 +1,75 @@
 # GitHub Actions: low-spend policy for Hiyal
 
-**Effective:** 2026-10-19. Applies only to the Rust rewrite. The historical
-multi-job Python workflow is preserved only on
+**Effective:** 2026-10-19; **reconciled with the workflow files:** 2026-10-23.
+Applies only to the Rust rewrite. The historical multi-job Python workflow is
+preserved only on
 [archive/hiyal-python-pre-r5](https://github.com/davletovb/hiyal/tree/archive/hiyal-python-pre-r5)
 and remains inactive; the archived Dependabot file is not active. Do not
 restore those jobs just to verify Rust changes.
 
+This page describes what the workflows in `.github/workflows/` actually do.
+If you change a trigger, update this table in the same PR.
+
 ## Trigger budget
 
-| Event | Runs | Rationale |
+### `rust-smoke.yml`: the only automatic Rust job
+
+| Event | Runs | Notes |
 | --- | --- | --- |
-| A code-affecting PR first opens ready for review, reopens, or is marked ready | **One small Rust job** | Minimal merge-time confidence |
-| Every subsequent coding-agent commit / PR synchronization | **No run** | Avoid dozens or hundreds of repeated runs |
-| Draft PR | **No runner job** | Work-in-progress need not consume minutes |
-| Documentation-only PR | **No run** | Path-filtered; no compilation needed |
-| Every push to `main` | **No run** | Do not pay to repeat a merge check |
-| Manual `workflow_dispatch` | **One Rust job** | Deliberate final pre-merge verification or debugging |
-| Published version tag matching `v*` (push) | **One job with Clippy** | Release boundary gets additional lint |
-| Nightly/scheduled benchmarks, coverage, Python compatibility matrix | **No run** | No recurring default expense |
+| PR opened, reopened, marked ready, or a new commit pushed (`synchronize`) | **One Rust job** | Only when a path under `Cargo.toml`, `Cargo.lock`, `src/`, `tests/`, `fixtures/`, `examples/`, `benchmarks/native/` or the workflow file changed |
+| Draft PR | **No runner job** | The job is skipped; GitHub allocates no runner |
+| Documentation-only or `benchmarks/phase/` change | **No run** | Outside the path filter |
+| Push to `main` | **One Rust job** | No path filter: every push, including merges |
+| Version tag matching `v*` | **One Rust job, plus a second Clippy pass** | Never cancelled |
+| Manual `workflow_dispatch` | **One Rust job** | `extended: true` adds the second Clippy pass |
 
-**Important tradeoff:** a PR check from initial opening becomes stale after
-later commits because `synchronize` is intentionally **excluded**. Before a
-merge, verify the **latest commit SHA**. If the workflow exists on the default
-branch, use **Actions → Rust smoke → Run workflow** and select the PR branch.
-For early PRs before the workflow is on default, toggle **Convert to draft →
-Ready for review** once on the final revision; the second transition triggers
-a fresh run for the current merge ref. If checks or changed files are unclear,
-prefer the manual local command `cargo fmt --all -- --check &&
-cargo test --workspace && cargo run -p hiyal-custom-world-example`.
-Never treat a green check from an earlier SHA as validation of a newer commit.
-Do not make this workflow a required continuously up-to-date PR check without
-first changing its trigger strategy.
+Concurrent runs for the same branch share a group, and a newer run cancels a
+stale one (never for tags). So a burst of PR pushes costs about one complete
+run per pause, not one per commit. Before merging, check that the green run
+is for the **latest commit SHA**; a green check on an earlier SHA does not
+validate a newer one.
 
-## Job cost controls
+### Manual and one-off workflows
 
-- One **standard Ubuntu** runner; no platform, toolchain or feature matrix.
-- **10-minute job timeout**. Stale concurrent PR/manual runs are cancelled using the same branch name
-  as their group key (`github.head_ref || github.ref_name`).
-- One Rust-only job: formatting, unit/feature checks (including opt-in loopback HTTP), registered CLI run/resume and standalone consumer smoke; no Python benchmark jobs.
-- Clippy only for manual extended verification and version-tag releases.
-- No automatic benchmarks, LLM/network smoke, deprecated Python dependencies,
-  heavy optional integrations, docs builds, coverage, artifacts or cache churn.
+| Workflow | Triggers | Cost |
+| --- | --- | --- |
+| `phase-benchmarks.yml` | Manual `workflow_dispatch` only | One Ubuntu job, at most 60 minutes; uploads results as an artifact kept 90 days |
+| `native-distribution.yml` | Manual `workflow_dispatch`, `v*` tags | Linux, macOS and Windows matrix, at most 25 minutes each; artifacts kept 14 days |
+| `one-time-r0-r5-benchmark.yml` | PR events, but its job runs only on branch `bench/r0-r5-evidence-20261020` | A skipped job on every other PR (no runner) |
+
+No workflow has a `schedule`. Benchmarks, coverage, docs builds and Python
+compatibility matrices never run automatically.
+
+## Job cost controls (`rust-smoke.yml`)
+
+- One **standard Ubuntu** runner; no platform or toolchain matrix.
+- **10-minute job timeout**.
+- **Steps:**
+  - formatting;
+  - `cargo test --workspace --locked`;
+  - Clippy with `-D warnings`;
+  - the hiyal test suite again under feature unifications:
+    `serde_json/preserve_order`, `serde_json/arbitrary_precision` plus
+    `raw_value`, and `live-http` (loopback only);
+  - CLI run, resume, sweep and fork smokes;
+  - standalone external-world and custom-model consumers;
+  - a 3-step native benchmark provenance smoke.
+- `Cargo.lock` is committed, and every step uses `--locked`.
+- `benchmarks/phase/` is excluded from the workspace and has its own lockfile.
+  This job never compiles it or Criterion.
+- No benchmarks beyond the 3-step smoke, LLM or network calls, coverage, docs
+  builds, artifacts or caches.
 - Read-only `GITHUB_TOKEN`, no secrets, and no privileged `pull_request_target`.
-- No `schedule` and no auto-trigger from a push to `main`; benchmarks run
-  manually on designated hardware at meaningful architecture/release gates.
-- A Cargo lockfile is not yet checked in. The workflow enforces `--locked`
-  **when a lockfile exists**. Commit the lockfile as soon as Rust dependencies
-  can be resolved; dependency resolution on each run is not ideal.
-- Review median run durations and action activity after enough samples; decide
-  whether even the one PR lifecycle run is justified. Avoid making unmeasured
-  claims about minutes saved.
+- Review median run durations after enough samples. Avoid unmeasured claims
+  about minutes saved.
+
+## Benchmarks
+
+Engine benchmarks run only by hand, through `phase-benchmarks.yml` or locally
+(see [benchmarks/phase](../benchmarks/phase/README.md) and
+[profiling](profiling.md)). Any automatic benchmark gate, such as an
+instruction-count regression check on PRs, must first have its runner cost
+measured and be added to the tables above.
 
 ## Billing detail and safety
 
@@ -60,7 +80,8 @@ private repositories** are not explained away by this fact. Do not generalize
 the public-repo exemption to all of the owner's projects. See:
 https://docs.github.com/en/billing/concepts/product-billing/github-actions
 
-PRs cannot claim verified green CI until the new workflow has actually run.
-No CI can substitute for the independent observer-on/off and checkpoint
-measurements required by [R0](r0-verification.md). Those are manual, targeted
-scientific measurements and must have recorded hardware and raw samples.
+PRs cannot claim verified green CI until the workflow has actually run on
+their latest commit. No CI can substitute for the independent observer-on/off
+and checkpoint measurements required by [R0](r0-verification.md). Those are
+manual, targeted scientific measurements and must have recorded hardware and
+raw samples.

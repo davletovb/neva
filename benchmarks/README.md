@@ -1,3 +1,12 @@
+# Benchmarks
+
+- **Per-phase engine benchmarks** (serialization, hashing, staging, journal
+  append, replay, inspection) on synthetic worlds, with provenance and
+  same-machine revision comparisons: [phase/](phase/README.md).
+- **Profiling a specific experiment** and proving a change equivalent:
+  [docs/profiling.md](../docs/profiling.md).
+- **R0 Python-versus-Rust protocol:** below.
+
 # R0 measurement protocol
 
 Run the preserved Python baseline **before** asserting any Rust performance

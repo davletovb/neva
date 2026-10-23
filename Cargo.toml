@@ -30,4 +30,7 @@ atomicwrites = "0.4.4"
 
 [workspace]
 members = ["examples/custom_world", "examples/custom_model", "benchmarks/native"]
+# Per-phase Criterion benchmarks: a standalone crate with its own lockfile, so
+# `cargo test --workspace` in PR CI never builds Criterion. See its README.
+exclude = ["benchmarks/phase"]
 resolver = "3"
