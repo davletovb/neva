@@ -10,11 +10,109 @@
 //! as `serde_json::Value`s straight from the input, which serde_json handles
 //! in every feature set, then rewrite the tag into the externally tagged form,
 //! which deserializes without buffering. The bytes on disk are unchanged.
-use serde::de::{self, DeserializeOwned, Deserializer, MapAccess, Visitor};
-use serde_json::{Map, Value};
+//!
+//! A `Value` map keeps only the last of a repeated key, which would let a
+//! typed field inside a record accept a duplicate its derived reader rejects.
+//! So any repeated key at any depth fails the read. That is stricter than
+//! before only for duplicates inside `Value` or map fields, which Hiyal never
+//! writes (stable JSON keeps one value per key).
+use serde::de::{
+    self, DeserializeOwned, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor,
+};
+use serde_json::{Map, Number, Value};
 use std::fmt;
 
-/// An object's fields, rejecting a repeated key as a derived struct does.
+/// serde_json's private map forms of `arbitrary_precision` numbers and
+/// `raw_value` JSON, as they reach `deserialize_any`.
+const NUMBER_TOKEN: &str = "$serde_json::private::Number";
+const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+
+/// Deserializes a `serde_json::Value` like serde_json's own, but fails on a
+/// repeated object key at any depth instead of keeping the last value.
+struct StrictValue;
+
+impl<'de> DeserializeSeed<'de> for StrictValue {
+    type Value = Value;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for StrictValue {
+    type Value = Value;
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_bool<E>(self, v: bool) -> Result<Value, E> {
+        Ok(Value::Bool(v))
+    }
+    fn visit_i64<E>(self, v: i64) -> Result<Value, E> {
+        Ok(Value::Number(v.into()))
+    }
+    fn visit_u64<E>(self, v: u64) -> Result<Value, E> {
+        Ok(Value::Number(v.into()))
+    }
+    fn visit_f64<E>(self, v: f64) -> Result<Value, E> {
+        Ok(Number::from_f64(v).map_or(Value::Null, Value::Number))
+    }
+    fn visit_str<E>(self, v: &str) -> Result<Value, E> {
+        Ok(Value::String(v.to_owned()))
+    }
+    fn visit_string<E>(self, v: String) -> Result<Value, E> {
+        Ok(Value::String(v))
+    }
+    fn visit_unit<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+    fn visit_none<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+    fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
+        d.deserialize_any(self)
+    }
+    fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Value, S::Error> {
+        let mut items = Vec::new();
+        while let Some(item) = seq.next_element_seed(StrictValue)? {
+            items.push(item);
+        }
+        Ok(Value::Array(items))
+    }
+    fn visit_map<M: MapAccess<'de>>(self, mut access: M) -> Result<Value, M::Error> {
+        let Some(first) = access.next_key::<String>()? else {
+            return Ok(Value::Object(Map::new()));
+        };
+        if first == NUMBER_TOKEN {
+            // The token's value is the number's digits; serde_json's own
+            // `Number` reader turns them back into an exact number.
+            let digits = access.next_value::<String>()?;
+            let number: Number = serde_json::from_str(&digits).map_err(de::Error::custom)?;
+            return Ok(Value::Number(number));
+        }
+        if first == RAW_VALUE_TOKEN {
+            // The token's value is raw JSON text, read with the same rules.
+            let text = access.next_value::<String>()?;
+            let mut input = serde_json::Deserializer::from_str(&text);
+            let value = StrictValue
+                .deserialize(&mut input)
+                .map_err(de::Error::custom)?;
+            input.end().map_err(de::Error::custom)?;
+            return Ok(value);
+        }
+        let mut object = Map::new();
+        let mut key = Some(first);
+        while let Some(name) = key {
+            let value = access.next_value_seed(StrictValue)?;
+            if object.contains_key(&name) {
+                return Err(de::Error::custom(format_args!("duplicate field `{name}`")));
+            }
+            object.insert(name, value);
+            key = access.next_key::<String>()?;
+        }
+        Ok(Value::Object(object))
+    }
+}
+
+/// An object's fields, rejecting a repeated key at any depth.
 pub(crate) fn fields<'de, D: Deserializer<'de>>(d: D) -> Result<Map<String, Value>, D::Error> {
     struct Fields;
     impl<'de> Visitor<'de> for Fields {
@@ -25,7 +123,7 @@ pub(crate) fn fields<'de, D: Deserializer<'de>>(d: D) -> Result<Map<String, Valu
         fn visit_map<M: MapAccess<'de>>(self, mut access: M) -> Result<Self::Value, M::Error> {
             let mut fields = Map::new();
             while let Some(key) = access.next_key::<String>()? {
-                let value = access.next_value::<Value>()?;
+                let value = access.next_value_seed(StrictValue)?;
                 if fields.contains_key(&key) {
                     return Err(de::Error::custom(format_args!("duplicate field `{key}`")));
                 }
@@ -235,6 +333,46 @@ mod tests {
         same::<EffectResult, DerivedEffectResult>(
             r#"{"status":"tool","status":"tool","payload":{"output":1}}"#,
         );
+    }
+
+    /// A repeated key anywhere in a record is rejected. Inside typed fields
+    /// the derived readers rejected it too; inside `Value` or map fields they
+    /// kept the last value, and the new reader is deliberately stricter.
+    #[test]
+    fn repeated_keys_at_any_depth_are_rejected() {
+        use crate::toy::ToyAction;
+        let typed = [
+            r#"{"action":{"Transfer":{"amount":999,"amount":1,"from":0,"to":1}},"outcome":"accepted","state_hash":"h"}"#,
+            r#"{"action":{"Transfer":{"from":0,"to":1,"amount":1}},"outcome":"accepted","state_hash":"h","before_apply_streams":{"profile":"p","profile":"q","trial":"t","root_seed":"1","positions":{}}}"#,
+        ];
+        for text in typed {
+            same::<Outcome<Value, ToyAction>, DerivedOutcome<Value, ToyAction>>(text);
+            assert!(serde_json::from_str::<Outcome<Value, ToyAction>>(text).is_err());
+        }
+        let failed =
+            r#"{"payload":{"category":"a","category":"b","message":"m"},"status":"failed"}"#;
+        same::<EffectResult, DerivedEffectResult>(failed);
+        assert!(serde_json::from_str::<EffectResult>(failed).is_err());
+        for text in [
+            r#"{"action":{"k":1,"k":2},"outcome":"accepted","state_hash":"h"}"#,
+            r#"{"action":1,"outcome":"accepted","state_hash":"h","world":{"a":[{"x":1,"x":2}]}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Outcome<Value, Value>>(text).is_err(),
+                "{text}"
+            );
+            assert!(
+                serde_json::from_str::<DerivedOutcome<Value, Value>>(text).is_ok(),
+                "{text}"
+            );
+        }
+        let output = r#"{"payload":{"output":{"n":1,"n":2}},"status":"tool"}"#;
+        assert!(serde_json::from_str::<EffectResult>(output).is_err());
+        assert!(serde_json::from_str::<DerivedEffectResult>(output).is_ok());
+        // Same keys in different objects are not repeats.
+        let distinct = r#"{"action":{"k":{"k":1},"j":[{"k":2},{"k":3}]},"outcome":"accepted","state_hash":"h"}"#;
+        same::<Outcome<Value, Value>, DerivedOutcome<Value, Value>>(distinct);
+        assert!(serde_json::from_str::<Outcome<Value, Value>>(distinct).is_ok());
     }
 
     /// The #120 failure: numbers must survive a write and read in every
