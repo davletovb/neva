@@ -7,7 +7,7 @@ use crate::scheduler::Schedule;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     cell::RefCell,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -286,7 +286,6 @@ struct Projection<W> {
 }
 
 /// Verified non-mutating view: never opens a writer lock or truncates logs.
-#[derive(Clone)]
 pub struct ReadOnly<W> {
     pub genesis: Genesis<W>,
     pub world: W,
@@ -308,14 +307,113 @@ struct ReplayKey {
     events: [u8; 32],
 }
 
+/// A verified view stored as detached, immutable bytes. `W: Clone` does not
+/// promise a deep copy (a world may share interior-mutable state), so the
+/// cache never hands out or keeps a live value: every hit rebuilds an owned
+/// view and re-checks it against the digests recorded at verification.
+struct CachedView {
+    bytes: Vec<u8>,
+    genesis_hash: String,
+    world_hash: String,
+}
+
+#[derive(Serialize)]
+#[serde(bound(serialize = "W: Serialize"))]
+struct ViewRef<'a, W> {
+    genesis: &'a Genesis<W>,
+    world: &'a W,
+    schedule: &'a Schedule,
+    streams: &'a Streams,
+    sequence: u64,
+    logical_step: u64,
+    chain_head: &'a str,
+    log_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "W: DeserializeOwned"))]
+struct ViewOwned<W> {
+    genesis: Genesis<W>,
+    world: W,
+    schedule: Schedule,
+    streams: Streams,
+    sequence: u64,
+    logical_step: u64,
+    chain_head: String,
+    log_bytes: u64,
+}
+
 /// Process-local, content-addressed memo of successful read-only replays.
 /// Replay is deterministic in its input bytes, so a view is reused only for
 /// byte-identical evidence; any changed byte is a miss and replays in full.
 /// Keys are taken from the bytes the replay actually consumed, and failures
-/// are never cached. Nothing is persisted.
+/// are never cached. Nothing is persisted. Bounded per thread by entry count
+/// and by total serialized bytes; a view larger than the budget is not kept.
 const REPLAY_CACHE_LIMIT: usize = 32;
+const REPLAY_CACHE_BYTES: usize = 256 * 1024 * 1024;
 thread_local! {
-    static REPLAY_CACHE: RefCell<Vec<(ReplayKey, Box<dyn Any>)>> = const { RefCell::new(Vec::new()) };
+    static REPLAY_CACHE: RefCell<Vec<(ReplayKey, CachedView)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn cache_view<W: Serialize>(key: ReplayKey, view: &ReadOnly<W>) -> Result<(), String> {
+    let bytes = serde_json::to_vec(&ViewRef {
+        genesis: &view.genesis,
+        world: &view.world,
+        schedule: &view.schedule,
+        streams: &view.streams,
+        sequence: view.sequence,
+        logical_step: view.logical_step,
+        chain_head: &view.chain_head,
+        log_bytes: view.log_bytes,
+    })
+    .map_err(|e| e.to_string())?;
+    if bytes.len() > REPLAY_CACHE_BYTES {
+        return Ok(());
+    }
+    let entry = CachedView {
+        bytes,
+        genesis_hash: digest(&view.genesis)?,
+        world_hash: digest(&view.world)?,
+    };
+    REPLAY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|(k, _)| *k != key);
+        let mut total: usize = cache.iter().map(|(_, v)| v.bytes.len()).sum();
+        while !cache.is_empty()
+            && (cache.len() >= REPLAY_CACHE_LIMIT || total + entry.bytes.len() > REPLAY_CACHE_BYTES)
+        {
+            total -= cache.remove(0).1.bytes.len();
+        }
+        cache.push((key, entry));
+    });
+    Ok(())
+}
+
+/// Rebuild an owned view from cached bytes; `None` (and eviction) if the
+/// rebuilt genesis or world does not hash to what verification recorded.
+fn cached_view<W: Serialize + DeserializeOwned>(key: &ReplayKey) -> Option<ReadOnly<W>> {
+    let rebuilt = REPLAY_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let (_, entry) = cache.iter().find(|(k, _)| k == key)?;
+        let owned: ViewOwned<W> = serde_json::from_slice(&entry.bytes).ok()?;
+        let intact = digest(&owned.genesis).ok()? == entry.genesis_hash
+            && digest(&owned.world).ok()? == entry.world_hash;
+        Some(intact.then_some(owned))
+    })?;
+    let Some(owned) = rebuilt else {
+        REPLAY_CACHE.with(|cache| cache.borrow_mut().retain(|(k, _)| k != key));
+        return None;
+    };
+    Some(ReadOnly {
+        genesis: owned.genesis,
+        world: owned.world,
+        schedule: owned.schedule,
+        streams: owned.streams,
+        sequence: owned.sequence,
+        logical_step: owned.logical_step,
+        chain_head: owned.chain_head,
+        log_bytes: owned.log_bytes,
+    })
 }
 
 /// Drop every memoized read-only replay on this thread.
@@ -657,17 +755,10 @@ where
                 events: file_sha256_array(&dir.join("events.jsonl"))?,
             })
         })();
-        if let Ok(key) = &lookup {
-            let hit = REPLAY_CACHE.with(|cache| {
-                cache
-                    .borrow()
-                    .iter()
-                    .find(|(k, _)| k == key)
-                    .and_then(|(_, view)| view.downcast_ref::<ReadOnly<W>>().cloned())
-            });
-            if let Some(view) = hit {
-                return Ok(view);
-            }
+        if let Ok(key) = &lookup
+            && let Some(view) = cached_view::<W>(key)
+        {
+            return Ok(view);
         }
         let mut inputs = ReplayInputs::default();
         let view = Self::inspect_manifest_bytes(dir, &raw_manifest, Some(&mut inputs))?;
@@ -678,13 +769,7 @@ where
                 snapshot: inputs.snapshot,
                 events,
             };
-            REPLAY_CACHE.with(|cache| {
-                let mut cache = cache.borrow_mut();
-                if cache.len() >= REPLAY_CACHE_LIMIT {
-                    cache.remove(0);
-                }
-                cache.push((key, Box::new(view.clone())));
-            });
+            cache_view(key, &view)?;
         }
         Ok(view)
     }
@@ -875,8 +960,14 @@ where
     /// Commit a world the engine already staged by applying `action` to a
     /// clone of the current world with `before_apply` streams. The state hash
     /// is computed here from `staged`, so it matches the committed world by
-    /// construction; the store does not re-apply or re-hash it. Replay
-    /// (open/inspect) still re-applies every action independently.
+    /// construction; the store does not re-apply or re-hash it.
+    ///
+    /// Fail-fast boundary: unlike `append_typed`, this does not re-run the
+    /// reducer before committing, so a reducer that is not deterministic in
+    /// (world, action, streams) is no longer rejected at append time. It is
+    /// rejected by the next full replay (`open`, `inspect_read_only`), which
+    /// re-applies every action and compares state hashes and RNG positions.
+    /// Evidence should therefore be sealed only after a fresh full replay.
     pub(crate) fn append_staged(
         &mut self,
         actor: AgentId,

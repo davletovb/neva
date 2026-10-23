@@ -75,6 +75,37 @@ The consumer, social-emergence-lab experiment 002, also switched its
   clippy `-D warnings` and fmt all pass. A new test covers cached
   inspection after appends, log tampering and snapshot tampering.
 
+## Revision after review: detached cache values
+
+The cache first stored `ReadOnly<W>` clones. Because `W: Clone` does not
+guarantee a deep copy, it now stores serialized bytes instead. Each hit
+rebuilds an owned view and checks it against the genesis and world digests
+recorded at verification. On a mismatch, the entry is evicted and the
+evidence is replayed in full. The cache is also limited to 256 MiB of
+serialized bytes per thread, in addition to the 32-entry limit.
+
+Same machine, alternating with baseline `e38419f`, median [min–max]:
+
+| Case | Step | n | Baseline | Revised | Speedup |
+|---|---|---|---|---|---|
+| B | run | 5 | 21.48 s [20.70–22.40] | 7.85 s [7.47–7.95] | 2.74× |
+| B | verify | 5 | 6.90 s [6.45–6.99] | 2.75 s [2.66–2.88] | 2.51× |
+| C | run | 3 | 56.87 s [56.44–57.69] | 21.99 s [20.83–22.19] | 2.59× |
+| C | verify | 3 | 17.46 s [17.46–17.57] | 9.01 s [8.60–9.03] | 1.94× |
+
+Case B output again matches baseline for all 2,080 events, and each binary
+verifies the other's evidence.
+
+## Fail-fast boundary of staged appends
+
+`append_staged` does not re-run the reducer before committing. A reducer
+that is not deterministic in (world, action, streams) is therefore rejected
+at the next full replay rather than at append time. Replay re-applies every
+action and checks state hashes and RNG positions.
+`tests/replay_cache.rs::staged_commit_of_an_inconsistent_reducer_fails_fresh_replay`
+covers this. Seal evidence only after a fresh full replay in a new process,
+which is how the experiment 002 scripts already seal.
+
 ## Not addressed
 
 Per-event world hashing still dominates what remains (`digest` is 53% of the
