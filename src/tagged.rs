@@ -191,6 +191,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::NUMBER_TOKEN;
     use crate::effects::{EffectResult, Usage};
     use crate::rng::Streams;
     use crate::storage::{LegacyWorld, Outcome, stable_bytes};
@@ -252,19 +253,25 @@ mod tests {
 
     /// The new reader must accept exactly what the derived one accepted, with
     /// the same re-serialized bytes, and reject what it rejected. Under
-    /// `arbitrary_precision` the derived reader can wrongly reject or alter
-    /// numbers (#120), so there only its successes on number-free input count.
+    /// `arbitrary_precision` only the derived reader's two known #120 failures
+    /// are excused: rejecting a buffered number ("invalid type: map"), or
+    /// turning one into serde_json's private number map. Anything else must
+    /// still match, malformed input included.
     fn same<New: Serialize + DeserializeOwned, Old: Serialize + DeserializeOwned>(text: &str) {
         let new = serde_json::from_str::<New>(text).map(|v| stable_bytes(&v).unwrap());
         let old = serde_json::from_str::<Old>(text).map(|v| stable_bytes(&v).unwrap());
-        let has_numbers = text.bytes().any(|b| b.is_ascii_digit());
         match (new, old) {
-            (Ok(a), Ok(b)) if !arbitrary_precision() || !has_numbers => {
-                assert_eq!(String::from_utf8(a), String::from_utf8(b), "{text}")
-            }
+            (Ok(a), Ok(b)) if a == b => {}
+            (Ok(_), Ok(b))
+                if arbitrary_precision() && String::from_utf8_lossy(&b).contains(NUMBER_TOKEN) => {}
             (Err(_), Err(_)) => {}
-            (_, _) if arbitrary_precision() && has_numbers => {}
-            (a, b) => panic!("{text}: new {a:?} vs derived {b:?}"),
+            (Ok(_), Err(e))
+                if arbitrary_precision() && e.to_string().contains("invalid type: map") => {}
+            (a, b) => panic!(
+                "{text}: new {:?} vs derived {:?}",
+                a.map(String::from_utf8),
+                b.map(String::from_utf8)
+            ),
         }
     }
 
@@ -333,6 +340,44 @@ mod tests {
         same::<EffectResult, DerivedEffectResult>(
             r#"{"status":"tool","status":"tool","payload":{"output":1}}"#,
         );
+    }
+
+    /// Malformed records are rejected in every feature set, whatever the
+    /// derived reader would have done with them under `arbitrary_precision`.
+    #[test]
+    fn malformed_records_are_rejected() {
+        for text in [
+            r#"{"outcome":"accepted","state_hash":"h"}"#,
+            r#"{"outcome":"accepted","action":"x","state_hash":"h"}"#,
+            r#"{"outcome":"accepted","action":1.5,"state_hash":7}"#,
+            r#"{"outcome":"accepted","action":1.5,"state_hash":"h","world":{"x":1},"before_apply_streams":5}"#,
+            r#"{"outcome":"rejected","reason":5}"#,
+            r#"{"outcome":"control","paused":1}"#,
+            r#"{"outcome":"other","reason":"x"}"#,
+            r#"{"outcome":3,"reason":"x"}"#,
+            r#"{"reason":"x"}"#,
+            r#"[1]"#,
+            r#"{"outcome":"accepted","action":1.5,"state_hash":"h""#,
+        ] {
+            assert!(
+                serde_json::from_str::<Outcome<Value, f64>>(text).is_err(),
+                "{text}"
+            );
+        }
+        for text in [
+            r#"{"status":"failed","payload":{"category":"c"}}"#,
+            r#"{"status":"failed","payload":{"category":1,"message":"m"}}"#,
+            r#"{"status":"model","payload":{"content":"c","effective_model":"m","usage":{"input_tokens":3}}}"#,
+            r#"{"status":"tool"}"#,
+            r#"{"status":"nope","payload":{}}"#,
+            r#"{"status":2,"payload":{}}"#,
+            r#"{"payload":{"output":1}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<EffectResult>(text).is_err(),
+                "{text}"
+            );
+        }
     }
 
     /// A repeated key anywhere in a record is rejected. Inside typed fields

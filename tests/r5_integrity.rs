@@ -511,3 +511,122 @@ async fn cached_inspection_never_serves_a_view_for_changed_bytes() {
     );
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// A committed event whose action struct gains an earlier, conflicting copy
+/// of a field still hashes to its recorded value once the copy is dropped.
+/// Every read path must reject it rather than keep the last value (#121).
+#[tokio::test]
+async fn repeated_action_field_in_a_committed_event_is_rejected() {
+    use hiyal::{
+        core::{Policy, World},
+        experiment::Rules,
+    };
+    use serde::{Deserialize, Serialize};
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Ledger {
+        total: u64,
+    }
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Deposit {
+        amount: u64,
+        memo: String,
+    }
+    impl World for Ledger {
+        type Action = Deposit;
+        type Observation = u64;
+        fn observe(&self, _: AgentId) -> Result<u64, String> {
+            Ok(self.total)
+        }
+        fn apply(&mut self, _: AgentId, deposit: Deposit) -> Result<(), String> {
+            self.total += deposit.amount;
+            Ok(())
+        }
+    }
+    struct Two;
+    impl Policy<Ledger> for Two {
+        fn propose(&self, _: AgentId, _: &u64) -> Result<Deposit, String> {
+            Ok(Deposit {
+                amount: 2,
+                memo: "m".into(),
+            })
+        }
+    }
+    let dir = trial_dir("repeated-action-field");
+    let mut trial = Trial::create(
+        &dir,
+        "ledger",
+        5,
+        "ledger.v1",
+        Ledger { total: 0 },
+        Rules(Two),
+        Arc::new(ScriptedBackend),
+        vec![AgentId(0)],
+        Scheduling::RoundRobin,
+    )
+    .unwrap();
+    trial.run_attempts(3).await.unwrap();
+    drop(trial);
+    hiyal::storage::clear_replay_cache();
+    let path = dir.join("events.jsonl");
+    let original = fs::read_to_string(&path).unwrap();
+    assert!(Store::<Ledger, Deposit>::inspect_read_only(&dir).is_ok());
+    let tampered = original.replacen(
+        r#""action":{"amount":2,"#,
+        r#""action":{"amount":999,"amount":2,"#,
+        1,
+    );
+    assert_ne!(tampered, original, "the action field was not found");
+    fs::write(&path, &tampered).unwrap();
+    let error = Store::<Ledger, Deposit>::inspect_read_only(&dir)
+        .err()
+        .unwrap();
+    assert!(error.contains("duplicate field `amount`"), "{error}");
+    assert!(Store::<Ledger, Deposit>::inspect_read_only_cached(&dir).is_err());
+    assert!(Store::<Ledger, Deposit>::open(&dir).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), tampered);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// The same attack on an effect receipt: a forged earlier copy of the model
+/// output's `content` must not survive into a receipt whose hash matches.
+#[tokio::test]
+async fn repeated_payload_field_in_an_effect_receipt_is_rejected() {
+    use hiyal::runtime::sample_request;
+    use std::time::Duration;
+    let dir = trial_dir("repeated-receipt-field");
+    fs::create_dir_all(&dir).unwrap();
+    let mut journal = EffectJournal::open(&dir).unwrap();
+    let spec = sample_request("duplicate-field-check");
+    let key = spec.key("effect-trial", 0, AgentId(0), 0).unwrap();
+    journal
+        .resolve_all(
+            vec![(key, spec)],
+            Arc::new(ScriptedBackend),
+            1,
+            Duration::from_secs(2),
+            false,
+        )
+        .await
+        .unwrap();
+    drop(journal);
+    let path = dir.join("effects.jsonl");
+    let original = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        EffectJournal::inspect_read_only(&dir, "effect-trial").unwrap(),
+        1
+    );
+    let tampered = original.replacen(
+        r#""payload":{"content":"#,
+        r#""payload":{"content":"FORGED","content":"#,
+        1,
+    );
+    assert_ne!(tampered, original, "the receipt payload was not found");
+    fs::write(&path, &tampered).unwrap();
+    let error = EffectJournal::inspect_read_only(&dir, "effect-trial")
+        .err()
+        .unwrap();
+    assert!(error.contains("duplicate field `content`"), "{error}");
+    assert!(EffectJournal::open_existing(&dir).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), tampered);
+    fs::remove_dir_all(dir).unwrap();
+}
