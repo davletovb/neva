@@ -152,7 +152,7 @@ pub enum LegacyWorld<W> {
     Present(W),
 }
 impl<W> LegacyWorld<W> {
-    fn is_missing(&self) -> bool {
+    pub(crate) fn is_missing(&self) -> bool {
         matches!(self, Self::Missing)
     }
     pub fn as_ref(&self) -> Option<&W> {
@@ -161,7 +161,7 @@ impl<W> LegacyWorld<W> {
             Self::Missing => None,
         }
     }
-    fn deserialize_present<'de, D>(d: D) -> Result<Self, D::Error>
+    pub(crate) fn deserialize_present<'de, D>(d: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
         W: serde::Deserialize<'de>,
@@ -178,11 +178,11 @@ impl<W: Serialize> Serialize for LegacyWorld<W> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "W: Serialize, A: Serialize",
-    deserialize = "W: DeserializeOwned, A: DeserializeOwned"
-))]
+/// Written internally tagged by `outcome`. Read through `tagged` rather than
+/// a derived deserializer, so numbers survive serde_json's
+/// `arbitrary_precision` feature (#120); the format is unchanged.
+#[derive(Clone, Debug, Serialize)]
+#[serde(bound(serialize = "W: Serialize, A: Serialize"))]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum Outcome<W, A> {
     Accepted {
@@ -206,6 +206,49 @@ pub enum Outcome<W, A> {
     Control {
         paused: bool,
     },
+}
+
+/// `Outcome`'s fields and rules, externally tagged for `tagged::internally_tagged`.
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "W: DeserializeOwned, A: DeserializeOwned"))]
+#[serde(rename_all = "snake_case")]
+enum OutcomeFields<W, A> {
+    Accepted {
+        action: A,
+        #[serde(default, deserialize_with = "LegacyWorld::<W>::deserialize_present")]
+        world: LegacyWorld<W>,
+        state_hash: String,
+        #[serde(default)]
+        before_apply_streams: Option<Streams>,
+    },
+    Rejected {
+        reason: String,
+    },
+    Control {
+        paused: bool,
+    },
+}
+
+impl<'de, W: DeserializeOwned, A: DeserializeOwned> Deserialize<'de> for Outcome<W, A> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(
+            match crate::tagged::internally_tagged::<D, OutcomeFields<W, A>>(d, "outcome")? {
+                OutcomeFields::Accepted {
+                    action,
+                    world,
+                    state_hash,
+                    before_apply_streams,
+                } => Self::Accepted {
+                    action,
+                    world,
+                    state_hash,
+                    before_apply_streams,
+                },
+                OutcomeFields::Rejected { reason } => Self::Rejected { reason },
+                OutcomeFields::Control { paused } => Self::Control { paused },
+            },
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

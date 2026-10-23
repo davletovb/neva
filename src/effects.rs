@@ -103,7 +103,9 @@ pub struct Usage {
     pub currency: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Written adjacently tagged. `payload` sorts before `status`, which made the
+/// derived reader buffer it, so it is read through `tagged` instead (#120).
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "status", content = "payload", rename_all = "snake_case")]
 pub enum EffectResult {
     Model {
@@ -121,6 +123,53 @@ pub enum EffectResult {
         category: String,
         message: String,
     },
+}
+
+/// `EffectResult`'s variants, externally tagged for `tagged::adjacently_tagged`.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EffectResultFields {
+    Model {
+        content: String,
+        effective_model: String,
+        usage: Option<Usage>,
+    },
+    Tool {
+        output: serde_json::Value,
+    },
+    UnsupportedCapability {
+        capability: String,
+    },
+    Failed {
+        category: String,
+        message: String,
+    },
+}
+
+impl<'de> Deserialize<'de> for EffectResult {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(
+            match crate::tagged::adjacently_tagged::<D, EffectResultFields>(d, "status", "payload")?
+            {
+                EffectResultFields::Model {
+                    content,
+                    effective_model,
+                    usage,
+                } => Self::Model {
+                    content,
+                    effective_model,
+                    usage,
+                },
+                EffectResultFields::Tool { output } => Self::Tool { output },
+                EffectResultFields::UnsupportedCapability { capability } => {
+                    Self::UnsupportedCapability { capability }
+                }
+                EffectResultFields::Failed { category, message } => {
+                    Self::Failed { category, message }
+                }
+            },
+        )
+    }
 }
 
 #[cfg(test)]
