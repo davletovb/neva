@@ -69,6 +69,11 @@ jobs:
       - name: Deterministic map-order regression (feature unification)
         run: cargo test -p hiyal --locked --features serde_json/preserve_order
 
+      # Only the stable-JSON writer's differential tests: the full suite does
+      # not yet pass with arbitrary_precision (tests/float_state.rs, also on main).
+      - name: Stable JSON writer under serde_json special-struct features
+        run: cargo test -p hiyal --locked --features serde_json/arbitrary_precision,serde_json/raw_value --lib canonical
+
       - name: Opt-in HTTP adapter loopback test
         run: cargo test -p hiyal --locked --features live-http
 

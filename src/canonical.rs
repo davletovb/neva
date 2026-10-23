@@ -7,6 +7,9 @@
 //! when serde emitted them out of order. Scalars and map keys are converted
 //! by serde_json itself, so number, float and key handling cannot drift from
 //! the reference profile, which `stable_bytes_via_value` keeps for tests.
+//! So are serde_json's private special structs (`arbitrary_precision`
+//! numbers, `raw_value` JSON), which features enabled anywhere in a build
+//! can turn on through Cargo feature unification.
 use serde::ser::{self, Serialize};
 use std::{borrow::Cow, fmt::Display};
 
@@ -197,7 +200,23 @@ impl ser::SerializeMap for Object<'_> {
     }
 }
 
-impl ser::SerializeStruct for Object<'_> {
+/// serde_json encodes `arbitrary_precision` numbers and `raw_value` JSON as
+/// structs with these reserved names; its `Value` serializer turns them back
+/// into a number or parsed JSON rather than an object.
+const SERDE_JSON_PRIVATE: &str = "$serde_json::private::";
+
+enum StructSer<'a> {
+    Object(Object<'a>),
+    /// A serde_json special struct, converted by serde_json's own `Value`
+    /// serializer and written with the reference key sort.
+    Special {
+        out: &'a mut Vec<u8>,
+        name: &'static str,
+        written: bool,
+    },
+}
+
+impl ser::SerializeStruct for StructSer<'_> {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: Serialize + ?Sized>(
@@ -205,10 +224,38 @@ impl ser::SerializeStruct for Object<'_> {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        self.entry(Cow::Borrowed(key), value)
+        match self {
+            Self::Object(object) => object.entry(Cow::Borrowed(key), value),
+            Self::Special { out, name, written } => {
+                struct Special<'a, T: ?Sized> {
+                    name: &'static str,
+                    key: &'static str,
+                    value: &'a T,
+                }
+                impl<T: Serialize + ?Sized> Serialize for Special<'_, T> {
+                    fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                        use ser::SerializeStruct;
+                        let mut special = s.serialize_struct(self.name, 1)?;
+                        special.serialize_field(self.key, self.value)?;
+                        special.end()
+                    }
+                }
+                if *written {
+                    return Err(Error("serde_json special struct has several fields".into()));
+                }
+                let value = serde_json::to_value(Special { name, key, value })?;
+                crate::core::stable_json_bytes(&value, out)?;
+                *written = true;
+                Ok(())
+            }
+        }
     }
     fn end(self) -> Result<(), Error> {
-        self.finish()
+        match self {
+            Self::Object(object) => object.finish(),
+            Self::Special { written: true, .. } => Ok(()),
+            Self::Special { .. } => Err(Error("empty serde_json special struct".into())),
+        }
     }
 }
 
@@ -296,7 +343,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
     type SerializeTupleStruct = Seq<'a>;
     type SerializeTupleVariant = Seq<'a>;
     type SerializeMap = Object<'a>;
-    type SerializeStruct = Object<'a>;
+    type SerializeStruct = StructSer<'a>;
     type SerializeStructVariant = Object<'a>;
 
     scalar_methods! {
@@ -381,8 +428,16 @@ impl<'a> ser::Serializer for Canonical<'a> {
     fn serialize_map(self, _: Option<usize>) -> Result<Object<'a>, Error> {
         Ok(Object::open(self.0, false))
     }
-    fn serialize_struct(self, _: &'static str, _: usize) -> Result<Object<'a>, Error> {
-        Ok(Object::open(self.0, false))
+    fn serialize_struct(self, name: &'static str, _: usize) -> Result<StructSer<'a>, Error> {
+        Ok(if name.starts_with(SERDE_JSON_PRIVATE) {
+            StructSer::Special {
+                out: self.0,
+                name,
+                written: false,
+            }
+        } else {
+            StructSer::Object(Object::open(self.0, false))
+        })
     }
     fn serialize_struct_variant(
         self,
@@ -612,10 +667,10 @@ mod tests {
     fn every_serde_shape_matches_reference_bytes() {
         same(&everything(-5, 5));
         same(&everything(i128::from(i64::MIN), u128::from(u64::MAX)));
-        // Out of serde_json's integer range: both routes must reject it.
+        // Outside serde_json's integer range: both routes reject it, or under
+        // `arbitrary_precision` both accept it with the same bytes.
         same(&everything(i128::MAX, 0));
         same(&everything(0, u128::MAX));
-        assert!(to_stable_bytes(&everything(0, u128::MAX)).is_err());
     }
 
     #[test]
@@ -641,6 +696,39 @@ mod tests {
     }
     #[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
     struct Newtype2(u32);
+
+    /// serde_json's special structs, written by hand so the test runs in every
+    /// feature set. With `arbitrary_precision`/`raw_value` off both routes see
+    /// ordinary structs; with them on both must convert them identically.
+    struct Special(&'static str, &'static str);
+    impl Serialize for Special {
+        fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            use ser::SerializeStruct;
+            let mut special = s.serialize_struct(self.0, 1)?;
+            special.serialize_field(self.0, self.1)?;
+            special.end()
+        }
+    }
+
+    #[test]
+    fn serde_json_special_structs_match_reference_bytes() {
+        const NUMBER: &str = "$serde_json::private::Number";
+        const RAW: &str = "$serde_json::private::RawValue";
+        for (name, text) in [
+            (NUMBER, "42"),
+            (NUMBER, "-0.0"),
+            (NUMBER, "123456789012345678901234567890"),
+            (NUMBER, "1.000000000000000000001e-400"),
+            (RAW, r#"{"b":[1,{"z":0,"a":1}],"a":"x"}"#),
+            (RAW, "[3,2,1]"),
+            (RAW, "12345678901234567890123"),
+        ] {
+            same(&Special(name, text));
+            same(&vec![Special(name, text)]);
+            same(&BTreeMap::from([("outer", Special(name, text))]));
+        }
+        same(&json!({"checkpoint": 200, "arm": "both", "big": 18446744073709551615u64}));
+    }
 
     #[test]
     fn engine_records_match_reference_bytes() {
