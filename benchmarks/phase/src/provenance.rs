@@ -8,9 +8,9 @@ pub struct Provenance {
     /// Hiyal's own build record: engine version, rustc, target, source
     /// commit and dirty flag, and the SHA-256 of its `Cargo.lock`.
     pub engine: hiyal::storage::BuildProvenance,
-    /// SHA-256 of this benchmark crate's `Cargo.lock`, read at run time from
-    /// the source checkout the binary was built from.
-    pub bench_lock_sha256: Option<String>,
+    /// SHA-256 of this benchmark crate's `Cargo.lock` as compiled into the
+    /// binary, so a later change to the checkout cannot alter it.
+    pub bench_lock_sha256: String,
     pub bench_features: Vec<&'static str>,
     pub cpu: Cpu,
     /// `uname -srm`, when available.
@@ -68,9 +68,10 @@ pub fn collect() -> Provenance {
     }
     Provenance {
         engine: hiyal::storage::BuildProvenance::current(),
-        bench_lock_sha256: std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock"))
-            .ok()
-            .map(|bytes| hex(&Sha256::digest(bytes))),
+        bench_lock_sha256: hex(&Sha256::digest(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/Cargo.lock"
+        )))),
         bench_features,
         cpu: Cpu {
             model: field("model name"),

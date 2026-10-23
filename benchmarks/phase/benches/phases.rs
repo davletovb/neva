@@ -57,6 +57,10 @@ where
         group.throughput(Throughput::Elements(1));
         group.bench_function(BenchmarkId::from_parameter(&id), |b| {
             // The clone is made, and the result dropped, outside the timer.
+            // One clone per iteration, as in phase-report: a batch of clones
+            // changes the heap layout, and with it whether a growing world's
+            // push can extend its buffer in place. Per-iteration timing adds
+            // the timer's own tens of nanoseconds; phase-report subtracts it.
             b.iter_batched(
                 || world.clone(),
                 |mut next| {
@@ -66,7 +70,7 @@ where
                         .expect("apply");
                     next
                 },
-                BatchSize::LargeInput,
+                BatchSize::PerIteration,
             )
         });
         group.finish();

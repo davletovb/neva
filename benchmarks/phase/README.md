@@ -25,14 +25,31 @@ revision commits the same deterministic history.
 | Serialization | `serialize` | `serialize` | call | Stable JSON bytes; `world_bytes` recorded |
 | Hash (serialize + SHA-256) | `digest` | `digest` | call | What Hiyal does per state hash |
 | SHA-256 alone | `sha256` | `sha256` | call | Over the serialized bytes; MiB/s recorded |
-| Action application | `apply` | `apply` | action | The world's reducer alone (world code, not Hiyal) |
+| Action application | `apply` | `apply` | action | The world's reducer alone (world code, not Hiyal): one action on a fresh clone of the reported world, clone and drop untimed |
 | Staging and hashing | `stage` | `stage` | event | Clone, apply, hash: the staging work, rebuilt from public API |
-| Journal append, buffered | `commit_buffered` | `commit_buffered` | event | Full committed step, `Durability::AtCheckpoint` |
-| Journal append, fsynced | `commit_fsync` | `commit_fsync` | event | Full committed step, `Durability::EveryEvent` (at most 50 events) |
+| Journal append, buffered | `commit_buffered` | `commit_buffered` | event | Full committed step, `Durability::AtCheckpoint`, first 50 events |
+| Journal append, fsynced | `commit_fsync` | `commit_fsync` | event | Full committed step, `Durability::EveryEvent`, the same first 50 events |
+| Journal append, long horizon | `commit_buffered_long` | — | event | As `commit_buffered`, over the workload's full event count |
 | Replay | `replay_full` | `replay_full` | event | `inspect_read_only`: every event re-applied, every hash re-checked |
 | Replay, cold process | `replay_full_cold_process` | — | event | Same, in a fresh process per sample (see below) |
 | Inspection, memo miss and hit | `inspect_cached_miss`, `inspect_cached_hit` | `inspect_cached_hit` | call | `inspect_read_only_cached` (feature `replay-cache`) |
 | Trusted-snapshot recovery | `open_trusted_snapshot` | `open_trusted_snapshot` | call | `Store::open_trusted` |
+
+**Durability is compared at one history length.** `commit_buffered` and
+`commit_fsync` commit the same 50 events from genesis, so their difference is
+the cost of durability alone. `commit_buffered_long` shows how commit cost
+scales with history (it grows for the `growing` shape); compare it with
+`commit_buffered`, never with `commit_fsync`. Criterion's commit groups time
+one event from genesis for both durabilities.
+
+**`apply` times one action at a time.** Each timed action is applied to a
+fresh clone of the reported world straight after cloning, as Hiyal's staging
+does, so it acts on exactly `world_bytes`. The median cost of an empty timer
+call is subtracted and recorded, so reducers of a few nanoseconds are at the
+limit of resolution. Clones are deliberately not prepared in batches: that
+changes the heap layout, which decides whether a `growing` world's push can
+extend its buffer in place, and moved its median by up to 100x. Allocation
+counts cover 100 such actions, the same work as the timings.
 
 **Trusted-snapshot recovery is not verification.** `open_trusted`
 deliberately skips re-verifying events before the snapshot. It is measured to
@@ -97,8 +114,9 @@ Every report records:
 - **Engine build:** Hiyal's `BuildProvenance`, which gives the engine version,
   rustc, target, source commit, dirty flag, and the SHA-256 of Hiyal's
   `Cargo.lock`.
-- **Benchmark build:** the SHA-256 of this crate's `Cargo.lock`, and its
-  enabled features.
+- **Benchmark build:** the SHA-256 of this crate's `Cargo.lock` as compiled
+  into the binary (embedded at build time, so a later checkout change cannot
+  alter it), and its enabled features.
 - **Workloads:** the suite version, repetition count, world shape, size, event
   count, world bytes and journal bytes. Durability is the phase name.
 - **Machine:** CPU model, logical CPUs and selected CPU flags, plus

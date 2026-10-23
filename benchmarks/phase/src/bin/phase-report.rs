@@ -86,11 +86,16 @@ const FULL_EXTRA: &[Spec] = &[
     },
 ];
 
-/// Per-event fsync is slow on most disks; cap its event count.
-const FSYNC_EVENTS: u64 = 50;
-/// Actions in the apply calibration batch and its allocation count; samples
-/// use as many actions as fit `MIN_SAMPLE`.
-const APPLY_BATCH: u64 = 100;
+/// Events per sample in both durability phases, so the two run the same
+/// history and differ only in durability. Per-event fsync is slow on most
+/// disks, so this is short; `commit_buffered_long` covers the workload's full
+/// event count, buffered, for scaling with history length.
+const COMMIT_EVENTS: u64 = 50;
+/// Upper bound on actions per apply sample, which bounds the cloning time
+/// spent preparing a sample of a large world.
+const APPLY_MAX_ACTIONS: u64 = 20_000;
+/// Actions whose allocations are counted for the apply phase.
+const APPLY_ALLOC_ACTIONS: u64 = 100;
 
 #[derive(Serialize)]
 struct Phase {
@@ -188,28 +193,49 @@ where
     );
     phases.insert("sha256", p);
 
-    let apply_batch = |next: &mut W, actions: u64| {
-        for _ in 0..actions {
-            let step = next.step();
-            let actor = step % hiyal_phase_bench::AGENTS;
-            next.apply(hiyal::core::AgentId(actor), W::action_for(step, actor))
-                .expect("apply");
-        }
+    // One action on a fresh clone of `world`, applied straight after the
+    // clone as Hiyal's staging does; the clone and the drop are untimed, so
+    // every timed action acts on exactly the reported world. One clone at a
+    // time on purpose: preparing a batch of clones changes the heap layout,
+    // which decides whether a growing world's push can extend its buffer in
+    // place, and moved the growing-world median by up to 100x.
+    let apply_one = |next: &mut W| {
+        let step = next.step();
+        let actor = step % hiyal_phase_bench::AGENTS;
+        next.apply(hiyal::core::AgentId(actor), W::action_for(step, actor))
+            .expect("apply");
     };
-    // Enough actions per sample to last MIN_SAMPLE, estimated from a batch.
-    let mut probe = world.clone();
-    let estimate = time_ns(|| apply_batch(&mut probe, APPLY_BATCH)).0 / APPLY_BATCH;
-    let actions = (hiyal_phase_bench::MIN_SAMPLE.as_nanos() as u64 / estimate.max(1))
-        .clamp(APPLY_BATCH, 100 * APPLY_BATCH * APPLY_BATCH);
+    let timer_ns = timer_overhead_ns();
     let samples = (0..reps)
         .map(|_| {
-            let mut next = world.clone();
-            time_ns(|| apply_batch(&mut next, actions)).0 as f64 / actions as f64
+            let (mut timed, mut actions) = (0.0, 0u64);
+            while timed < hiyal_phase_bench::MIN_SAMPLE.as_nanos() as f64
+                && actions < APPLY_MAX_ACTIONS
+            {
+                let mut next = world.clone();
+                timed += time_ns(|| apply_one(&mut next)).0 as f64 - timer_ns;
+                actions += 1;
+                drop(next);
+            }
+            timed.max(0.0) / actions as f64
         })
         .collect();
-    let mut next = world.clone();
-    let (alloc, _) = AllocStats::measure(|| apply_batch(&mut next, APPLY_BATCH));
-    phases.insert("apply", phase("action", samples, alloc, APPLY_BATCH as f64));
+    let mut alloc = AllocStats::default();
+    for _ in 0..APPLY_ALLOC_ACTIONS {
+        let mut next = world.clone();
+        let (one, _) = AllocStats::measure(|| apply_one(&mut next));
+        alloc.allocations += one.allocations;
+        alloc.allocated_bytes += one.allocated_bytes;
+        alloc.peak_bytes = alloc.peak_bytes.max(one.peak_bytes);
+    }
+    let mut p = phase("action", samples, alloc, APPLY_ALLOC_ACTIONS as f64);
+    p.notes.insert(
+        "definition",
+        json!("one action on a fresh clone of the reported world; clone and drop untimed"),
+    );
+    p.notes
+        .insert("timer_overhead_ns_subtracted", json!(timer_ns));
+    phases.insert("apply", p);
 
     let samples = (0..reps)
         .map(|_| per_call_ns(|| stage_event(&world)))
@@ -219,11 +245,12 @@ where
 
     let rt = runtime();
     for (name, durability, events) in [
-        ("commit_buffered", Durability::AtCheckpoint, spec.events),
+        ("commit_buffered", Durability::AtCheckpoint, COMMIT_EVENTS),
+        ("commit_fsync", Durability::EveryEvent, COMMIT_EVENTS),
         (
-            "commit_fsync",
-            Durability::EveryEvent,
-            spec.events.min(FSYNC_EVENTS),
+            "commit_buffered_long",
+            Durability::AtCheckpoint,
+            spec.events,
         ),
     ] {
         let mut samples = Vec::new();
@@ -242,6 +269,12 @@ where
         committed?;
         let mut p = phase("event", samples, alloc, events as f64);
         p.notes.insert("events", json!(events));
+        if name == "commit_buffered_long" {
+            p.notes.insert(
+                "definition",
+                json!("history-length scaling; compare commit_buffered with commit_fsync, not with this"),
+            );
+        }
         phases.insert(name, p);
     }
 
@@ -345,6 +378,13 @@ where
         "journal_bytes": journal_bytes,
         "phases": phases,
     }))
+}
+
+/// Median cost of an empty `time_ns`, subtracted from each timed action.
+fn timer_overhead_ns() -> f64 {
+    let mut samples: Vec<u64> = (0..1001).map(|_| time_ns(|| ()).0).collect();
+    samples.sort_unstable();
+    samples[samples.len() / 2] as f64
 }
 
 /// Ask the kernel to drop clean page-cache pages, so the next replay reads
