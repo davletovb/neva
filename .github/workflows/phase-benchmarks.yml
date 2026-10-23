@@ -47,7 +47,7 @@ jobs:
 
       - name: Pinned toolchain and machine record
         run: |
-          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
           mkdir -p "$OUT"
           {
             echo "commit: $GITHUB_SHA"

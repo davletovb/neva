@@ -56,9 +56,16 @@ where
         let mut group = c.benchmark_group("apply");
         group.throughput(Throughput::Elements(1));
         group.bench_function(BenchmarkId::from_parameter(&id), |b| {
+            // The clone is made, and the result dropped, outside the timer.
             b.iter_batched(
                 || world.clone(),
-                |next| hiyal_phase_bench::apply_actions(&next, 1).expect("apply"),
+                |mut next| {
+                    let step = next.step();
+                    let actor = step % hiyal_phase_bench::AGENTS;
+                    next.apply(hiyal::core::AgentId(actor), W::action_for(step, actor))
+                        .expect("apply");
+                    next
+                },
                 BatchSize::LargeInput,
             )
         });
