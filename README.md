@@ -96,6 +96,8 @@ and the dedicated [archive branch](https://github.com/davletovb/hiyal/tree/archi
 The Rust workspace does not depend on that code. The [Python benchmark harness](benchmarks/README.md) is used
 only to measure the legacy observer-on/off reference fairly. The historical
 Python CI and Dependabot configuration remain archived and inactive. The
-[new Rust verification workflow](docs/ci-budget.md) is deliberately minimal:
-one Linux job on selected PR lifecycle events, an explicit manual request, or
-a version tag—not on every agent push.
+[Rust verification workflow](docs/ci-budget.md) is deliberately minimal: one
+Linux job on code-affecting PR events and pushes to `main` (stale runs are
+cancelled), a manual request, or a version tag. Engine benchmarks run only by
+hand; see [per-phase benchmarks](benchmarks/phase/README.md) and
+[profiling](docs/profiling.md).

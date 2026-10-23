@@ -1,0 +1,40 @@
+[package]
+name = "hiyal-phase-bench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Per-phase engine benchmarks for Hiyal (manual; not part of PR CI)"
+license = "MIT"
+publish = false
+
+# A standalone crate, excluded from the Hiyal workspace, so that ordinary
+# `cargo test --workspace` never compiles Criterion. It has its own lockfile.
+[workspace]
+
+[features]
+default = ["replay-cache"]
+# Benchmarks of `inspect_read_only_cached`, which exists since Hiyal #118.
+# `compare.sh` builds without it so older revisions still compile.
+replay-cache = []
+
+[dependencies]
+hiyal = { path = "../.." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
+
+# Only the Criterion target runs under `cargo bench`.
+[lib]
+bench = false
+
+[[bin]]
+name = "phase-report"
+bench = false
+
+[[bench]]
+name = "phases"
+harness = false

@@ -1,4 +1,5 @@
 /target/
+/benchmarks/phase/target/
 /benchmarks/results/
 .DS_Store
 **/__pycache__/
