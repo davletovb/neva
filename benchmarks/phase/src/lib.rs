@@ -5,6 +5,8 @@
 //! Only Hiyal's public API is used, and, apart from the `replay-cache`
 //! feature, only API that also exists at older revisions, so `compare.sh` can
 //! build the same workloads against a baseline commit.
+#[cfg(feature = "undo")]
+use hiyal::{core::Undo, rng::Streams};
 use hiyal::{
     core::{AgentId, Policy, World},
     experiment::{Rules, Trial},
@@ -66,6 +68,22 @@ impl World for ConstantWorld {
         self.counts[slot] += 1;
         self.step += 1;
         Ok(())
+    }
+    #[cfg(feature = "undo")]
+    fn apply_undoable(
+        &mut self,
+        actor: AgentId,
+        bump: Bump,
+        _: &mut Streams,
+    ) -> Result<Undo<Self>, String> {
+        let slot = usize::try_from(bump.slot).map_err(|e| e.to_string())? % self.values.len();
+        let (value, count, step) = (self.values[slot], self.counts[slot], self.step);
+        self.apply(actor, bump)?;
+        Ok(Undo::revert(move |world: &mut Self| {
+            world.values[slot] = value;
+            world.counts[slot] = count;
+            world.step = step;
+        }))
     }
 }
 
@@ -132,6 +150,22 @@ impl World for GrowingWorld {
         });
         Ok(())
     }
+    #[cfg(feature = "undo")]
+    fn apply_undoable(
+        &mut self,
+        actor: AgentId,
+        observe: Observe,
+        _: &mut Streams,
+    ) -> Result<Undo<Self>, String> {
+        let slot = (self.step % self.state.len() as u64) as usize;
+        let (value, step) = (self.state[slot], self.step);
+        self.apply(actor, observe)?;
+        Ok(Undo::revert(move |world: &mut Self| {
+            world.history.pop();
+            world.state[slot] = value;
+            world.step = step;
+        }))
+    }
 }
 
 impl Workload for GrowingWorld {
@@ -181,16 +215,45 @@ impl World for KeyedWorld {
         Ok(self.step)
     }
     fn apply(&mut self, _: AgentId, touch: Touch) -> Result<(), String> {
-        let table = format!("table/{:05}", touch.table % self.tables.len() as u64);
-        let key = format!("key/{}", touch.key % 8);
-        *self
-            .tables
-            .get_mut(&table)
-            .ok_or("missing table")?
-            .get_mut(&key)
-            .ok_or("missing key")? += 1;
+        let (table, key) = self.cell(&touch);
+        *self.counter(&table, &key)? += 1;
         self.step += 1;
         Ok(())
+    }
+    #[cfg(feature = "undo")]
+    fn apply_undoable(
+        &mut self,
+        _: AgentId,
+        touch: Touch,
+        _: &mut Streams,
+    ) -> Result<Undo<Self>, String> {
+        let (table, key) = self.cell(&touch);
+        let counter = self.counter(&table, &key)?;
+        let value = *counter;
+        *counter += 1;
+        let step = self.step;
+        self.step += 1;
+        Ok(Undo::revert(move |world: &mut Self| {
+            *world.counter(&table, &key).expect("touched counter") = value;
+            world.step = step;
+        }))
+    }
+}
+
+impl KeyedWorld {
+    fn cell(&self, touch: &Touch) -> (String, String) {
+        (
+            format!("table/{:05}", touch.table % self.tables.len() as u64),
+            format!("key/{}", touch.key % 8),
+        )
+    }
+    fn counter(&mut self, table: &str, key: &str) -> Result<&mut u64, String> {
+        Ok(self
+            .tables
+            .get_mut(table)
+            .ok_or("missing table")?
+            .get_mut(key)
+            .ok_or("missing key")?)
     }
 }
 
@@ -310,6 +373,23 @@ where
     next.apply(AgentId(actor), W::action_for(step, actor))?;
     let hash = hiyal::storage::digest(&next)?;
     Ok((next, hash))
+}
+
+/// The same staging in place, as Hiyal's runtime does it: apply with
+/// `World::apply_undoable` and hash the world, then undo, so `world` is
+/// unchanged afterwards and the next call stages the same event.
+#[cfg(feature = "undo")]
+pub fn stage_event_in_place<W: Workload>(world: &mut W) -> Result<String, String>
+where
+    W::Action: Serialize + DeserializeOwned + Clone + 'static,
+{
+    let step = world.step();
+    let actor = step % AGENTS;
+    let mut streams = Streams::new("stage".into(), 0);
+    let undo = world.apply_undoable(AgentId(actor), W::action_for(step, actor), &mut streams)?;
+    let hash = hiyal::storage::digest(&*world);
+    undo.undo(world);
+    hash
 }
 
 /// A unique scratch directory removed on drop.
@@ -501,6 +581,30 @@ mod tests {
         assert!(constant_len(100) < 2 * constant_len(10));
         let keyed_len = |n| len(&apply_actions(&keyed, n).unwrap());
         assert!(keyed_len(100) < 2 * keyed_len(10));
+    }
+
+    #[cfg(feature = "undo")]
+    fn in_place_staging_matches_cloned_staging<W: Workload>(size: usize)
+    where
+        W::Action: Serialize + DeserializeOwned + Clone + 'static,
+    {
+        let mut world = apply_actions(&W::build(size), 7).unwrap();
+        let before = hiyal::storage::digest(&world).unwrap();
+        let (_, cloned) = stage_event(&world).unwrap();
+        assert_eq!(stage_event_in_place(&mut world).unwrap(), cloned);
+        assert_eq!(
+            hiyal::storage::digest(&world).unwrap(),
+            before,
+            "undo is exact"
+        );
+    }
+
+    #[cfg(feature = "undo")]
+    #[test]
+    fn every_shape_undoes_in_place_staging_exactly() {
+        in_place_staging_matches_cloned_staging::<ConstantWorld>(64);
+        in_place_staging_matches_cloned_staging::<GrowingWorld>(100);
+        in_place_staging_matches_cloned_staging::<KeyedWorld>(16);
     }
 
     #[test]

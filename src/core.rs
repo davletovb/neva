@@ -142,8 +142,10 @@ fn action_digest<A: Serialize>(action: &A) -> Result<String, EngineError> {
     Ok(hex_digest(&Sha256::digest(bytes)))
 }
 
-/// The world is cloned to stage action application. Only declared operations
-/// may change a world; observe/apply must not produce external side effects.
+/// Only declared operations may change a world; observe/apply must not
+/// produce external side effects. The journaled runtime stages each action
+/// with [`World::apply_undoable`], which clones the world unless the world
+/// provides a cheaper undo.
 pub trait World: Clone {
     type Action: Clone + Serialize;
     type Observation;
@@ -158,6 +160,66 @@ pub trait World: Clone {
         _streams: &mut crate::rng::Streams,
     ) -> Result<(), String> {
         self.apply(actor, action)
+    }
+    /// Apply `action` in place, as [`World::apply_with_streams`] does, and
+    /// return how to take it back, so the engine can stage an event without
+    /// cloning the whole world. The engine undoes a staged action when the
+    /// event cannot be committed (it is too large to record, or the append
+    /// fails), and drops the [`Undo`] once the event is committed.
+    ///
+    /// The default applies the action to a copy and swaps it in, which costs
+    /// what staging always cost, and leaves the world untouched if the
+    /// reducer fails or panics. Override it when an action changes a small,
+    /// known part of the world: return [`Undo::revert`] with a closure that
+    /// puts back exactly what the action changed, such as one old counter or
+    /// the record just pushed. An override must leave the world unchanged
+    /// when it returns `Err`, and its undo must restore the world exactly. If
+    /// it panics, the world may be left half-applied; reopen the trial.
+    ///
+    /// The engine cannot check either, and replay cannot always either. A
+    /// faulty `Err` or undo leaves the live world differing from the log, but
+    /// it is recorded as a rejected event, which carries no state hash. A full
+    /// replay (`Store::open`, `Store::inspect_read_only`) exposes the fault
+    /// only when a later accepted event, or a snapshot written from the live
+    /// world, hashes it. A fault in the last steps of a trial can pass replay
+    /// unnoticed. Derive results from freshly replayed evidence, not from the
+    /// live world of the process that ran the trial.
+    fn apply_undoable(
+        &mut self,
+        actor: AgentId,
+        action: Self::Action,
+        streams: &mut crate::rng::Streams,
+    ) -> Result<Undo<Self>, String> {
+        let mut next = self.clone();
+        next.apply_with_streams(actor, action, streams)?;
+        Ok(Undo::restore(std::mem::replace(self, next)))
+    }
+}
+
+/// How to return a world to its state before one [`World::apply_undoable`].
+pub struct Undo<W>(UndoKind<W>);
+
+enum UndoKind<W> {
+    Restore(W),
+    Revert(Box<dyn FnOnce(&mut W) + Send>),
+}
+
+impl<W> Undo<W> {
+    /// Undo by putting back `previous`, a copy taken before applying.
+    pub fn restore(previous: W) -> Self {
+        Self(UndoKind::Restore(previous))
+    }
+    /// Undo by running `revert` on the world, which must return it exactly
+    /// to its state before the action.
+    pub fn revert(revert: impl FnOnce(&mut W) + Send + 'static) -> Self {
+        Self(UndoKind::Revert(Box::new(revert)))
+    }
+    /// Return `world` to its state before the action.
+    pub fn undo(self, world: &mut W) {
+        match self.0 {
+            UndoKind::Restore(previous) => *world = previous,
+            UndoKind::Revert(revert) => revert(world),
+        }
     }
 }
 

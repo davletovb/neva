@@ -496,30 +496,44 @@ where
         rng.checked_scope_progress(&policy_streams, &format!("agent/{}", actor.0))?;
         match result {
             Ok(action) => {
-                let mut staged = self.store.world.clone();
+                // Staged in place on the store's world; every path that does
+                // not commit the event undoes it before going on.
                 let before_apply = rng.clone();
-                let apply = staged.apply_with_streams(actor, action.clone(), &mut rng);
-                rng.checked_scope_progress(&before_apply, "world")?;
-                if let Err(reason) = apply {
-                    let entry = self.store.append(
-                        actor,
-                        Outcome::Rejected {
-                            reason: reason.clone(),
-                        },
-                        sched,
-                        rng,
-                    )?;
-                    self.emit(&entry);
-                    return Ok(Step::Rejected { actor, reason });
+                let applied = self
+                    .store
+                    .world
+                    .apply_undoable(actor, action.clone(), &mut rng);
+                if let Err(error) = rng.checked_scope_progress(&before_apply, "world") {
+                    if let Ok(undo) = applied {
+                        undo.undo(&mut self.store.world);
+                    }
+                    return Err(error);
                 }
-                let append = self.store.append_staged(
+                let undo = match applied {
+                    Ok(undo) => undo,
+                    Err(reason) => {
+                        let entry = self.store.append(
+                            actor,
+                            Outcome::Rejected {
+                                reason: reason.clone(),
+                            },
+                            sched,
+                            rng,
+                        )?;
+                        self.emit(&entry);
+                        return Ok(Step::Rejected { actor, reason });
+                    }
+                };
+                let append = self.store.commit_in_place(
                     actor,
                     action,
-                    staged,
                     before_apply,
                     sched.clone(),
                     rng.clone(),
                 );
+                if append.is_err() {
+                    undo.undo(&mut self.store.world);
+                }
                 match append {
                     Ok(entry) => {
                         self.emit(&entry);
@@ -743,10 +757,18 @@ where
             };
             let event = match action {
                 Ok(action) => {
-                    let mut next = self.store.world.clone();
+                    // Staged in place, as in `step`.
                     let before_apply = rng.clone();
-                    let apply = next.apply_with_streams(actor, action.clone(), &mut rng);
-                    rng.checked_scope_progress(&before_apply, "world")?;
+                    let apply = self
+                        .store
+                        .world
+                        .apply_undoable(actor, action.clone(), &mut rng);
+                    if let Err(error) = rng.checked_scope_progress(&before_apply, "world") {
+                        if let Ok(undo) = apply {
+                            undo.undo(&mut self.store.world);
+                        }
+                        return Err(error);
+                    }
                     match apply {
                         Err(reason) => {
                             let entry = self.store.append(
@@ -760,15 +782,17 @@ where
                             self.emit(&entry);
                             Step::Rejected { actor, reason }
                         }
-                        Ok(()) => {
-                            let accepted = self.store.append_staged(
+                        Ok(undo) => {
+                            let accepted = self.store.commit_in_place(
                                 actor,
                                 action,
-                                next,
                                 before_apply,
                                 scheduled.clone(),
                                 rng.clone(),
                             );
+                            if accepted.is_err() {
+                                undo.undo(&mut self.store.world);
+                            }
                             match accepted {
                                 Ok(entry) => {
                                     self.emit(&entry);

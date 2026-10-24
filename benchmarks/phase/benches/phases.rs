@@ -81,6 +81,17 @@ where
             b.iter(|| stage_event(&world).expect("stage"))
         });
         group.finish();
+
+        #[cfg(feature = "undo")]
+        {
+            let mut group = c.benchmark_group("stage_in_place");
+            group.throughput(Throughput::Elements(1));
+            let mut staged = world.clone();
+            group.bench_function(BenchmarkId::from_parameter(&id), |b| {
+                b.iter(|| hiyal_phase_bench::stage_event_in_place(&mut staged).expect("stage"))
+            });
+            group.finish();
+        }
     }
 }
 

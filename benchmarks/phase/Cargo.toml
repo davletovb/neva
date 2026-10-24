@@ -12,10 +12,14 @@ publish = false
 [workspace]
 
 [features]
-default = ["replay-cache"]
+default = ["replay-cache", "undo"]
 # Benchmarks of `inspect_read_only_cached`, which exists since Hiyal #118.
 # `compare.sh` builds without it so older revisions still compile.
 replay-cache = []
+# The worlds' own `World::apply_undoable`, from Hiyal's in-place staging.
+# Without it they stage with the engine's default undo, a full copy, as every
+# world did before; `compare.sh` builds without it for older revisions.
+undo = []
 
 [dependencies]
 hiyal = { path = "../.." }

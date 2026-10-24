@@ -27,6 +27,7 @@ revision commits the same deterministic history.
 | SHA-256 alone | `sha256` | `sha256` | call | Over the serialized bytes; MiB/s recorded |
 | Action application | `apply` | `apply` | action | The world's reducer alone (world code, not Hiyal): one action on a fresh clone of the reported world, clone and drop untimed |
 | Staging and hashing | `stage` | `stage` | event | Clone, apply, hash: the staging work, rebuilt from public API |
+| Staging in place | `stage_in_place` | `stage_in_place` | event | `apply_undoable`, hash, undo: what the runtime does for a world with its own undo (feature `undo`) |
 | Journal append, buffered | `commit_buffered` | `commit_buffered` | event | Full committed step, `Durability::AtCheckpoint`, first 50 events |
 | Journal append, fsynced | `commit_fsync` | `commit_fsync` | event | Full committed step, `Durability::EveryEvent`, the same first 50 events |
 | Journal append, long horizon | `commit_buffered_long` | — | event | As `commit_buffered`, over the workload's full event count |
@@ -149,8 +150,9 @@ PHASE_COLD=1 benchmarks/phase/compare.sh BASE_REV HEAD_REV   # add cold replay
 The script builds this crate's current benchmark code against each revision,
 in temporary git worktrees. It alternates base and head for each round and
 writes every raw report plus `summary.md`, which gives the median of medians
-per phase. Both builds disable the `replay-cache` feature, so revisions
-before #118 compile. Comparing numbers from two different machines or GitHub
+per phase. Both builds disable the default features, `replay-cache` and
+`undo`, so older revisions compile: the worlds then stage with Hiyal's
+default undo, a full copy, as every world did before in-place staging. Comparing numbers from two different machines or GitHub
 runners is not a comparison; rerun both revisions on one machine instead.
 
 ## Instruction-count regression gate (not yet enabled)

@@ -243,6 +243,22 @@ where
     let (alloc, _) = AllocStats::measure(|| stage_event(&world));
     phases.insert("stage", phase("event", samples, alloc, 1.0));
 
+    #[cfg(feature = "undo")]
+    {
+        let mut staged = world.clone();
+        let samples = (0..reps)
+            .map(|_| per_call_ns(|| hiyal_phase_bench::stage_event_in_place(&mut staged)))
+            .collect();
+        let (alloc, _) =
+            AllocStats::measure(|| hiyal_phase_bench::stage_event_in_place(&mut staged));
+        let mut p = phase("event", samples, alloc, 1.0);
+        p.notes.insert(
+            "definition",
+            json!("apply_undoable, hash, undo: the runtime's in-place staging"),
+        );
+        phases.insert("stage_in_place", p);
+    }
+
     let rt = runtime();
     for (name, durability, events) in [
         ("commit_buffered", Durability::AtCheckpoint, COMMIT_EVENTS),

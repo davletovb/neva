@@ -6,8 +6,8 @@
 #   benchmarks/phase/compare.sh BASE_REV HEAD_REV [ROUNDS] [OUT_DIR]
 #
 # Both builds use the benchmark code of the current checkout; only the Hiyal
-# source differs. They are built without the `replay-cache` feature, so revisions
-# before #118 compile too. Set PHASE_COLD=1 to add fresh-process replay with
+# source differs. They are built without the default features (`replay-cache`,
+# `undo`), so older revisions compile too. Set PHASE_COLD=1 to add fresh-process replay with
 # a page-cache drop (needs root or passwordless sudo; the outcome is recorded).
 # Raw JSON reports and summary.md are written to OUT_DIR.
 set -euo pipefail
