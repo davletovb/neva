@@ -46,6 +46,13 @@ hash claim. No automatic publishing or registry secrets in CI.
   `snapshot.json`; 64-bit event sequence, logical-step and agent IDs in
   JSON use decimal strings. Nested maps are recursively sorted for hashing.
   This profile is **not RFC 8785** or cross-CPU floating-point reproducibility.
+- `rng::Streams` serializes as before (`profile`, `trial`, `root_seed`,
+  `positions`, `seed_domain`; profile `chacha20-0.9-words-v1`), and its
+  draws and positions are unchanged. **Source change:** it now has a
+  private, non-serialized field (the last stream's positioned generator),
+  so code outside Hiyal can no longer build it with a struct literal.
+  Construct it with `Streams::new` (and `paired_branch`), or deserialize it;
+  its public fields can still be read and set.
 - `observe::OBSERVATION_SCHEMA = 1`: non-authoritative redacted
   `observations.jsonl` and the CLI's `export` output. No raw prompts,
   tool arguments, full world, rejection reasons or model responses.

@@ -489,6 +489,52 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_position_is_refused_even_with_a_cached_generator() {
+        let mut s = Streams::new("trial".into(), 9);
+        s.draw_u64("x").unwrap();
+        for bad in ["", "not a number", "-2", "1e3"] {
+            s.positions.insert("x".into(), bad.into());
+            assert_eq!(
+                s.draw_u64("x"),
+                Err("invalid RNG position".into()),
+                "{bad:?}"
+            );
+            assert_eq!(s.positions["x"], bad, "a refused draw leaves the position");
+        }
+    }
+
+    #[test]
+    fn cached_draws_cross_chacha_block_boundaries_like_rekeyed_ones() {
+        // A ChaCha20 block is 16 words, and the generator buffers 4 blocks
+        // (64 words, 32 draws). Start just before each kind of boundary,
+        // including one where a draw straddles a block (odd word offset).
+        for start in [
+            14u128,
+            15,
+            30,
+            31,
+            62,
+            63,
+            64,
+            127,
+            (1 << 32) - 1,
+            (1 << 68) - 3,
+        ] {
+            let mut fast = Streams::new("trial".into(), 11);
+            fast.positions.insert("x".into(), start.to_string());
+            let mut slow = fast.clone();
+            for draw in 0..80 {
+                assert_eq!(
+                    fast.draw_u64("x").unwrap(),
+                    reference_draw(&mut slow, "x").unwrap(),
+                    "start {start}, draw {draw}"
+                );
+                same_state(&fast, &slow);
+            }
+        }
+    }
+
+    #[test]
     fn an_unknown_profile_is_refused_even_with_a_cached_generator() {
         let mut s = Streams::new("trial".into(), 9);
         s.draw_u64("x").unwrap();

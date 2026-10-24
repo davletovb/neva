@@ -80,6 +80,9 @@ Rust executables using the public SDK.
   stored in a published world
   kind is part of its hashes: move it out under a new versioned world kind,
   never by changing an existing one.
+- Build `rng::Streams` with `Streams::new` (or `paired_branch`), not a
+  struct literal: it has a private, non-serialized field. Its serialized
+  form, draws and positions are part of the evidence and do not change.
 - `memory::MemoryBank` is optional explicit world state, not a hidden global.
   `JsonlObserver` and `CsvMetrics` are derived projections; errors are
   diagnostics and should be surfaced by the caller.
