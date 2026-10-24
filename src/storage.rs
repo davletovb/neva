@@ -271,6 +271,20 @@ pub struct Entry<W, A> {
     pub hash: String,
 }
 
+impl<W, A> Entry<W, A> {
+    /// Position of this record in the log, counting every event.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    /// Accepted events before this one; an accepted event is applied at it.
+    pub fn logical_step(&self) -> u64 {
+        self.logical_step
+    }
+}
+
+/// Callback of [`Store::inspect_read_only_with`].
+type Visitor<'a, W, A> = dyn FnMut(&Entry<W, A>, &W) -> Result<(), String> + 'a;
+
 #[derive(Serialize)]
 struct HashFields<'a, W, A> {
     schema: u32,
@@ -645,6 +659,7 @@ where
         allow_torn_tail: bool,
         trust_snapshot: bool,
         mut inputs: Option<&mut ReplayInputs>,
+        mut visit: Option<&mut Visitor<'_, W, A>>,
     ) -> Result<(Projection<W>, u64, u64), String> {
         let snap_path = dir.join("snapshot.json");
         let snapshot: Option<Snapshot<W>> = if snap_path.exists() {
@@ -734,6 +749,9 @@ where
             let event: Entry<W, A> =
                 serde_json::from_slice(&line).map_err(|e| format!("corrupt committed log: {e}"))?;
             Self::validate_entry(genesis, &mut state, &event)?;
+            if let Some(visit) = visit.as_deref_mut() {
+                visit(&event, &state.world)?;
+            }
             offset = offset.checked_add(count as u64).ok_or("offset overflow")?;
             if snapshot.as_ref().is_some_and(|s| s.log_bytes == offset) {
                 matched = Some(state.clone());
@@ -766,7 +784,27 @@ where
     pub fn inspect_read_only(dir: impl AsRef<Path>) -> Result<ReadOnly<W>, String> {
         let dir = dir.as_ref();
         let raw_manifest = read_metadata_limited(&dir.join("manifest.json"))?;
-        Self::inspect_manifest_bytes(dir, &raw_manifest, None)
+        Self::inspect_manifest_bytes(dir, &raw_manifest, None, None)
+    }
+
+    /// The same full verification as [`Self::inspect_read_only`], calling
+    /// `visit` with each committed event, in log order, and the world as it
+    /// stands after that event (unchanged by rejected and control events).
+    /// An error from `visit` stops the replay and is returned.
+    ///
+    /// This is how an experiment derives a trajectory from the journal in one
+    /// verified pass, instead of storing its own history in the world: a
+    /// world that appends a record per event pays for serializing, hashing
+    /// and cloning that growing history at every step, O(T²) over a trial.
+    /// `visit` sees only events that passed every hash, chain and replay
+    /// check before it; the whole history is verified when this returns `Ok`.
+    pub fn inspect_read_only_with(
+        dir: impl AsRef<Path>,
+        mut visit: impl FnMut(&Entry<W, A>, &W) -> Result<(), String>,
+    ) -> Result<ReadOnly<W>, String> {
+        let dir = dir.as_ref();
+        let raw_manifest = read_metadata_limited(&dir.join("manifest.json"))?;
+        Self::inspect_manifest_bytes(dir, &raw_manifest, None, Some(&mut visit))
     }
 
     /// The same full verification as [`Self::inspect_read_only`], memoized
@@ -803,7 +841,7 @@ where
             return Ok(view);
         }
         let mut inputs = ReplayInputs::default();
-        let view = Self::inspect_manifest_bytes(dir, &raw_manifest, Some(&mut inputs))?;
+        let view = Self::inspect_manifest_bytes(dir, &raw_manifest, Some(&mut inputs), None)?;
         if let Some(events) = inputs.events {
             let key = ReplayKey {
                 types,
@@ -820,6 +858,7 @@ where
         dir: &Path,
         raw_manifest: &[u8],
         inputs: Option<&mut ReplayInputs>,
+        visit: Option<&mut Visitor<'_, W, A>>,
     ) -> Result<ReadOnly<W>, String> {
         let genesis: Genesis<W> =
             serde_json::from_slice(raw_manifest).map_err(|e| e.to_string())?;
@@ -827,7 +866,7 @@ where
             return Err("invalid read-only manifest".into());
         }
         genesis.initial_schedule.validate()?;
-        let (state, offset, _) = Self::replay_history(dir, &genesis, false, false, inputs)?;
+        let (state, offset, _) = Self::replay_history(dir, &genesis, false, false, inputs, visit)?;
         Ok(ReadOnly {
             genesis,
             world: state.world,
@@ -867,7 +906,7 @@ where
         }
         genesis.initial_schedule.validate()?;
         let (projected, durable_length, file_length) =
-            Self::replay_history(dir, &genesis, true, trust_snapshot, None)?;
+            Self::replay_history(dir, &genesis, true, trust_snapshot, None, None)?;
         if durable_length < file_length {
             let f = OpenOptions::new()
                 .write(true)
@@ -937,7 +976,10 @@ where
                 state_hash,
                 before_apply_streams,
             } => {
-                let mut next = state.world.clone();
+                // Applied in place: any error below fails the whole replay,
+                // and its caller discards this projection, so a half-applied
+                // world is never observed and no clone is needed.
+                let next = &mut state.world;
                 if let Some(before) = before_apply_streams {
                     before.checked_scope_progress(&rng, &format!("agent/{}", event.actor.0))?;
                     let mut reducer_rng = before.clone();
@@ -955,14 +997,13 @@ where
                     next.apply(event.actor, action.clone())
                         .map_err(|e| format!("replay reducer failure: {e}"))?;
                 }
-                if digest(&next)? != *state_hash
+                if digest(&*next)? != *state_hash
                     || world
                         .as_ref()
                         .is_some_and(|legacy| digest(legacy).ok().as_ref() != Some(state_hash))
                 {
                     return Err("replayed world state differs from committed state".into());
                 }
-                state.world = next;
                 state.logical_step = state.logical_step.checked_add(1).ok_or("step overflow")?;
             }
             Outcome::Rejected { .. } => {}
@@ -996,13 +1037,15 @@ where
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, AppendError> {
-        self.append_inner(actor, outcome, schedule, streams, None)
+        self.append_inner(actor, outcome, schedule, streams, false)
     }
 
-    /// Commit a world the engine already staged by applying `action` to a
-    /// clone of the current world with `before_apply` streams. The state hash
-    /// is computed here from `staged`, so it matches the committed world by
-    /// construction; the store does not re-apply or re-hash it.
+    /// Commit the store's own world, which the engine already staged in
+    /// place by applying `action` to it with `before_apply` streams (see
+    /// `World::apply_undoable`). The state hash is computed here from that
+    /// world, so it matches the committed world by construction; the store
+    /// does not re-apply or re-hash it. On `Err` the world stays as staged:
+    /// the caller must undo the action.
     ///
     /// Fail-fast boundary: unlike `append_typed`, this does not re-run the
     /// reducer before committing, so a reducer that is not deterministic in
@@ -1010,23 +1053,22 @@ where
     /// rejected by the next full replay (`open`, `inspect_read_only`), which
     /// re-applies every action and compares state hashes and RNG positions.
     /// Evidence should therefore be sealed only after a fresh full replay.
-    pub(crate) fn append_staged(
+    pub(crate) fn commit_in_place(
         &mut self,
         actor: AgentId,
         action: A,
-        staged: W,
         before_apply: Streams,
         schedule: Schedule,
         streams: Streams,
     ) -> Result<Entry<W, A>, AppendError> {
-        let state_hash = digest(&staged)?;
+        let state_hash = digest(&self.world)?;
         let outcome = Outcome::Accepted {
             action,
             world: LegacyWorld::Missing,
             state_hash,
             before_apply_streams: Some(before_apply),
         };
-        self.append_inner(actor, outcome, schedule, streams, Some(staged))
+        self.append_inner(actor, outcome, schedule, streams, true)
     }
 
     fn append_inner(
@@ -1035,7 +1077,7 @@ where
         outcome: Outcome<W, A>,
         schedule: Schedule,
         streams: Streams,
-        staged: Option<W>,
+        staged_in_place: bool,
     ) -> Result<Entry<W, A>, AppendError> {
         if self.poisoned {
             return Err("writer poisoned; reopen/recover".into());
@@ -1062,22 +1104,24 @@ where
             .checked_add(u64::from(accepted))
             .ok_or("logical-step overflow")?;
         let next_sequence = self.sequence.checked_add(1).ok_or("sequence overflow")?;
-        let new_world = match (&outcome, staged) {
+        // `None` keeps `self.world`: it is already the staged world, or the
+        // event does not change it.
+        let new_world = match (&outcome, staged_in_place) {
             (
                 Outcome::Accepted {
                     before_apply_streams: Some(before),
                     ..
                 },
-                Some(staged),
+                true,
             ) => {
                 // Same stream-scope checks as the re-applying path; the RNG
                 // equality there is implied by the caller staging with these
                 // exact streams, and replay re-checks it independently.
                 before.checked_scope_progress(&expected_streams, &format!("agent/{}", actor.0))?;
                 streams.checked_scope_progress(before, "world")?;
-                staged
+                None
             }
-            (_, Some(_)) => return Err("staged world requires a staged accepted outcome".into()),
+            (_, true) => return Err("staged world requires a staged accepted outcome".into()),
             (
                 Outcome::Accepted {
                     action,
@@ -1085,7 +1129,7 @@ where
                     state_hash,
                     before_apply_streams,
                 },
-                None,
+                false,
             ) => {
                 let mut next = self.world.clone();
                 if let Some(before) = before_apply_streams {
@@ -1110,9 +1154,9 @@ where
                 {
                     return Err("staged state hash mismatch".into());
                 }
-                next
+                Some(next)
             }
-            (Outcome::Rejected { .. } | Outcome::Control { .. }, None) => self.world.clone(),
+            (Outcome::Rejected { .. } | Outcome::Control { .. }, false) => None,
         };
         let mut event = Entry {
             schema: self.genesis.schema,
@@ -1152,7 +1196,9 @@ where
         self.sequence = next_sequence;
         self.logical_step = next_step;
         self.chain_head = event.hash.clone();
-        self.world = new_world;
+        if let Some(world) = new_world {
+            self.world = world;
+        }
         self.schedule = event.after_schedule.clone();
         self.streams = event.after_streams.clone();
         Ok(event)

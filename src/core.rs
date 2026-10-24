@@ -142,8 +142,10 @@ fn action_digest<A: Serialize>(action: &A) -> Result<String, EngineError> {
     Ok(hex_digest(&Sha256::digest(bytes)))
 }
 
-/// The world is cloned to stage action application. Only declared operations
-/// may change a world; observe/apply must not produce external side effects.
+/// Only declared operations may change a world; observe/apply must not
+/// produce external side effects. The journaled runtime stages each action
+/// with [`World::apply_undoable`], which clones the world unless the world
+/// provides a cheaper undo.
 pub trait World: Clone {
     type Action: Clone + Serialize;
     type Observation;
@@ -158,6 +160,64 @@ pub trait World: Clone {
         _streams: &mut crate::rng::Streams,
     ) -> Result<(), String> {
         self.apply(actor, action)
+    }
+    /// Apply `action` in place, as [`World::apply_with_streams`] does, and
+    /// return how to take it back, so the engine can stage an event without
+    /// cloning the whole world. The engine undoes a staged action when the
+    /// event cannot be committed (it is too large to record, or the append
+    /// fails), and drops the [`Undo`] once the event is committed.
+    ///
+    /// The default copies the world first and restores the copy, which costs
+    /// what staging always cost. Override it when an action changes a small,
+    /// known part of the world: return [`Undo::revert`] with a closure that
+    /// puts back exactly what the action changed, such as one old counter or
+    /// the record just pushed. An override must leave the world unchanged
+    /// when it returns `Err`, and its undo must restore the world exactly.
+    /// The engine cannot check either at commit time; a full replay
+    /// (`Store::open`, `Store::inspect_read_only`) does, because the world it
+    /// rebuilds from the log would then differ from the hashes committed
+    /// after the faulty step.
+    fn apply_undoable(
+        &mut self,
+        actor: AgentId,
+        action: Self::Action,
+        streams: &mut crate::rng::Streams,
+    ) -> Result<Undo<Self>, String> {
+        let previous = self.clone();
+        match self.apply_with_streams(actor, action, streams) {
+            Ok(()) => Ok(Undo::restore(previous)),
+            Err(error) => {
+                *self = previous;
+                Err(error)
+            }
+        }
+    }
+}
+
+/// How to return a world to its state before one [`World::apply_undoable`].
+pub struct Undo<W>(UndoKind<W>);
+
+enum UndoKind<W> {
+    Restore(W),
+    Revert(Box<dyn FnOnce(&mut W) + Send>),
+}
+
+impl<W> Undo<W> {
+    /// Undo by putting back `previous`, a copy taken before applying.
+    pub fn restore(previous: W) -> Self {
+        Self(UndoKind::Restore(previous))
+    }
+    /// Undo by running `revert` on the world, which must return it exactly
+    /// to its state before the action.
+    pub fn revert(revert: impl FnOnce(&mut W) + Send + 'static) -> Self {
+        Self(UndoKind::Revert(Box::new(revert)))
+    }
+    /// Return `world` to its state before the action.
+    pub fn undo(self, world: &mut W) {
+        match self.0 {
+            UndoKind::Restore(previous) => *world = previous,
+            UndoKind::Revert(revert) => revert(world),
+        }
     }
 }
 
