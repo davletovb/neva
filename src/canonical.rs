@@ -4,14 +4,15 @@
 //! `core::stable_json_bytes` (recursively sorted object keys), without
 //! building the intermediate `serde_json::Value` tree. Each object's entries
 //! are written straight into one output buffer and reordered in place only
-//! when serde emitted them out of order. Scalars and map keys are converted
-//! by serde_json itself, so number, float and key handling cannot drift from
-//! the reference profile, which `stable_bytes_via_value` keeps for tests.
+//! when serde emitted them out of order. Scalars, and map keys other than
+//! strings, integers and unit variants, are converted by serde_json itself,
+//! so number, float and key handling cannot drift from the reference
+//! profile, which `stable_bytes_via_value` keeps for tests.
 //! So are serde_json's private special structs (`arbitrary_precision`
 //! numbers, `raw_value` JSON), which features enabled anywhere in a build
 //! can turn on through Cargo feature unification.
 use serde::ser::{self, Serialize};
-use std::{borrow::Cow, fmt::Display};
+use std::fmt::Display;
 
 #[derive(Debug)]
 pub(crate) struct Error(String);
@@ -34,9 +35,9 @@ impl From<serde_json::Error> for Error {
 
 /// Stable JSON bytes of `value`, identical to the `serde_json::Value` route.
 pub(crate) fn to_stable_bytes<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::new();
-    value.serialize(Canonical(&mut out))?;
-    Ok(out)
+    let mut writer = Writer::default();
+    value.serialize(Canonical(&mut writer))?;
+    Ok(writer.out)
 }
 
 /// Reference implementation: build a `serde_json::Value`, then sort keys.
@@ -50,7 +51,21 @@ pub(crate) fn stable_bytes_via_value<T: Serialize + ?Sized>(
     Ok(out)
 }
 
-struct Canonical<'a>(&'a mut Vec<u8>);
+/// The output, plus scratch space shared by every object in it. Objects use
+/// the scratch as a stack: each one keeps its entries and map keys above
+/// those of the objects enclosing it, and releases them when it closes, so a
+/// serialization allocates for its widest object, not for every object.
+#[derive(Default)]
+struct Writer {
+    out: Vec<u8>,
+    entries: Vec<Entry>,
+    /// Map keys of the open objects, back to back; see `Key::Map`.
+    keys: String,
+    /// Copy of an object's bytes while its entries are reordered.
+    reorder: Vec<u8>,
+}
+
+struct Canonical<'a>(&'a mut Writer);
 
 /// Write a scalar exactly as the `Value` route would: convert it with
 /// serde_json's own `Value` serializer, then write that value.
@@ -73,10 +88,166 @@ fn open_variant(out: &mut Vec<u8>, variant: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Append a map key to `keys` as serde_json's map-key rules give it.
+/// Strings, integers, unit variants and newtypes of these are written
+/// directly, with the same results as serde_json's `MapKeySerializer`
+/// (owned string, `itoa` decimal, variant name). Any other key, or any error,
+/// takes `map_key_probe`, which asks serde_json itself.
+///
+/// Such a key's `Serialize` therefore runs twice. That is harmless for the
+/// deterministic, side-effect-free `Serialize` every hashed type already
+/// needs (a hash that changed between runs could not be replayed), but a
+/// stateful key serializer would see both calls.
+fn push_map_key<T: Serialize + ?Sized>(keys: &mut String, key: &T) -> Result<(), Error> {
+    let base = keys.len();
+    if key.serialize(KeyWriter(keys)).is_err() {
+        keys.truncate(base);
+        keys.push_str(&map_key_probe(key)?);
+    }
+    Ok(())
+}
+
+/// Any key `KeyWriter` does not write itself; the probe decides.
+#[derive(Debug)]
+struct Fallback;
+impl Display for Fallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("map key needs serde_json's own conversion")
+    }
+}
+impl std::error::Error for Fallback {}
+impl ser::Error for Fallback {
+    fn custom<T: Display>(_: T) -> Self {
+        Self
+    }
+}
+
+struct KeyWriter<'a>(&'a mut String);
+
+macro_rules! integer_keys {
+    ($($method:ident: $ty:ty),* $(,)?) => {
+        $(fn $method(self, value: $ty) -> Result<(), Fallback> {
+            use std::fmt::Write;
+            write!(self.0, "{value}").map_err(|_| Fallback)
+        })*
+    };
+}
+
+macro_rules! fallback_keys {
+    ($($method:ident: $ty:ty),* $(,)?) => {
+        $(fn $method(self, _: $ty) -> Result<(), Fallback> {
+            Err(Fallback)
+        })*
+    };
+}
+
+impl ser::Serializer for KeyWriter<'_> {
+    type Ok = ();
+    type Error = Fallback;
+    type SerializeSeq = ser::Impossible<(), Fallback>;
+    type SerializeTuple = ser::Impossible<(), Fallback>;
+    type SerializeTupleStruct = ser::Impossible<(), Fallback>;
+    type SerializeTupleVariant = ser::Impossible<(), Fallback>;
+    type SerializeMap = ser::Impossible<(), Fallback>;
+    type SerializeStruct = ser::Impossible<(), Fallback>;
+    type SerializeStructVariant = ser::Impossible<(), Fallback>;
+
+    // `Display` of an integer is the same decimal text as `itoa`.
+    integer_keys! {
+        serialize_i8: i8, serialize_i16: i16, serialize_i32: i32, serialize_i64: i64,
+        serialize_i128: i128,
+        serialize_u8: u8, serialize_u16: u16, serialize_u32: u32, serialize_u64: u64,
+        serialize_u128: u128,
+    }
+    fallback_keys! {
+        serialize_bool: bool, serialize_f32: f32, serialize_f64: f64, serialize_char: char,
+        serialize_bytes: &[u8], serialize_unit_struct: &'static str,
+    }
+    fn serialize_str(self, value: &str) -> Result<(), Fallback> {
+        self.0.push_str(value);
+        Ok(())
+    }
+    fn serialize_unit_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+    ) -> Result<(), Fallback> {
+        self.0.push_str(variant);
+        Ok(())
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        value: &T,
+    ) -> Result<(), Fallback> {
+        value.serialize(self)
+    }
+    fn serialize_none(self) -> Result<(), Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_some<T: Serialize + ?Sized>(self, _: &T) -> Result<(), Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_unit(self) -> Result<(), Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: &T,
+    ) -> Result<(), Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_tuple_struct(
+        self,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeTupleStruct, Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeTupleVariant, Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_struct(
+        self,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeStruct, Fallback> {
+        Err(Fallback)
+    }
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeStructVariant, Fallback> {
+        Err(Fallback)
+    }
+}
+
 /// Map keys follow serde_json's map-key rules (integer and bool keys become
 /// strings, unsupported key types are rejected) by serializing a one-entry
 /// map to a `Value` and reading its only key back.
-fn map_key<T: Serialize + ?Sized>(key: &T) -> Result<String, Error> {
+fn map_key_probe<T: Serialize + ?Sized>(key: &T) -> Result<String, Error> {
     struct Probe<'a, T: ?Sized>(&'a T);
     impl<T: Serialize + ?Sized> Serialize for Probe<'_, T> {
         fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -96,87 +267,112 @@ fn map_key<T: Serialize + ?Sized>(key: &T) -> Result<String, Error> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Key {
+    Field(&'static str),
+    /// `Writer::keys[start..end]`.
+    Map {
+        start: usize,
+        end: usize,
+    },
+}
+
+impl Key {
+    fn text(self, keys: &str) -> &str {
+        match self {
+            Key::Field(name) => name,
+            Key::Map { start, end } => &keys[start..end],
+        }
+    }
+}
+
 struct Entry {
-    key: Cow<'static, str>,
+    key: Key,
     /// Byte range of `"key":value` in the output, excluding any comma.
     start: usize,
     end: usize,
 }
 
 struct Object<'a> {
-    out: &'a mut Vec<u8>,
+    w: &'a mut Writer,
     start: usize,
-    entries: Vec<Entry>,
-    pending_key: Option<String>,
+    /// This object's entries are `w.entries[entries..]`.
+    entries: usize,
+    /// This object's map keys start at `w.keys[keys..]`.
+    keys: usize,
+    pending_key: Option<Key>,
     /// Extra `}` for struct variants, which wrap the object in another one.
     close_variant: bool,
 }
 
 impl<'a> Object<'a> {
-    fn open(out: &'a mut Vec<u8>, close_variant: bool) -> Self {
-        out.push(b'{');
-        let start = out.len();
+    fn open(w: &'a mut Writer, close_variant: bool) -> Self {
+        w.out.push(b'{');
         Self {
-            out,
-            start,
-            entries: Vec::new(),
+            start: w.out.len(),
+            entries: w.entries.len(),
+            keys: w.keys.len(),
+            w,
             pending_key: None,
             close_variant,
         }
     }
 
-    fn entry<T: Serialize + ?Sized>(
-        &mut self,
-        key: Cow<'static, str>,
-        value: &T,
-    ) -> Result<(), Error> {
-        if !self.entries.is_empty() {
-            self.out.push(b',');
+    fn entry<T: Serialize + ?Sized>(&mut self, key: Key, value: &T) -> Result<(), Error> {
+        if self.w.entries.len() > self.entries {
+            self.w.out.push(b',');
         }
-        let start = self.out.len();
-        string(self.out, &key)?;
-        self.out.push(b':');
-        value.serialize(Canonical(self.out))?;
-        let end = self.out.len();
-        self.entries.push(Entry { key, start, end });
+        let start = self.w.out.len();
+        string(&mut self.w.out, key.text(&self.w.keys))?;
+        self.w.out.push(b':');
+        value.serialize(Canonical(&mut *self.w))?;
+        let end = self.w.out.len();
+        self.w.entries.push(Entry { key, start, end });
         Ok(())
     }
 
     /// Close the object. Keys are sorted byte-wise, matching `String`'s
     /// order; for a repeated key the last value wins, as in a `Value` map.
-    fn finish(mut self) -> Result<(), Error> {
-        let in_order = self
-            .entries
+    fn finish(self) -> Result<(), Error> {
+        let Writer {
+            out,
+            entries,
+            keys,
+            reorder,
+        } = &mut *self.w;
+        let mine = &mut entries[self.entries..];
+        let in_order = mine
             .windows(2)
-            .all(|pair| pair[0].key.as_bytes() < pair[1].key.as_bytes());
+            .all(|pair| pair[0].key.text(keys).as_bytes() < pair[1].key.text(keys).as_bytes());
         if !in_order {
-            let written = self.out.split_off(self.start);
+            reorder.clear();
+            reorder.extend_from_slice(&out[self.start..]);
+            out.truncate(self.start);
             let base = self.start;
             // Stable sort keeps insertion order among equal keys, so the
             // last of each run is the value a `Value` map would keep.
-            self.entries
-                .sort_by(|a, b| a.key.as_bytes().cmp(b.key.as_bytes()));
+            mine.sort_by(|a, b| a.key.text(keys).as_bytes().cmp(b.key.text(keys).as_bytes()));
             let mut first = true;
-            for (index, entry) in self.entries.iter().enumerate() {
-                if self
-                    .entries
+            for (index, entry) in mine.iter().enumerate() {
+                if mine
                     .get(index + 1)
-                    .is_some_and(|next| next.key == entry.key)
+                    .is_some_and(|next| next.key.text(keys) == entry.key.text(keys))
                 {
                     continue;
                 }
                 if !first {
-                    self.out.push(b',');
+                    out.push(b',');
                 }
                 first = false;
-                self.out
-                    .extend_from_slice(&written[entry.start - base..entry.end - base]);
+                out.extend_from_slice(&reorder[entry.start - base..entry.end - base]);
             }
         }
-        self.out.push(b'}');
+        out.push(b'}');
         if self.close_variant {
-            self.out.push(b'}');
+            out.push(b'}');
         }
+        entries.truncate(self.entries);
+        keys.truncate(self.keys);
         Ok(())
     }
 }
@@ -185,7 +381,12 @@ impl ser::SerializeMap for Object<'_> {
     type Ok = ();
     type Error = Error;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Error> {
-        self.pending_key = Some(map_key(key)?);
+        let start = self.w.keys.len();
+        push_map_key(&mut self.w.keys, key)?;
+        self.pending_key = Some(Key::Map {
+            start,
+            end: self.w.keys.len(),
+        });
         Ok(())
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
@@ -193,7 +394,7 @@ impl ser::SerializeMap for Object<'_> {
             .pending_key
             .take()
             .ok_or_else(|| Error("map value without key".into()))?;
-        self.entry(Cow::Owned(key), value)
+        self.entry(key, value)
     }
     fn end(self) -> Result<(), Error> {
         self.finish()
@@ -232,7 +433,7 @@ impl ser::SerializeStruct for StructSer<'_> {
         value: &T,
     ) -> Result<(), Error> {
         match self {
-            Self::Object(object) => object.entry(Cow::Borrowed(key), value),
+            Self::Object(object) => object.entry(Key::Field(key), value),
             Self::Special { inner, .. } => Ok(inner.serialize_field(key, value)?),
         }
     }
@@ -255,7 +456,7 @@ impl ser::SerializeStructVariant for Object<'_> {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        self.entry(Cow::Borrowed(key), value)
+        self.entry(Key::Field(key), value)
     }
     fn end(self) -> Result<(), Error> {
         self.finish()
@@ -263,32 +464,32 @@ impl ser::SerializeStructVariant for Object<'_> {
 }
 
 struct Seq<'a> {
-    out: &'a mut Vec<u8>,
+    w: &'a mut Writer,
     first: bool,
     /// Extra `}` for tuple variants, which wrap the array in an object.
     close_variant: bool,
 }
 
 impl<'a> Seq<'a> {
-    fn open(out: &'a mut Vec<u8>, close_variant: bool) -> Self {
-        out.push(b'[');
+    fn open(w: &'a mut Writer, close_variant: bool) -> Self {
+        w.out.push(b'[');
         Self {
-            out,
+            w,
             first: true,
             close_variant,
         }
     }
     fn element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
         if !self.first {
-            self.out.push(b',');
+            self.w.out.push(b',');
         }
         self.first = false;
-        value.serialize(Canonical(self.out))
+        value.serialize(Canonical(&mut *self.w))
     }
     fn finish(self) -> Result<(), Error> {
-        self.out.push(b']');
+        self.w.out.push(b']');
         if self.close_variant {
-            self.out.push(b'}');
+            self.w.out.push(b'}');
         }
         Ok(())
     }
@@ -318,7 +519,7 @@ seq_impl!(
 macro_rules! scalar_methods {
     ($($method:ident: $ty:ty),* $(,)?) => {
         $(fn $method(self, value: $ty) -> Result<(), Error> {
-            scalar(self.0, &value)
+            scalar(&mut self.0.out, &value)
         })*
     };
 }
@@ -344,7 +545,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
         serialize_char: char,
     }
     fn serialize_str(self, value: &str) -> Result<(), Error> {
-        string(self.0, value)
+        string(&mut self.0.out, value)
     }
     fn serialize_bytes(self, value: &[u8]) -> Result<(), Error> {
         // The `Value` serializer turns bytes into an array of numbers.
@@ -355,7 +556,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
         seq.finish()
     }
     fn serialize_none(self) -> Result<(), Error> {
-        self.0.extend_from_slice(b"null");
+        self.0.out.extend_from_slice(b"null");
         Ok(())
     }
     fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<(), Error> {
@@ -373,7 +574,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
         _: u32,
         variant: &'static str,
     ) -> Result<(), Error> {
-        string(self.0, variant)
+        string(&mut self.0.out, variant)
     }
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
         self,
@@ -389,9 +590,9 @@ impl<'a> ser::Serializer for Canonical<'a> {
         variant: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        open_variant(self.0, variant)?;
+        open_variant(&mut self.0.out, variant)?;
         value.serialize(Canonical(&mut *self.0))?;
-        self.0.push(b'}');
+        self.0.out.push(b'}');
         Ok(())
     }
     fn serialize_seq(self, _: Option<usize>) -> Result<Seq<'a>, Error> {
@@ -410,7 +611,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
         variant: &'static str,
         _: usize,
     ) -> Result<Seq<'a>, Error> {
-        open_variant(self.0, variant)?;
+        open_variant(&mut self.0.out, variant)?;
         Ok(Seq::open(self.0, true))
     }
     fn serialize_map(self, _: Option<usize>) -> Result<Object<'a>, Error> {
@@ -419,7 +620,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<StructSer<'a>, Error> {
         Ok(if SERDE_JSON_SPECIAL_STRUCTS.contains(&name) {
             StructSer::Special {
-                out: self.0,
+                out: &mut self.0.out,
                 inner: ser::Serializer::serialize_struct(serde_json::value::Serializer, name, len)?,
             }
         } else {
@@ -433,7 +634,7 @@ impl<'a> ser::Serializer for Canonical<'a> {
         variant: &'static str,
         _: usize,
     ) -> Result<Object<'a>, Error> {
-        open_variant(self.0, variant)?;
+        open_variant(&mut self.0.out, variant)?;
         Ok(Object::open(self.0, true))
     }
 }
@@ -683,6 +884,68 @@ mod tests {
     }
     #[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
     struct Newtype2(u32);
+
+    #[derive(Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Color {
+        Red,
+        #[serde(rename = "a-green")]
+        Green,
+        Wrapped(u8),
+    }
+    #[derive(Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct Name(String);
+    /// A key whose `Serialize` fails the way user code can.
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    struct Refuses;
+    impl Serialize for Refuses {
+        fn serialize<S: ser::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(ser::Error::custom("this key refuses"))
+        }
+    }
+
+    #[test]
+    fn directly_written_map_keys_match_reference_bytes() {
+        same(&BTreeMap::from([(Color::Red, 1), (Color::Green, 2)]));
+        // A newtype variant key is rejected by both routes.
+        same(&BTreeMap::from([(Color::Red, 1), (Color::Wrapped(3), 2)]));
+        same(&HashMap::from([
+            (Name("zeta".into()), 1),
+            (Name("".into()), 2),
+            (Name("é\"\\\n".into()), 3),
+        ]));
+        same(&BTreeMap::from([(i128::MIN, 1), (i128::MAX, 2), (0, 3)]));
+        same(&BTreeMap::from([(u128::MAX, 1), (u128::MIN, 2)]));
+        same(&BTreeMap::from([(i8::MIN, 1), (i8::MAX, 2)]));
+        same(&BTreeMap::from([(Refuses, 1)]));
+        assert!(to_stable_bytes(&BTreeMap::from([(Refuses, 1)])).is_err());
+    }
+
+    #[test]
+    fn nested_unordered_maps_match_reference_bytes() {
+        // Objects inside objects share the writer's scratch stack; unordered
+        // keys at every depth make each level reorder its own entries.
+        let mut rng = ChaCha20Rng::seed_from_u64(117);
+        for _ in 0..500 {
+            let nested: HashMap<String, Vec<HashMap<u32, Everything>>> = (0..rng.next_u32() % 4)
+                .map(|_| {
+                    let inner = (0..rng.next_u32() % 3)
+                        .map(|_| {
+                            (0..rng.next_u32() % 3)
+                                .map(|_| {
+                                    (
+                                        rng.next_u32() % 50,
+                                        everything(i128::from(rng.next_u32()), 1),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    (text(&mut rng, 4), inner)
+                })
+                .collect();
+            same(&nested);
+        }
+    }
 
     /// serde_json's special structs, written by hand so the test runs in every
     /// feature set. With `arbitrary_precision`/`raw_value` off both routes see
