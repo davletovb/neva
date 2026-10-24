@@ -175,10 +175,15 @@ pub trait World: Clone {
     /// the record just pushed. An override must leave the world unchanged
     /// when it returns `Err`, and its undo must restore the world exactly. If
     /// it panics, the world may be left half-applied; reopen the trial.
-    /// The engine cannot check either at commit time; a full replay
-    /// (`Store::open`, `Store::inspect_read_only`) does, because the world it
-    /// rebuilds from the log would then differ from the hashes committed
-    /// after the faulty step.
+    ///
+    /// The engine cannot check either, and replay cannot always either. A
+    /// faulty `Err` or undo leaves the live world differing from the log, but
+    /// it is recorded as a rejected event, which carries no state hash. A full
+    /// replay (`Store::open`, `Store::inspect_read_only`) exposes the fault
+    /// only when a later accepted event, or a snapshot written from the live
+    /// world, hashes it. A fault in the last steps of a trial can pass replay
+    /// unnoticed. Derive results from freshly replayed evidence, not from the
+    /// live world of the process that ran the trial.
     fn apply_undoable(
         &mut self,
         actor: AgentId,

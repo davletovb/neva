@@ -215,7 +215,7 @@ async fn rounds_undo_an_oversized_action_and_keep_committing() {
 }
 
 #[tokio::test]
-async fn a_wrong_undo_is_caught_by_full_replay() {
+async fn a_wrong_undo_is_caught_by_a_later_committed_hash() {
     let p = dir("faulty");
     let mut trial = ledger_trial(&p, true, 2);
     // Agent 0 meets Big at log length 2, its faulty undo leaves a log entry
@@ -226,6 +226,29 @@ async fn a_wrong_undo_is_caught_by_full_replay() {
         panic!("a wrong undo must fail full replay");
     };
     assert!(error.contains("differs from committed state"), "{error}");
+    std::fs::remove_dir_all(p).unwrap();
+}
+
+#[tokio::test]
+async fn a_wrong_undo_in_the_last_step_passes_replay_until_a_snapshot_hashes_it() {
+    let p = dir("faulty-last");
+    let mut trial = ledger_trial(&p, true, 1);
+    // Add, Add, then Big: rejected as too large, and its faulty undo leaves
+    // its log entry in the live world. No later event hashes that world.
+    trial.run_attempts(3).await.unwrap();
+    assert_eq!(trial.store.world().log.len(), 3);
+    // The trust boundary: replay rebuilds the log's world, which is right,
+    // and has no hash that the live world's extra entry would contradict.
+    let replayed = Store::<Ledger, Act>::inspect_read_only(&p).unwrap();
+    assert_eq!(replayed.world.log.len(), 2);
+    assert_ne!(json(&replayed.world), json(trial.store.world()));
+    // A snapshot written from the live world does hash it, and is checked.
+    trial.checkpoint().unwrap();
+    drop(trial);
+    let Err(error) = Store::<Ledger, Act>::inspect_read_only(&p) else {
+        panic!("a snapshot of the faulty live world must fail replay");
+    };
+    assert!(error.contains("snapshot failed"), "{error}");
     std::fs::remove_dir_all(p).unwrap();
 }
 
@@ -312,6 +335,27 @@ async fn a_verified_trajectory_comes_from_the_journal_in_one_pass() {
         assert_eq!(&world.log, log);
     }
     assert_eq!(json(&world), json(&plain.world));
+
+    // A snapshot that fails its check fails the call only after the
+    // visitor has seen every event: its output is provisional until `Ok`.
+    let snapshot_path = p.join("snapshot.json");
+    let original = std::fs::read(&snapshot_path).unwrap();
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    snapshot["world"]["log"] = serde_json::json!([]);
+    std::fs::write(&snapshot_path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    let mut visited = 0;
+    let Err(error) = Store::<Ledger, Act>::inspect_read_only_with(&p, |_, _| {
+        visited += 1;
+        Ok(())
+    }) else {
+        panic!("a tampered snapshot must fail the call");
+    };
+    assert!(error.contains("snapshot failed"), "{error}");
+    assert_eq!(
+        visited, view.sequence,
+        "every event was visited before the failure"
+    );
+    std::fs::write(&snapshot_path, original).unwrap();
 
     // A visitor's error stops the replay and is returned.
     let mut seen = 0;

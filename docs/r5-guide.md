@@ -61,17 +61,23 @@ Rust executables using the public SDK.
   pushed. The engine undoes the action when its event cannot be committed:
   when it is too large to record or the append fails. An override must
   leave the world unchanged when it returns `Err`, and its undo must be
-  exact. Neither can be checked at commit time; a full replay can and does,
-  because a world rebuilt from the log then differs from the hashes
-  committed after the faulty step. Replay itself applies events in place
-  for every world.
+  exact. The engine cannot check either, and full replay catches a fault
+  only when a later accepted event or a checked snapshot hashes the world:
+  a faulty `Err` or undo is recorded as a rejected event, which has no
+  state hash, so a fault in the last steps of a trial can pass replay.
+  Derive results from freshly replayed evidence, not from the live world of
+  the process that ran the trial. Replay itself applies events in place for
+  every world.
 - **Do not keep the trajectory in the world.** Every event serializes and
   hashes the whole world, so a world that appends a record per event costs
   O(T²) over a trial. Keep only what the reducer needs, and derive the
   trajectory from the journal with `Store::inspect_read_only_with`. It runs
   the same full verification as `inspect_read_only` and calls a closure with
   each committed event (`sequence()`, `logical_step()`, `actor`, `outcome`)
-  and the world after it. A trajectory already stored in a published world
+  and the world after it. Later events and the snapshot are checked after
+  the closure has run for earlier ones, so treat its output as provisional
+  and publish it only once the call returns `Ok`. A trajectory already
+  stored in a published world
   kind is part of its hashes: move it out under a new versioned world kind,
   never by changing an existing one.
 - `memory::MemoryBank` is optional explicit world state, not a hidden global.

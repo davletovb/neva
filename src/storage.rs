@@ -797,7 +797,10 @@ where
     /// world that appends a record per event pays for serializing, hashing
     /// and cloning that growing history at every step, O(T²) over a trial.
     /// `visit` sees only events that passed every hash, chain and replay
-    /// check before it; the whole history is verified when this returns `Ok`.
+    /// check up to that point, but later events and the snapshot are checked
+    /// after it runs, so the whole history is verified only when this returns
+    /// `Ok`. Treat what `visit` produces as provisional: collect it, and
+    /// publish or write it out only after `Ok`.
     pub fn inspect_read_only_with(
         dir: impl AsRef<Path>,
         mut visit: impl FnMut(&Entry<W, A>, &W) -> Result<(), String>,
