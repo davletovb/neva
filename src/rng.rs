@@ -10,6 +10,13 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
+/// Overwrite `text` with the decimal `position`, reusing its buffer.
+fn write_position(text: &mut String, position: u128) {
+    use std::fmt::Write;
+    text.clear();
+    write!(text, "{position}").expect("writing to a String cannot fail");
+}
+
 /// Seed derivations keyed by (seed domain, root seed, stream name). The seed
 /// is a pure function of exactly these inputs, so a hit returns the same
 /// bytes `derive_stream_seed` would; the cache only skips the SHA-256.
@@ -40,6 +47,43 @@ pub struct Streams {
     /// Shared RNG origin for paired branches; branch identity remains distinct.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed_domain: Option<String>,
+    /// The generator of the stream drawn last, kept positioned so a run of
+    /// draws on one stream does not re-key ChaCha20 for every word. Not part
+    /// of the state: never serialized, ignored by `==`, empty in a clone.
+    #[serde(skip)]
+    last: LastStream,
+}
+
+/// The most recently drawn stream: its seed inputs, its generator, and the
+/// position text that draw wrote to `positions`. `draw_u64` uses it only
+/// when all of these still match, so any change made to `Streams` between
+/// draws (a position, the seed, the domain) falls back to re-keying.
+#[derive(Default)]
+struct LastStream(Option<Box<Positioned>>);
+
+struct Positioned {
+    domain: String,
+    root_seed: u64,
+    name: String,
+    position: String,
+    rng: ChaCha20Rng,
+}
+
+impl Clone for LastStream {
+    fn clone(&self) -> Self {
+        Self(None)
+    }
+}
+impl PartialEq for LastStream {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for LastStream {}
+impl std::fmt::Debug for LastStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LastStream")
+    }
 }
 
 impl Streams {
@@ -50,6 +94,7 @@ impl Streams {
             root_seed: seed,
             positions: BTreeMap::new(),
             seed_domain: None,
+            last: LastStream::default(),
         }
     }
 
@@ -97,6 +142,24 @@ impl Streams {
         if self.profile != "chacha20-0.9-words-v1" {
             return Err("unknown RNG profile".into());
         }
+        let domain = self.seed_domain.as_deref().unwrap_or(&self.trial);
+        if let Some(last) = self.last.0.as_deref_mut()
+            && last.name == name
+            && last.root_seed == self.root_seed
+            && last.domain == domain
+            && let Some(position) = self.positions.get_mut(name)
+            && *position == last.position
+        {
+            // The same generator `from_seed` + `set_word_pos` would build,
+            // already at this word: same value, same next position.
+            let value = last.rng.next_u64();
+            write_position(position, last.rng.get_word_pos());
+            last.position.clone_from(position);
+            return Ok(value);
+        }
+        // Re-key: derive the seed, build and position the generator. The
+        // cache's buffers are reused, so a stream switch allocates nothing
+        // beyond what the position bookkeeping always did.
         let position: u128 = self
             .positions
             .get(name)
@@ -107,8 +170,29 @@ impl Streams {
         let mut rng = ChaCha20Rng::from_seed(self.stream_seed(name));
         rng.set_word_pos(position);
         let value = rng.next_u64();
-        self.positions
-            .insert(name.to_owned(), rng.get_word_pos().to_string());
+        let text = rng.get_word_pos().to_string();
+        let domain = self.seed_domain.as_deref().unwrap_or(&self.trial);
+        match self.last.0.as_deref_mut() {
+            Some(last) => {
+                last.domain.clear();
+                last.domain.push_str(domain);
+                last.root_seed = self.root_seed;
+                last.name.clear();
+                last.name.push_str(name);
+                last.position.clone_from(&text);
+                last.rng = rng;
+            }
+            None => {
+                self.last = LastStream(Some(Box::new(Positioned {
+                    domain: domain.to_owned(),
+                    root_seed: self.root_seed,
+                    name: name.to_owned(),
+                    position: text.clone(),
+                    rng,
+                })))
+            }
+        }
+        self.positions.insert(name.to_owned(), text);
         Ok(value)
     }
 
@@ -254,5 +338,161 @@ mod tests {
             assert!(streams.uniform_index("s", 3).unwrap() < 3);
         }
         assert!(streams.uniform_index("s", 0).is_err());
+    }
+
+    /// `draw_u64` before the generator cache, deriving the seed without the
+    /// seed cache either: the reference the fast path must match exactly.
+    fn reference_draw(s: &mut Streams, name: &str) -> Result<u64, String> {
+        if s.profile != "chacha20-0.9-words-v1" {
+            return Err("unknown RNG profile".into());
+        }
+        let position: u128 = s
+            .positions
+            .get(name)
+            .map(|n| n.parse::<u128>())
+            .transpose()
+            .map_err(|_| "invalid RNG position")?
+            .unwrap_or(0);
+        let domain = s.seed_domain.as_deref().unwrap_or(&s.trial);
+        let mut rng = ChaCha20Rng::from_seed(derive_stream_seed(domain, s.root_seed, name));
+        rng.set_word_pos(position);
+        let value = rng.next_u64();
+        s.positions
+            .insert(name.to_owned(), rng.get_word_pos().to_string());
+        Ok(value)
+    }
+
+    fn same_state(a: &Streams, b: &Streams) {
+        assert_eq!(a, b);
+        assert_eq!(
+            serde_json::to_string(a).unwrap(),
+            serde_json::to_string(b).unwrap()
+        );
+    }
+
+    #[test]
+    fn cached_generator_matches_rekeyed_draws_under_any_interleaving() {
+        // `fast` uses draw_u64; `slow` mirrors every operation with the
+        // reference draw. Outputs and full state must agree at every step.
+        let names = [
+            "setup/graph",
+            "agent/0/selection",
+            "agent/1/selection",
+            "world",
+        ];
+        let mut script = ChaCha20Rng::seed_from_u64(1729);
+        let mut fast = Streams::new("trial".into(), 72100);
+        let mut slow = fast.clone();
+        for step in 0..20_000 {
+            let name = if script.next_u32() % 10 < 7 {
+                names[0] // mostly long runs on one stream, as in setup
+            } else {
+                names[(script.next_u32() % 4) as usize]
+            };
+            match script.next_u32() % 100 {
+                0 => {
+                    // Continue on a clone (empty cache) of the fast side.
+                    fast = fast.clone();
+                }
+                1 => {
+                    // Rewind or skip a position from outside.
+                    let to = (script.next_u32() % 50).to_string();
+                    fast.positions.insert(name.into(), to.clone());
+                    slow.positions.insert(name.into(), to);
+                }
+                2 => {
+                    fast.positions.remove(name);
+                    slow.positions.remove(name);
+                }
+                3 => {
+                    // Non-canonical text the reference still parses.
+                    let to = format!("00{}", script.next_u32() % 50);
+                    fast.positions.insert(name.into(), to.clone());
+                    slow.positions.insert(name.into(), to);
+                }
+                4 => {
+                    fast.root_seed ^= 1;
+                    slow.root_seed ^= 1;
+                }
+                5 => {
+                    let branch = format!("branch-{step}");
+                    fast = fast.paired_branch(branch.clone());
+                    slow = slow.paired_branch(branch);
+                }
+                6 => {
+                    fast = serde_json::from_str(&serde_json::to_string(&fast).unwrap()).unwrap();
+                }
+                8 => {
+                    // Change the seed domain in place, without a clone.
+                    let domain = format!("domain-{}", script.next_u32() % 3);
+                    fast.seed_domain = Some(domain.clone());
+                    slow.seed_domain = Some(domain);
+                }
+                9 => {
+                    let trial = format!("trial-{}", script.next_u32() % 3);
+                    fast.trial = trial.clone();
+                    slow.trial = trial;
+                    if script.next_u32() % 2 == 0 {
+                        fast.seed_domain = None;
+                        slow.seed_domain = None;
+                    }
+                }
+                7 => {
+                    let bound = 1 + (script.next_u32() % 90) as usize;
+                    let got = fast.uniform_index(name, bound).unwrap();
+                    // uniform_index is built on draw_u64; mirror it.
+                    let limit = (bound as u64).wrapping_neg() % bound as u64;
+                    let expected = loop {
+                        let draw = reference_draw(&mut slow, name).unwrap();
+                        if draw >= limit {
+                            break (draw % bound as u64) as usize;
+                        }
+                    };
+                    assert_eq!(got, expected, "uniform_index at step {step}");
+                }
+                _ => {}
+            }
+            assert_eq!(
+                fast.draw_u64(name).unwrap(),
+                reference_draw(&mut slow, name).unwrap(),
+                "draw at step {step} on {name}"
+            );
+            same_state(&fast, &slow);
+        }
+    }
+
+    #[test]
+    fn a_clone_drawing_on_shares_no_generator_with_its_original() {
+        let mut a = Streams::new("trial".into(), 5);
+        a.draw_u64("x").unwrap();
+        let mut b = a.clone();
+        let from_b: Vec<_> = (0..5).map(|_| b.draw_u64("x").unwrap()).collect();
+        let from_a: Vec<_> = (0..5).map(|_| a.draw_u64("x").unwrap()).collect();
+        assert_eq!(
+            from_a, from_b,
+            "both continue the same stream independently"
+        );
+        same_state(&a, &b);
+    }
+
+    #[test]
+    fn the_generator_cache_is_not_part_of_the_state() {
+        let mut drawn = Streams::new("trial".into(), 9);
+        for _ in 0..3 {
+            drawn.draw_u64("x").unwrap();
+        }
+        let json = serde_json::to_string(&drawn).unwrap();
+        assert!(!json.contains("last"), "{json}");
+        let restored: Streams = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, drawn);
+        assert!(restored.last.0.is_none() && drawn.last.0.is_some());
+    }
+
+    #[test]
+    fn an_unknown_profile_is_refused_even_with_a_cached_generator() {
+        let mut s = Streams::new("trial".into(), 9);
+        s.draw_u64("x").unwrap();
+        s.profile = "other".into();
+        assert!(s.draw_u64("x").is_err());
     }
 }
