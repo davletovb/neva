@@ -189,3 +189,58 @@ async fn verify_fork_views_returns_what_fresh_inspections_give() {
     assert_eq!(fork.branch.world.total, 12 + 5 + 8);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn a_warm_memo_never_hides_tampering_with_a_verified_fork() {
+    let root = dir("tamper");
+    let parent = root.join("parent");
+    let branch = root.join("branch");
+    checkpointed_parent(&parent).await;
+    let mut trial = fork_at_head(
+        &parent,
+        &branch,
+        "test",
+        "treatment",
+        serde_json::json!({"bonus": 5}),
+        |world: &mut Tally| {
+            world.total += 5;
+            Ok(())
+        },
+        Rules(Add),
+        Arc::new(ScriptedBackend),
+    )
+    .unwrap();
+    trial.run_attempts(4).await.unwrap();
+    drop(trial);
+    clear_replay_cache();
+    // Warm the memo with every view of this fork and its parent.
+    Store::<Tally, u64>::inspect_read_only_cached(&parent).unwrap();
+    verify_fork_views::<Tally>(&branch).unwrap();
+
+    // Each edit changes bytes the memo verified; each must fail anew.
+    for file in [
+        branch.join("events.jsonl"),
+        branch.join("ancestry").join("events.jsonl"),
+        branch.join("manifest.json"),
+    ] {
+        let original = std::fs::read(&file).unwrap();
+        let text = String::from_utf8(original.clone()).unwrap();
+        // One committed amount (2 becomes 3), or the initial total (a 1
+        // put in front of its digits).
+        let tampered = text.replacen("\"action\":2", "\"action\":3", 1).replacen(
+            "\"total\":",
+            "\"total\":1",
+            1,
+        );
+        assert_ne!(tampered, text, "the edit must change {}", file.display());
+        std::fs::write(&file, tampered).unwrap();
+        assert!(
+            verify_fork_views::<Tally>(&branch).is_err(),
+            "tampering with {} must fail despite a warm memo",
+            file.display()
+        );
+        std::fs::write(&file, original).unwrap();
+        verify_fork_views::<Tally>(&branch).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

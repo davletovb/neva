@@ -443,6 +443,13 @@ pub struct VerifiedFork<W> {
 /// [`verify_fork`], also returning the parent and branch views it fully
 /// verified, so a caller that goes on to read the branch does not inspect
 /// it again.
+///
+/// Like every `inspect_read_only_cached` call, this reuses the in-process
+/// memo only for byte-identical evidence this process already fully
+/// verified; any change to a file is replayed and checked again. A final
+/// evidence gate that must be independent of earlier work in the same
+/// process should run in a fresh process, or after
+/// [`crate::storage::clear_replay_cache`].
 pub fn verify_fork_views<W>(child: impl AsRef<Path>) -> Result<VerifiedFork<W>, String>
 where
     W: World + Serialize + DeserializeOwned + 'static,
