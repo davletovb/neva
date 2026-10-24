@@ -167,12 +167,14 @@ pub trait World: Clone {
     /// event cannot be committed (it is too large to record, or the append
     /// fails), and drops the [`Undo`] once the event is committed.
     ///
-    /// The default copies the world first and restores the copy, which costs
-    /// what staging always cost. Override it when an action changes a small,
+    /// The default applies the action to a copy and swaps it in, which costs
+    /// what staging always cost, and leaves the world untouched if the
+    /// reducer fails or panics. Override it when an action changes a small,
     /// known part of the world: return [`Undo::revert`] with a closure that
     /// puts back exactly what the action changed, such as one old counter or
     /// the record just pushed. An override must leave the world unchanged
-    /// when it returns `Err`, and its undo must restore the world exactly.
+    /// when it returns `Err`, and its undo must restore the world exactly. If
+    /// it panics, the world may be left half-applied; reopen the trial.
     /// The engine cannot check either at commit time; a full replay
     /// (`Store::open`, `Store::inspect_read_only`) does, because the world it
     /// rebuilds from the log would then differ from the hashes committed
@@ -183,14 +185,9 @@ pub trait World: Clone {
         action: Self::Action,
         streams: &mut crate::rng::Streams,
     ) -> Result<Undo<Self>, String> {
-        let previous = self.clone();
-        match self.apply_with_streams(actor, action, streams) {
-            Ok(()) => Ok(Undo::restore(previous)),
-            Err(error) => {
-                *self = previous;
-                Err(error)
-            }
-        }
+        let mut next = self.clone();
+        next.apply_with_streams(actor, action, streams)?;
+        Ok(Undo::restore(std::mem::replace(self, next)))
     }
 }
 
