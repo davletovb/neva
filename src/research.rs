@@ -428,6 +428,33 @@ where
     W: World + Serialize + DeserializeOwned + 'static,
     W::Action: Serialize + DeserializeOwned + Clone + 'static,
 {
+    verify_fork_views::<W>(child).map(|fork| fork.metadata)
+}
+
+/// A fork that passed [`verify_fork`], with the two views it verified.
+pub struct VerifiedFork<W> {
+    pub metadata: ForkMetadata,
+    /// Full read-only inspection of the fork's ancestry copy of its parent.
+    pub parent: ReadOnly<W>,
+    /// Full read-only inspection of the fork itself.
+    pub branch: ReadOnly<W>,
+}
+
+/// [`verify_fork`], also returning the parent and branch views it fully
+/// verified, so a caller that goes on to read the branch does not inspect
+/// it again.
+///
+/// Like every `inspect_read_only_cached` call, this reuses the in-process
+/// memo only for byte-identical evidence this process already fully
+/// verified; any change to a file is replayed and checked again. A final
+/// evidence gate that must be independent of earlier work in the same
+/// process should run in a fresh process, or after
+/// [`crate::storage::clear_replay_cache`].
+pub fn verify_fork_views<W>(child: impl AsRef<Path>) -> Result<VerifiedFork<W>, String>
+where
+    W: World + Serialize + DeserializeOwned + 'static,
+    W::Action: Serialize + DeserializeOwned + Clone + 'static,
+{
     let child = child.as_ref();
     let raw = fs::read(child.join("fork.json")).map_err(|e| e.to_string())?;
     let meta: ForkMetadata = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
@@ -465,7 +492,11 @@ where
     {
         return Err("fork boundary, schedule, RNG, or intervention attribution mismatch".into());
     }
-    Ok(meta)
+    Ok(VerifiedFork {
+        metadata: meta,
+        parent,
+        branch,
+    })
 }
 
 /// Create a branch at the validated *latest committed boundary*. This

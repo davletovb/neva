@@ -448,16 +448,29 @@ fn cache_view<W: Serialize>(key: ReplayKey, view: &ReadOnly<W>) -> Result<(), St
 /// Rebuild an owned view from cached bytes; `None` (and eviction) if the
 /// rebuilt genesis or world does not hash to what verification recorded.
 fn cached_view<W: Serialize + DeserializeOwned>(key: &ReplayKey) -> Option<ReadOnly<W>> {
-    let rebuilt = REPLAY_CACHE.with(|cache| {
+    let (matched, rebuilt) = REPLAY_CACHE.with(|cache| {
         let cache = cache.borrow();
-        let (_, entry) = cache.iter().find(|(k, _)| k == key)?;
+        let (matched, entry) = cache.iter().find(|(k, _)| k == key).or_else(|| {
+            // No snapshot: a verified view of the same manifest and events
+            // with a snapshot serves too. Read-only inspection always
+            // replays the whole log; a snapshot only adds a check against
+            // it and never changes the view (see `replay_history`). This
+            // is a fork's ancestry copy of a checkpointed parent.
+            if key.snapshot.is_some() {
+                return None;
+            }
+            cache.iter().find(|(k, _)| {
+                k.types == key.types && k.manifest == key.manifest && k.events == key.events
+            })
+        })?;
         let owned: ViewOwned<W> = serde_json::from_slice(&entry.bytes).ok()?;
         let intact = digest(&owned.genesis).ok()? == entry.genesis_hash
             && digest(&owned.world).ok()? == entry.world_hash;
-        Some(intact.then_some(owned))
+        Some((matched.clone(), intact.then_some(owned)))
     })?;
     let Some(owned) = rebuilt else {
-        REPLAY_CACHE.with(|cache| cache.borrow_mut().retain(|(k, _)| k != key));
+        // Evict the entry that failed its check, whichever key it is under.
+        REPLAY_CACHE.with(|cache| cache.borrow_mut().retain(|(k, _)| *k != matched));
         return None;
     };
     Some(ReadOnly {
