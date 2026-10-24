@@ -93,6 +93,11 @@ fn open_variant(out: &mut Vec<u8>, variant: &str) -> Result<(), Error> {
 /// directly, with the same results as serde_json's `MapKeySerializer`
 /// (owned string, `itoa` decimal, variant name). Any other key, or any error,
 /// takes `map_key_probe`, which asks serde_json itself.
+///
+/// Such a key's `Serialize` therefore runs twice. That is harmless for the
+/// deterministic, side-effect-free `Serialize` every hashed type already
+/// needs (a hash that changed between runs could not be replayed), but a
+/// stateful key serializer would see both calls.
 fn push_map_key<T: Serialize + ?Sized>(keys: &mut String, key: &T) -> Result<(), Error> {
     let base = keys.len();
     if key.serialize(KeyWriter(keys)).is_err() {
