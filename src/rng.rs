@@ -10,6 +10,14 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
+/// Whether `text`, which `u128::from_str` accepted, is exactly the decimal
+/// `to_string` of its value: `from_str` also accepts a leading `+` and
+/// leading zeros, which `to_string` never writes. Checking that, rather than
+/// formatting the value again, keeps stream checks free of allocation.
+fn is_canonical(text: &str) -> bool {
+    text == "0" || (!text.starts_with('0') && text.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Overwrite `text` with the decimal `position`, reusing its buffer.
 fn write_position(text: &mut String, position: u128) {
     use std::fmt::Write;
@@ -217,13 +225,13 @@ impl Streams {
                 .ok_or("removed named RNG stream")?
                 .parse::<u128>()
                 .map_err(|_| "invalid new RNG position")?;
-            if old > new || before != &old.to_string() {
+            if old > new || !is_canonical(before) {
                 return Err("non-monotonic RNG stream".into());
             }
         }
         for value in self.positions.values() {
-            let parsed = value.parse::<u128>().map_err(|_| "invalid RNG position")?;
-            if value != &parsed.to_string() {
+            value.parse::<u128>().map_err(|_| "invalid RNG position")?;
+            if !is_canonical(value) {
                 return Err("noncanonical RNG position".into());
             }
         }
@@ -540,5 +548,121 @@ mod tests {
         s.draw_u64("x").unwrap();
         s.profile = "other".into();
         assert!(s.draw_u64("x").is_err());
+    }
+
+    /// `checked_progress` before the allocation-free canonical check.
+    fn reference_checked_progress(this: &Streams, from: &Streams) -> Result<(), String> {
+        if this.profile != from.profile
+            || this.trial != from.trial
+            || this.root_seed != from.root_seed
+            || this.seed_domain != from.seed_domain
+            || this.positions.get("scheduler") != from.positions.get("scheduler")
+        {
+            return Err("RNG origin or scheduler stream modified outside scheduler".into());
+        }
+        for (name, before) in &from.positions {
+            let old = before
+                .parse::<u128>()
+                .map_err(|_| "invalid old RNG position")?;
+            let new = this
+                .positions
+                .get(name)
+                .ok_or("removed named RNG stream")?
+                .parse::<u128>()
+                .map_err(|_| "invalid new RNG position")?;
+            if old > new || before != &old.to_string() {
+                return Err("non-monotonic RNG stream".into());
+            }
+        }
+        for value in this.positions.values() {
+            let parsed = value.parse::<u128>().map_err(|_| "invalid RNG position")?;
+            if value != &parsed.to_string() {
+                return Err("noncanonical RNG position".into());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_position_text_is_exactly_what_to_string_writes() {
+        for text in [
+            "0",
+            "00",
+            "007",
+            "+7",
+            "+0",
+            "7",
+            "10",
+            "100",
+            "-1",
+            "",
+            "x",
+            "1e3",
+            " 1",
+            "340282366920938463463374607431768211455",
+            "340282366920938463463374607431768211456",
+            "0340282366920938463463374607431768211455",
+        ] {
+            if let Ok(value) = text.parse::<u128>() {
+                assert_eq!(is_canonical(text), value.to_string() == text, "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn stream_checks_accept_and_reject_exactly_as_before() {
+        // Random position edits around a drawn baseline; the result and the
+        // error message must match the formatting implementation.
+        let texts = ["0", "1", "2", "3", "10", "007", "+3", "", "x", "-1", "02"];
+        let mut script = ChaCha20Rng::seed_from_u64(4242);
+        let mut base = Streams::new("trial".into(), 3);
+        for name in ["scheduler", "agent/0/a", "agent/1/a", "world"] {
+            base.draw_u64(name).unwrap();
+        }
+        let mut agree = std::collections::BTreeMap::<String, u64>::new();
+        for _ in 0..20_000 {
+            let mut from = base.clone();
+            let mut to = base.clone();
+            for side in [&mut from, &mut to] {
+                for _ in 0..(script.next_u32() % 3) {
+                    let name = ["scheduler", "agent/0/a", "agent/1/a", "world", "new"]
+                        [(script.next_u32() % 5) as usize];
+                    match script.next_u32() % 4 {
+                        0 => {
+                            side.positions.remove(name);
+                        }
+                        _ => {
+                            let text = texts[(script.next_u32() as usize) % texts.len()];
+                            side.positions.insert(name.into(), text.into());
+                        }
+                    }
+                }
+            }
+            let got = to.checked_progress(&from);
+            assert_eq!(
+                got,
+                reference_checked_progress(&to, &from),
+                "{from:?} -> {to:?}"
+            );
+            *agree
+                .entry(got.err().unwrap_or_else(|| "ok".into()))
+                .or_default() += 1;
+        }
+        // Every outcome, including each rejection, was exercised.
+        for outcome in [
+            "ok",
+            "RNG origin or scheduler stream modified outside scheduler",
+            "invalid old RNG position",
+            "removed named RNG stream",
+            "invalid new RNG position",
+            "non-monotonic RNG stream",
+            "invalid RNG position",
+            "noncanonical RNG position",
+        ] {
+            assert!(
+                agree.contains_key(outcome),
+                "never saw {outcome:?}: {agree:?}"
+            );
+        }
     }
 }
